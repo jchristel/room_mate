@@ -578,7 +578,8 @@ def _post_content(url, content):
         response = client.PostAsync(url, content).Result
         status = int(response.StatusCode)
         text = response.Content.ReadAsStringAsync().Result
-        print("Server responded {}: {}".format(status, text))
+        # Nothing is printed: the reply of a push that worked is a block of JSON the caller turns into a readable line
+        # (`room_m.report.say_ingest`), and a refusal's whole reply goes to the log (`report.server_failure`).
         return (200 <= status < 300, status, text)
     except Exception as e:
         message = _unreachable(url, e)

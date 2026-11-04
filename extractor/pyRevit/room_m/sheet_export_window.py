@@ -11,6 +11,7 @@ opened**, because a model has hundreds of rooms and a sheet list has dozens of s
 **Not yet run in Revit.**
 """
 
+from room_m import server_config
 import os
 
 from System.Windows import Thickness
@@ -37,6 +38,7 @@ def show(forms, model_name, projects, sheets, rooms):
             self._projects = list(projects)
             self._rows = []
             self.tx_model.Text = "Model: {}".format(model_name)
+            self.tx_server.Text = server_config.short()
             self.cb_project.ItemsSource = [p["name"] for p in self._projects]
             if len(self._projects) == 1:
                 self.cb_project.SelectedIndex = 0

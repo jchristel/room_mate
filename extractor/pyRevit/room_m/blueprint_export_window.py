@@ -12,6 +12,7 @@ is first opened**. A sheet ticked for one room is greyed in the others, because 
 **Not yet run in Revit.**
 """
 
+from room_m import server_config
 import os
 
 from System.Windows import Thickness
@@ -46,6 +47,7 @@ def show(forms, model_name, projects, phases, rooms_for, sheets):
             self._phases = list(phases)
             self._rows = []
             self.tx_model.Text = "Model: {}".format(model_name)
+            self.tx_server.Text = server_config.short()
             self.cb_project.ItemsSource = [p["name"] for p in self._projects]
             if len(self._projects) == 1:
                 self.cb_project.SelectedIndex = 0

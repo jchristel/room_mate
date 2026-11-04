@@ -10,6 +10,7 @@ StackPanel, so the number of levels needs no grid.
 **Not yet run in Revit.**
 """
 
+from room_m import server_config
 import os
 
 from System.Windows import Thickness
@@ -33,6 +34,7 @@ def show(forms, docs, projects, phases, levels_by_doc):
             self._projects = list(projects)
             self._level_boxes = []
             self.tx_models.Text = "Models: {}".format(", ".join(d.Title for d in docs))
+            self.tx_server.Text = server_config.short()
             self.cb_project.ItemsSource = [p["name"] for p in self._projects]
             self.cb_phase.ItemsSource = list(phases)
             if len(self._projects) == 1:

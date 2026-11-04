@@ -21,6 +21,7 @@
 #
 
 import copy
+import functools
 
 from collections import namedtuple
 
@@ -52,6 +53,7 @@ from room_m.post_sheets import describe_outcomes, post_sheets
 from room_m.post_tags import all_observations, post_observations
 from room_m.post_tasks import claim_tasks, report_tasks
 from room_m import project_settings, rls_settings, server_config, task_dispatch, task_log
+from room_m import report as run_report
 from room_m.post_common import SERVER_URL_PROJECTS, fetch_projects
 from room_m.sheet_tags import describe_outcome as describe_tag_outcome, describe_problems
 
@@ -67,6 +69,25 @@ from room_m.exporters import ffe as ffe_exporter
 from room_m.exporters import spaces as spaces_exporter
 from room_m.exporters import ceilings as ceilings_exporter
 from room_m.exporters import floors as floors_exporter
+
+
+def _finishing(what):
+    """Close a button's run the same way for every button: whatever the entry returned, say `Finished: <what>`
+    and whether anything went wrong (`room_m.report.finish`). A decorator, so an early `return` inside the
+    entry cannot skip it."""
+    def wrap(entry):
+        @functools.wraps(entry)
+        def run(doc, uiapp, output, forms, *args, **kwargs):
+            result = entry(doc, uiapp, output, forms, *args, **kwargs)
+            run_report.finish(result, what)
+            return result
+        return run
+    return wrap
+
+
+def _fail(return_value, message):
+    """Say `message` as a failure and turn the run red."""
+    return_value.update_sep(False, run_report.say(message, run_report.FAILED))
 
 
 # The address kept in the open model is looked for when a request is made (room_m.server_config).
@@ -475,27 +496,51 @@ def _report_blueprint_tags(project, pushed, outcome, return_value):
             "{} tag rule(s) of this blueprint are no longer written and are generic now".format(outcome["unlinked_tag_rules"]))
 
 
-def _push_sheets(project, assignments, selected_doc, phase_name, return_value):
-    """Read the chosen sheets with duHast and push them to the sheet library, reporting what
-    the server did with each. `assignments` is a list of `(sheet entry, room or None, rooms)`; see `read_sheets`."""
-    pushed, failures = read_sheets(selected_doc, assignments, phase_name, project.get("tag_type_code"))
+def _push_sheets(project, assignments, selected_doc, phase_name, return_value, forms):
+    """Read the chosen sheets with duHast and push them to the sheet library, saying what the server did
+    with each. `assignments` is a list of `(sheet entry, room or None, rooms)`; see `read_sheets`.
+
+    The slow part is reading (duHast converts every view of a sheet), so the same progress bar the export shows
+    steps once per sheet; a second bar covers the single request that sends them. One line per sheet follows:
+    `exported sheet 101 Ground Plan [ok]`."""
+    pushed, failures = [], []
+    total = len(assignments)
+    cancelled = False
+    with forms.ProgressBar(title="Reading sheet: {value} of {max_value}", cancellable=True) as pb:
+        for index, assignment in enumerate(assignments, 1):
+            pb.update_progress(index, max_value=total)
+            got, failed = read_sheets(selected_doc, [assignment], phase_name, project.get("tag_type_code"))
+            pushed.extend(got)
+            failures.extend(failed)
+            if pb.cancelled:
+                cancelled = True
+                break
+    if cancelled:
+        _fail(return_value, "User cancelled: no sheet was sent.")
+        return
     for label, reason in failures:
-        return_value.update_sep(False, "{}: could not be read: {}".format(label, reason))
+        _fail(return_value, "exported sheet {}: could not be read: {}".format(label, reason))
     if not pushed:
-        return_value.update_sep(False, "No sheet could be read, so nothing was pushed.")
+        _fail(return_value, "No sheet could be read, so nothing was pushed.")
         return
-    ok, status, text, outcomes = post_sheets(project["id"], pushed)
+    with forms.ProgressBar(title="Sending {} sheet(s) to the server".format(len(pushed)), cancellable=False) as pb:
+        pb.update_progress(0, max_value=1)
+        ok, status, text, outcomes = post_sheets(project["id"], pushed)
+        pb.update_progress(1, max_value=1)
     if not ok:
-        return_value.update_sep(
-            False, "Sheet push failed ({}): {}".format(status if status is not None else "no response", text))
+        run_report.server_failure("Sheet push", status, text, return_value)
         return
-    for line in describe_outcomes(outcomes):
-        return_value.append_message(line)
-    return_value.append_message("{} sheet(s) pushed".format(len(pushed)))
+    names = dict((p.get("sheet_number"), p.get("sheet_name")) for p in pushed)
+    for outcome in outcomes:
+        line = describe_outcomes([outcome], names)[0]
+        state = run_report.HELD if outcome.get("outcome") == "pending" else run_report.OK
+        return_value.append_message(run_report.say("exported sheet " + line, state))
+    return_value.append_message(run_report.say("{} pushed".format(run_report.noun(len(pushed), "sheet"))))
     # after the sheets: tags are only worth keeping from sheets the server accepted
     _report_tags(project, pushed, return_value)
 
 
+@_finishing("sheet export")
 def sheets_export_entry(doc, uiapp, output, forms):
     """Push SHEETS you choose to the sheet library, in one window.
 
@@ -516,6 +561,7 @@ def sheets_export_entry(doc, uiapp, output, forms):
     return_value = Result()
     try:
         report_build(return_value, output)
+        run_report.begin(return_value, title="Sheets export")
         sheets = sheets_of(doc)
         if not sheets:
             forms.alert("This model has no sheets.", title="Roommate - nothing to export", warn_icon=True)
@@ -540,10 +586,35 @@ def sheets_export_entry(doc, uiapp, output, forms):
         if choice is None:
             return_value.append_message("Export cancelled")
             return return_value
-        _push_sheets(choice["project"], choice["assignments"], doc, None, return_value)
+        _push_sheets(choice["project"], choice["assignments"], doc, None, return_value, forms)
     except Exception as e:
         return_value.update_sep(False, "Sheet export failed with exception: {}".format(e))
     return return_value
+
+
+@_finishing("blueprint export")
+def _push_blueprint(project, selected_doc, room, name, chosen, return_value):
+    """Read one room's chosen sheets and push them as the blueprint `name`, saying how it went."""
+    pushed, failures = read_sheets(
+        selected_doc, [(entry, None, None, room) for entry in chosen], None, project.get("tag_type_code"))
+    for label, reason in failures:
+        _fail(return_value, "exported sheet {}: could not be read: {}".format(label, reason))
+    if failures or not pushed:
+        # A blueprint with some of its sheets would read as the whole layout.
+        _fail(return_value, "exported blueprint {}: not pushed, because not every chosen sheet could be read.".format(name))
+        return
+    ok, status, text, outcome = post_blueprint(
+        project["id"], name, room["id"], selected_doc.Title, selected_doc.Title, pushed,
+        type_code_parameter=project.get("tag_type_code"))
+    if not ok:
+        hint = None
+        if status == 404:
+            hint = "The server has no such room: push the Rooms and FFE first, and check the model name matches."
+        run_report.server_failure("Blueprint '{}'".format(name), status, text, return_value, hint=hint)
+        return
+    state = run_report.HELD if outcome.get("outcome") == "pending" else run_report.OK
+    return_value.append_message(run_report.say("exported blueprint " + describe_outcome(name, outcome), state))
+    _report_blueprint_tags(project, pushed, outcome, return_value)
 
 
 def blueprint_export_entry(doc, uiapp, output, forms):
@@ -569,6 +640,7 @@ def blueprint_export_entry(doc, uiapp, output, forms):
     return_value = Result()
     try:
         report_build(return_value, output)
+        run_report.begin(return_value, title="Blueprint export")
         selected_doc = _single_document(doc, forms, "Select the model holding the rooms and sheets")
         if selected_doc is None:
             return_value.append_message("No document selected")
@@ -608,28 +680,22 @@ def blueprint_export_entry(doc, uiapp, output, forms):
         return_value.append_message("Phase '{}'".format(choice["phase"]))
         plan = choice["plan"]
 
-        for room, name, chosen in plan:
-            pushed, failures = read_sheets(selected_doc, [(entry, None, None, room) for entry in chosen], None, project.get("tag_type_code"))
-            for label, reason in failures:
-                return_value.update_sep(False, "{}: could not be read: {}".format(label, reason))
-            if failures or not pushed:
-                # A blueprint with some of its sheets would read as the whole layout.
-                return_value.update_sep(
-                    False, "{}: not pushed, because not every chosen sheet could be read.".format(name))
-                continue
-            ok, status, text, outcome = post_blueprint(
-                project["id"], name, room["id"], selected_doc.Title, selected_doc.Title, pushed,
-                type_code_parameter=project.get("tag_type_code"))
-            if not ok:
-                return_value.update_sep(False, "{}: {}".format(name, explain_refusal(status, text)))
-                continue
-            return_value.append_message(describe_outcome(name, outcome))
-            _report_blueprint_tags(project, pushed, outcome, return_value)
+        total = len(plan)
+        done = 0
+        with forms.ProgressBar(title="Blueprint {value} of {max_value}", cancellable=True) as pb:
+            for index, (room, name, chosen) in enumerate(plan, 1):
+                pb.update_progress(index, max_value=total)
+                _push_blueprint(project, selected_doc, room, name, chosen, return_value)
+                done += 1
+                if pb.cancelled:
+                    _fail(return_value, "User cancelled: {} of {} blueprint(s) were sent.".format(done, total))
+                    break
     except Exception as e:
         return_value.update_sep(False, "Blueprint export failed with exception: {}".format(e))
     return return_value
 
 
+@_finishing("server setting")
 def server_entry(doc, uiapp, output, forms):
     """Choose which RoomMate server this model and this computer's extractor talk to.
 
@@ -652,6 +718,7 @@ def server_entry(doc, uiapp, output, forms):
     return_value = Result()
     try:
         report_build(return_value, output)
+        run_report.begin(return_value, title="Server setting")
         current, source = server_config.resolve()
         typed = forms.ask_for_string(
             default=current or "",
@@ -659,7 +726,8 @@ def server_entry(doc, uiapp, output, forms):
                    "Type 'local' for the server on this computer, 'reset' to forget the kept address.",
             title="Roommate - server")
         if typed is None:
-            return_value.append_message("Server unchanged: {}".format(server_config.describe()))
+            return_value.append_message(run_report.say(
+                "Cancelled: the server setting was not changed ({})".format(server_config.describe()), run_report.CANCELLED))
             return return_value
         typed = typed.strip()
         word = typed.lower()
@@ -688,13 +756,18 @@ def server_entry(doc, uiapp, output, forms):
         # the same address in the model, so whoever opens it next needs no set-up
         stored, why = project_settings.write_server(doc, kept)
         if resetting:
-            return_value.append_message("Server forgotten: this computer's address is removed")
+            return_value.append_message(run_report.say(
+                "Saved: the kept server address was removed from this computer", run_report.OK))
         else:
-            return_value.append_message("Server set to {} (this computer: {})".format(kept, server_config.config_path()))
+            return_value.append_message(run_report.say(
+                "Saved: server set to {} (written to {})".format(kept, server_config.config_path()), run_report.OK))
             return_value.append_message(
                 "{} project(s) registered there".format(len(answer)) if ok else "Not reachable now: {}".format(answer))
-        return_value.append_message(
-            "Model: {}".format(why) if stored else "Model: not stored ({}); the address is kept for this computer only".format(why))
+        if stored:
+            return_value.append_message(run_report.say("Model: {}".format(why), run_report.OK))
+        else:
+            return_value.append_message(run_report.say(
+                "Model: not stored ({}); the address is kept for this computer only".format(why), run_report.FAILED))
         in_force = server_config.resolve()[0]
         if kept and in_force != kept:
             return_value.append_message(
@@ -721,16 +794,19 @@ def _edit_rls_settings(selected_doc, forms, return_value):
         return_value.append_message("RLS settings: could not list {}".format(line))
     saved = rls_settings_window.show(forms, selected_doc.Title, current, options)
     if saved is None:
-        return_value.append_message("RLS settings unchanged: the window was cancelled")
+        return_value.append_message(run_report.say(
+            "Cancelled: the RLS settings were not changed", run_report.CANCELLED))
         return None
     stored, why = project_settings.write_section(selected_doc, rls_settings.PROJECT_KEY, saved)
     if not stored:
-        return_value.update_sep(False, "The settings were not stored in the model: {}".format(why))
+        _fail(return_value, "The RLS settings were NOT saved: the model could not take them ({})".format(why))
         return None
-    return_value.append_message("RLS settings stored in the model '{}'".format(selected_doc.Title))
+    return_value.append_message(run_report.say(
+        "Saved: the RLS settings are stored in the model '{}'".format(selected_doc.Title), run_report.OK))
     return saved
 
 
+@_finishing("RLS settings")
 def rls_settings_entry(doc, uiapp, output, forms):
     """Set how room layout sheets are made in a model, in a window.
 
@@ -747,6 +823,7 @@ def rls_settings_entry(doc, uiapp, output, forms):
     return_value = Result()
     try:
         report_build(return_value, output)
+        run_report.begin(return_value, title="RLS settings")
         # the settings belong to the model that is open, so there is nothing to pick
         selected_doc = doc
         saved = _edit_rls_settings(selected_doc, forms, return_value)
@@ -913,6 +990,7 @@ def _choose_tasks(doc, forms):
     return tasks_window.show(forms, doc.Title, payload, load)
 
 
+@_finishing("tasks")
 def tasks_entry(doc, uiapp, output, forms):
     """Run the room tasks the server holds for the open model: one button for every kind.
 
@@ -941,6 +1019,7 @@ def tasks_entry(doc, uiapp, output, forms):
     try:
         log_path = task_log.start("Tasks")
         report_build(return_value, output)
+        run_report.begin(return_value)
         if log_path:
             return_value.append_message("Log: {}".format(log_path))
         # Tasks are only ever applied to the open model, never to a link.
@@ -958,8 +1037,7 @@ def tasks_entry(doc, uiapp, output, forms):
             project["id"], selected_doc.Title, kinds=task_dispatch.claim_kinds(), task_ids=choice["task_ids"])
         if not ok:
             task_log.error("claim failed: {} {}".format(status, text))
-            return_value.update_sep(
-                False, "Could not ask the server for tasks ({}): {}".format(status if status is not None else "no response", text))
+            run_report.server_failure("Asking the server for tasks", status, text, return_value)
             return return_value
         if not claimed:
             forms.alert("None of the chosen tasks is still queued for model '{}' (another session may have taken them).".format(
@@ -971,8 +1049,8 @@ def tasks_entry(doc, uiapp, output, forms):
         return_value.append_message("{} task(s) claimed for '{}': {}".format(len(claimed), selected_doc.Title, summary))
 
         groups, unhandled = task_dispatch.split(claimed)
-        for report in _free_tasks(project, unhandled, "failed", "this plug-in has no handler for this kind of task"):
-            reported.add(report["task_id"])
+        for freed in _free_tasks(project, unhandled, "failed", "this plug-in has no handler for this kind of task"):
+            reported.add(freed["task_id"])
         if unhandled:
             return_value.update_sep(False, "{} task(s) of a kind this plug-in does not know were reported failed.".format(len(unhandled)))
 
@@ -1000,6 +1078,7 @@ def tasks_entry(doc, uiapp, output, forms):
     return return_value
 
 
+@_finishing("export")
 def export_all_entry(doc, uiapp, output, forms):
     """Every export in one window: what to push, to which project, under which phase, and how much.
 
@@ -1021,6 +1100,7 @@ def export_all_entry(doc, uiapp, output, forms):
     return_value = Result()
     try:
         report_build(return_value, output)
+        run_report.begin(return_value, title="Export")
         selected_docs = pick_document(doc, forms, button_name="Select model(s) to export", multiselect=True)
         if not selected_docs:
             return_value.append_message("No document(s) selected")
@@ -1062,6 +1142,7 @@ def export_all_entry(doc, uiapp, output, forms):
     return return_value
 
 
+@_finishing("export")
 def export_entry(doc, uiapp, output, forms, entities):
 
     """
@@ -1106,6 +1187,7 @@ def export_entry(doc, uiapp, output, forms, entities):
         # which time the session that produced the export was long gone. It
         # never fails a run: an unexpected duHast is usually a dev setup.
         report_build(return_value, output)
+        run_report.begin(return_value, title="Export")
 
         # ask user to select active or linked document
         selected_docs = pick_document(
@@ -1144,8 +1226,6 @@ def export_entry(doc, uiapp, output, forms, entities):
             entities_label(entities), e)
         return_value.update_sep(False, message)
         print(message)
-
-    print("Finished")
 
     return return_value
 

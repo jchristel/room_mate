@@ -48,6 +48,7 @@ from duHast.Data.Utils.data_to_file import build_json_for_file
 from Autodesk.Revit.DB import BuiltInCategory
 
 from room_m.export_form import level_kwargs
+from room_m import report
 from room_m.post_windows import post_windows_stream
 
 from room_m.utils.openings import (
@@ -137,17 +138,12 @@ def post_bucket(run_envelope, entries, return_value):
     ok, status, text = post_windows_stream(run_envelope, entries)
     models = ", ".join(block["id"] for block, _ in entries)
     if ok:
-        return_value.append_message(
-            "{}: server accepted windows ({})".format(models, text)
-        )
+        report.say_ingest("windows", text, return_value)
         return True
 
     # There is no 202 here: like doors, a windows push whose phase disagrees with
     # the model is REFUSED rather than quarantined, because activating it would
     # re-phase the model while its rooms stayed behind. So any non-2xx is a real
     # failure with a message worth surfacing.
-    return_value.update_sep(
-        False,
-        "{}: windows push failed ({}): {}".format(models, status, text),
-    )
+    report.server_failure("windows push", status, text, return_value, where=models)
     return False
