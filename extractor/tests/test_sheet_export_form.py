@@ -37,42 +37,10 @@ class SheetExportForm(unittest.TestCase):
     def test_a_lone_minus_is_just_a_word(self):
         self.assertTrue(f.filter_matches("A - B", "-"))
 
-    def sheet(self, number, name=""):
-        return {"number": number, "name": name}
-
-    def room(self, number, name=""):
-        return {"number": number, "name": name}
-
-    def test_the_example_rule_a_room_contains_the_sheet_number(self):
-        rule = f.make_rule("number", "inside", "number")
-        rooms = [self.room("101-A"), self.room("102"), self.room("")]
-        self.assertEqual(["101-A"], [r["number"] for r in f.rooms_for_sheet(rule, self.sheet("101"), rooms)])
-
-    def test_the_other_direction_and_equals(self):
-        rooms = [self.room("101"), self.room("102")]
-        contains = f.make_rule("number", "contains", "number")
-        self.assertEqual(["101"], [r["number"] for r in f.rooms_for_sheet(contains, self.sheet("A-101"), rooms)])
-        equals = f.make_rule("number", "equals", "number")
-        self.assertEqual(["102"], [r["number"] for r in f.rooms_for_sheet(equals, self.sheet("102"), rooms)])
-
-    def test_either_compares_number_and_name_and_ignores_case(self):
-        rule = f.make_rule("either", "inside", "either")
-        rooms = [self.room("7", "Kitchen")]
-        self.assertTrue(f.rule_matches(rule, self.sheet("X", "kitchen"), rooms[0]))
-        self.assertFalse(f.rule_matches(rule, self.sheet("X", "bath"), rooms[0]))
-
-    def test_a_blank_value_never_matches(self):
-        rule = f.make_rule("number", "inside", "number")
-        self.assertFalse(f.rule_matches(rule, self.sheet(""), self.room("101")))
-        self.assertFalse(f.rule_matches(rule, self.sheet("101"), self.room("")))
-
-    def test_no_rule_matches_nothing_and_an_unknown_part_is_no_rule(self):
-        self.assertEqual([], f.rooms_for_sheet(None, self.sheet("1"), [self.room("1")]))
-        self.assertIsNone(f.make_rule("colour", "inside", "number"))
-        self.assertEqual("No rule: choose the rooms by hand.", f.describe_rule(None))
-
-    def test_a_rule_reads_as_a_sentence(self):
-        self.assertEqual("Sheet number is part of room number.", f.describe_rule(f.make_rule("number", "inside", "number")))
+    def test_a_rule_reads_as_a_sentence_and_no_rule_says_so(self):
+        self.assertEqual("Sheet {Sheet Number} is part of room {Number}.",
+                         f.describe_rule(f.make_rule("{Sheet Number}", "inside", "{Number}")))
+        self.assertEqual("No rule: choose by hand.", f.describe_rule(None))
 
     def test_filter_ignores_case_and_blank_lists_everything(self):
         self.assertTrue(f.matches("1.01 Bedroom (L1)", "BED"))
@@ -125,13 +93,18 @@ class Remembered(unittest.TestCase):
     projects = [{"id": "a"}, {"id": "b"}]
 
     def test_project_filter_and_rule_come_back(self):
-        rule = f.make_rule("number", "inside", "number")
+        rule = f.make_rule("{Sheet Number}", "inside", "{Number}")
         index, text, got = f.remembered(f.to_save(self.projects[1], "plan -roof", rule), self.projects)
         self.assertEqual((1, "plan -roof", rule), (index, text, got))
 
     def test_a_vanished_project_and_a_bad_rule_are_dropped(self):
-        index, text, rule = f.remembered({"project": "gone", "filter": "x", "rule": {"sheet": "colour"}}, self.projects)
+        index, text, rule = f.remembered({"project": "gone", "filter": "x", "rule": {"sheet": "{X}", "relation": "colour", "room": "{Y}"}}, self.projects)
         self.assertEqual((None, "x", None), (index, text, rule))
+
+    def test_a_rule_saved_before_templates_is_read_as_the_placeholders(self):
+        old = {"sheet": "number", "relation": "inside", "room": "name"}
+        self.assertEqual(f.make_rule("{Sheet Number}", "inside", "{Name}"), f.remembered({"rule": old}, self.projects)[2])
+        self.assertIsNone(f.remembered({"rule": {"sheet": "either", "relation": "inside", "room": "number"}}, self.projects)[2])
 
     def test_nothing_saved(self):
         self.assertEqual((None, "", None), f.remembered({}, self.projects))

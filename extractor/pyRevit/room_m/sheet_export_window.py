@@ -20,7 +20,9 @@ from System.Windows.Controls import ScrollBarVisibility, ScrollViewer
 from System.Windows.Controls.Primitives import Popup, PlacementMode
 from System.Windows import GridLength, GridUnitType, HorizontalAlignment, VerticalAlignment, Visibility
 
+from room_m import match_rule
 from room_m import sheet_export_form as form
+from room_m.utils import sheets as utils_sheets
 
 XAML_PATH = os.path.join(os.path.dirname(__file__), "sheet_export.xaml")
 
@@ -46,13 +48,10 @@ def show(forms, model_name, projects, sheets, rooms, saved=None):
                 self.cb_project.SelectedIndex = index
             elif len(self._projects) == 1:
                 self.cb_project.SelectedIndex = 0
-            self.cb_rule_sheet.ItemsSource = [label for _key, label in form.FIELDS]
             self.cb_rule_relation.ItemsSource = [label for _key, label in form.RELATIONS]
-            self.cb_rule_room.ItemsSource = [label for _key, label in form.FIELDS]
-            keys = [k for k, _l in form.FIELDS]
-            self.cb_rule_sheet.SelectedIndex = keys.index(rule["sheet"]) if rule else 0
             self.cb_rule_relation.SelectedIndex = [k for k, _l in form.RELATIONS].index(rule["relation"]) if rule else 1
-            self.cb_rule_room.SelectedIndex = keys.index(rule["room"]) if rule else 0
+            self.tb_rule_sheet.Text = rule["sheet"] if rule else match_rule.DEFAULT_SHEET
+            self.tb_rule_room.Text = rule["room"] if rule else match_rule.DEFAULT_ROOM
             for entry in sheets:
                 self._add_row(entry)
             self.tb_filter.Text = text
@@ -168,10 +167,9 @@ def show(forms, model_name, projects, sheets, rooms, saved=None):
             self.tx_sheets.Text = "Sheets ({} of {} listed)".format(len(self._listed()), len(self._rows))
 
         def _rule(self):
+            index = self.cb_rule_relation.SelectedIndex
             return form.make_rule(
-                form.FIELDS[self.cb_rule_sheet.SelectedIndex][0] if self.cb_rule_sheet.SelectedIndex >= 0 else None,
-                form.RELATIONS[self.cb_rule_relation.SelectedIndex][0] if self.cb_rule_relation.SelectedIndex >= 0 else None,
-                form.FIELDS[self.cb_rule_room.SelectedIndex][0] if self.cb_rule_room.SelectedIndex >= 0 else None)
+                self.tb_rule_sheet.Text, form.RELATIONS[index][0] if index >= 0 else None, self.tb_rule_room.Text)
 
         def _rule_note(self, extra=""):
             self.tx_rule.Text = (form.describe_rule(self._rule()) + " " + extra).strip()
@@ -201,6 +199,8 @@ def show(forms, model_name, projects, sheets, rooms, saved=None):
             """Set the rooms of every LISTED sheet from the rule. A sheet the rule pairs with no room keeps what it
             had, so a choice made by hand is never wiped by a rule that does not cover it."""
             rule = self._rule()
+            sheets_listed = utils_sheets.ensure_params([s["entry"] for s in self._listed()])
+            utils_sheets.ensure_params(rooms)
             paired = unpaired = 0
             for s in self._listed():
                 found = form.rooms_for_sheet(rule, s["entry"], rooms)
@@ -209,7 +209,9 @@ def show(forms, model_name, projects, sheets, rooms, saved=None):
                     paired += 1
                 else:
                     unpaired += 1
-            self._rule_note("{} sheet(s) got rooms; {} had no room that matches.".format(paired, unpaired))
+            self._rule_note(" ".join(
+                ["{} sheet(s) got rooms; {} had no room that matches.".format(paired, unpaired)]
+                + match_rule.unknown_parameters(rule, sheets_listed, rooms)))
 
         def on_cancel(self, sender, args):
             self.result = None

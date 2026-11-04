@@ -465,6 +465,9 @@ def fetch_projects(url=SERVER_URL_PROJECTS):
                 "name": f.get("name") or f["project_id"],
                 # The type parameter tag rules are keyed by (settings `tag_type_code`); None when unset.
                 "tag_type_code": (f.get("tag_type_code") or "").strip() or None,
+                # model id -> the phase the server holds for it; the windows preselect from this, so a project
+                # change asks nothing. Missing from an older server, which then offers the first phase.
+                "model_phases": f.get("model_phases") or {},
             }
             for f in files
             if f.get("project_id")

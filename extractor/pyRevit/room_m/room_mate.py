@@ -676,11 +676,15 @@ def blueprint_export_entry(doc, uiapp, output, forms):
         # one window: project, phase, then per room its blueprint name and sheets
         choice = blueprint_export_window.show(
             forms, selected_doc.Title, payload, phases,
-            lambda phase: placed_rooms(selected_doc, phase), available)
+            lambda phase: placed_rooms(selected_doc, phase), available,
+            saved=prefs.section("blueprints"),
+            phase_lookup=lambda project_id: phase_hint.phases_held(payload, project_id, [selected_doc.Title]))
         if choice is None:
-            return_value.append_message("Export cancelled")
+            return_value.append_message(run_report.say("Cancelled: nothing was exported.", run_report.CANCELLED))
             return return_value
         project = choice["project"]
+        from room_m import blueprint_export_form
+        prefs.save_section("blueprints", blueprint_export_form.to_save(project, choice["filter"], choice["rule"]))
         return_value.append_message("Phase '{}'".format(choice["phase"]))
         plan = choice["plan"]
 
@@ -1134,7 +1138,7 @@ def export_all_entry(doc, uiapp, output, forms):
         choice = export_window.show(
             forms, selected_docs, payload, phases, [document_levels(d) for d in selected_docs],
             saved=prefs.section("export"),
-            phase_lookup=lambda project_id: phase_hint.phases_held(fetch_text, project_id, model_ids))
+            phase_lookup=lambda project_id: phase_hint.phases_held(payload, project_id, model_ids))
         if choice is None:
             return_value.append_message(run_report.say(
                 "Cancelled: nothing was exported.", run_report.CANCELLED))

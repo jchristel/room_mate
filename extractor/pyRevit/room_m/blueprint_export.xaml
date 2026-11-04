@@ -24,10 +24,10 @@
             <StackPanel>
                 <TextBlock Text="Push to" FontWeight="SemiBold" Margin="0,0,0,6"/>
                 <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                    <TextBlock Text="Project" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_project" SelectionChanged="on_change"/></Grid>
+                    <TextBlock Text="Project" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_project" SelectionChanged="on_project"/></Grid>
                 <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                     <TextBlock Text="Phase" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_phase" SelectionChanged="on_phase"/></Grid>
-                <TextBlock Text="The rooms listed are the placed rooms of the phase." Opacity="0.6" Margin="110,2,0,0" TextWrapping="Wrap"/>
+                <TextBlock x:Name="tx_phase_note" Text="The rooms listed are the placed rooms of the phase." Opacity="0.6" Margin="110,2,0,0" TextWrapping="Wrap"/>
             </StackPanel>
         </Border>
 
@@ -37,20 +37,32 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
-                <Grid Margin="0,0,0,6">
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-                    <TextBlock Text="Rooms" FontWeight="SemiBold" VerticalAlignment="Center"/>
-                    <TextBox Grid.Column="1" x:Name="tb_find" TextChanged="on_find"/>
-                </Grid>
-                <Grid Grid.Row="1" Margin="0,0,0,4">
-                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="260"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions>
+                <DockPanel Grid.Row="0" Margin="0,0,0,4" LastChildFill="True">
+                    <TextBlock DockPanel.Dock="Left" x:Name="tx_found" Text="Rooms" FontWeight="SemiBold" VerticalAlignment="Center" Width="110"/>
+                    <Button DockPanel.Dock="Right" Content="Check none" Padding="8,1" Margin="6,0,0,0" Click="on_check_none"/>
+                    <Button DockPanel.Dock="Right" Content="Check all matched" Padding="8,1" Margin="6,0,0,0" Click="on_check_matched"/>
+                    <TextBox x:Name="tb_find" TextChanged="on_find" ToolTip="Words must all appear in the room label; -word leaves out rooms containing it"/>
+                </DockPanel>
+                <StackPanel Grid.Row="1" Margin="0,0,0,2">
+                    <DockPanel LastChildFill="True" Margin="0,0,0,2">
+                        <TextBlock DockPanel.Dock="Left" Text="Sheets" VerticalAlignment="Center" Width="110"/>
+                        <Button DockPanel.Dock="Right" Content="Apply to listed rooms" Padding="8,1" Margin="6,0,0,0" Click="on_apply_rule"/>
+                        <TextBox DockPanel.Dock="Left" x:Name="tb_rule_room" Width="150" TextChanged="on_rule_change" ToolTip="Text with {Parameter} placeholders, filled from each room's parameters, e.g. {Number}"/>
+                        <ComboBox DockPanel.Dock="Left" x:Name="cb_rule_relation" Width="90" Margin="4,0,4,0" SelectionChanged="on_rule_change"/>
+                        <TextBox x:Name="tb_rule_sheet" ToolTip="Text with {Parameter} placeholders, filled from each sheet's parameters, e.g. {Sheet Number}"/>
+                    </DockPanel>
+                    <TextBlock x:Name="tx_rule" Margin="110,2,0,0" FontSize="11" Opacity="0.7" TextWrapping="Wrap"/>
+                </StackPanel>
+                <Grid Grid.Row="2" Margin="0,6,0,4">
+                    <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="240"/><ColumnDefinition Width="230"/></Grid.ColumnDefinitions>
                     <TextBlock Text="Room" FontWeight="SemiBold"/>
                     <TextBlock Grid.Column="1" Text="Blueprint name" FontWeight="SemiBold" Margin="6,0,0,0"/>
                     <TextBlock Grid.Column="2" Text="Room layout sheets" FontWeight="SemiBold" Margin="6,0,0,0"/>
                 </Grid>
-                <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
                     <StackPanel x:Name="sp_rooms"/>
                 </ScrollViewer>
             </Grid>

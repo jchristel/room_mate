@@ -4420,6 +4420,31 @@ mod tests {
         assert_eq!(state.model_phase(&key).unwrap().as_deref(), Some("New Construction"));
     }
 
+    /// The project list carries each model's phase, so the exporter preselects it with no request per project.
+    #[tokio::test]
+    async fn test_project_list_carries_the_phase_each_model_holds() {
+        let state = phase_state();
+        let (status, _) =
+            ingest_rooms(State(state.clone()), Json(phase_payload("m1", "2026-01-01T00:00:00Z", Some("Future"))))
+                .await
+                .expect("the first phased push is accepted");
+        assert_eq!(status, StatusCode::OK);
+        let summary = |id: &str| crate::settings_api::ProjectFileSummary {
+            file: format!("{id}.toml"),
+            project_id: Some(id.to_string()),
+            name: None,
+            is_default: false,
+            reference_sources: vec![],
+            tag_type_code: None,
+            error: None,
+            model_phases: Default::default(),
+        };
+        let mut files = vec![summary("p1"), summary("never-pushed")];
+        crate::settings_api::fill_model_phases(&state, &mut files);
+        assert_eq!(files[0].model_phases.get("m1").map(String::as_str), Some("Future"));
+        assert!(files[1].model_phases.is_empty(), "a project nothing was pushed to has no phases");
+    }
+
     /// Row 4: a push naming a genuinely different phase is stored but not live.
     /// 202 rather than 200 (accepted, not acted upon) and `accepted: false`, so
     /// a producer that ignores the reason string still knows it did not land.

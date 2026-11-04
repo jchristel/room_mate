@@ -8,21 +8,17 @@ CPython runs it too (`extractor/tests/test_blueprint_export_form.py`); the windo
 name; a sheet belongs to one room, so one ticked for a room is not offered to another.
 """
 
+from room_m import match_rule
+
 # How many problems the status names before it says "and N more".
 SHOWN = 4
 
-
-def sheets_caption(count):
-    """What a room's sheet button says for `count` sheets ticked."""
-    if count <= 0:
-        return "(none)"
-    return "1 sheet" if count == 1 else "{} sheets".format(count)
-
-
-def matches(label, text):
-    """Whether a room whose label is `label` is listed under the filter `text` (blank lists all)."""
-    needle = (text or "").strip().lower()
-    return not needle or needle in (label or "").lower()
+# Shared with the sheet window: see `room_m.match_rule`.
+sheets_caption = match_rule.numbers_caption
+matches = match_rule.filter_matches
+RELATIONS = match_rule.RELATIONS
+make_rule = match_rule.make_rule
+describe_rule = match_rule.describe_rule
 
 
 def default_name(room):
@@ -38,6 +34,31 @@ def taken_elsewhere(rows, mine):
         if room_id != mine:
             taken.update(sheet_ids)
     return taken
+
+
+def duplicate_names(rows):
+    """Which of the ticked rooms share a blueprint name with another ticked room, as a set of positions in
+    `rows` (`(name, ticked)` pairs). Only ticked rows count: every room starts with its own name, so the many
+    unticked rooms called alike are not what is about to be pushed."""
+    ticked = [i for i, (_name, on) in enumerate(rows) if on]
+    names = [rows[i][0] for i in ticked]
+    return set(ticked[j] for j in match_rule.duplicates(names))
+
+
+def to_save(project, text, rule):
+    """The section `prefs` keeps after an export: the project id, the room filter and the sheet rule."""
+    return {"project": (project or {}).get("id"), "filter": text or "", "rule": rule}
+
+
+def remembered(saved, projects):
+    """`(project index or None, filter text, rule or None)` from the saved section; a project that no longer exists
+    and a rule that no longer parses are dropped."""
+    saved = saved or {}
+    index = None
+    for i, project in enumerate(projects):
+        if project.get("id") == saved.get("project"):
+            index = i
+    return index, str(saved.get("filter") or ""), match_rule.rule_from_saved(saved.get("rule"))
 
 
 def problems(project, phase, rooms):

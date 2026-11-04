@@ -99,6 +99,7 @@ pub fn list_project_files(projects_dir: &Path) -> Result<Vec<ProjectFileSummary>
                 reference_sources: settings.sources.reference.keys().cloned().collect(),
                 tag_type_code: settings.tag_type_code,
                 error: None,
+                model_phases: Default::default(),
             }),
             Err(e) => out.push(ProjectFileSummary {
                 file: file_name(&path),
@@ -108,6 +109,7 @@ pub fn list_project_files(projects_dir: &Path) -> Result<Vec<ProjectFileSummary>
                 reference_sources: vec![],
                 tag_type_code: None,
                 error: Some(format!("{e:#}")),
+                model_phases: Default::default(),
             }),
         }
     }
@@ -555,7 +557,27 @@ pub async fn http_list_projects(
     State(state): State<Shared>,
 ) -> Result<Json<Vec<ProjectFileSummary>>, (StatusCode, String)> {
     let dir = require_dir(&state)?;
-    list_project_files(&dir).map(Json).map_err(to_http)
+    let mut files = list_project_files(&dir).map_err(to_http)?;
+    fill_model_phases(&state, &mut files);
+    Ok(Json(files))
+}
+
+/// Each project's models and the phase the server holds for them, from the model index.
+///
+/// **Best effort, and only here**: the list is the exporter's project picker, which reads the phase to preselect
+/// beside it so the window needs no second request per project. A store that cannot answer leaves the maps empty
+/// (the picker then starts on the first phase), and the MCP list tool, which shares `list_project_files`, is
+/// unchanged.
+pub(crate) fn fill_model_phases(state: &AppState, files: &mut [ProjectFileSummary]) {
+    let Ok(rows) = state.model_index() else { return };
+    for row in rows {
+        let Ok(Some(phase)) = state.model_phase(&row.key) else {
+            continue;
+        };
+        for file in files.iter_mut().filter(|f| f.project_id.as_deref() == Some(row.key.project_id.as_str())) {
+            file.model_phases.insert(row.key.model_id.clone(), phase.clone());
+        }
+    }
 }
 
 /// `GET /api/settings/projects/{id}`

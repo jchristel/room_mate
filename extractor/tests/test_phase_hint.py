@@ -1,6 +1,5 @@
 """Which phase the server holds (`room_m.phase_hint`) and the window's default (`export_form.default_phase`)."""
 
-import json
 import os
 import sys
 import unittest
@@ -11,39 +10,21 @@ from room_m import export_form as form  # noqa: E402
 from room_m import phase_hint  # noqa: E402
 
 
-def server(answers):
-    """A fake `fetch_text`: model id -> phase, or an (ok, status, text) triple."""
-    asked = []
-
-    def fetch(url):
-        asked.append(url)
-        for model, answer in answers.items():
-            if "/models/{}/".format(model) in url:
-                if isinstance(answer, tuple):
-                    return answer
-                return (True, 200, json.dumps({"taken_at": "t", "phase": answer}))
-        return (False, 404, "no snapshots stored for that project/model")
-
-    fetch.asked = asked
-    return fetch
+PROJECTS = [
+    {"id": "p", "name": "P", "model_phases": {"A": "New Construction", "B": "New Construction", "C": "Future"}},
+    {"id": "q", "name": "Q"},
+]
 
 
 class PhasesHeld(unittest.TestCase):
-    def test_the_url_quotes_ids_with_spaces(self):
-        self.assertEqual("/projects/House%20A/models/M%201/snapshots/latest", phase_hint.latest_url("House A", "M 1"))
-
     def test_phases_come_in_model_order_without_repeats_or_blanks(self):
-        fetch = server({"A": "New Construction", "B": "New Construction", "C": None})
-        self.assertEqual(["New Construction"], phase_hint.phases_held(fetch, "p", ["A", "B", "C", "D"]))
+        self.assertEqual(["New Construction"], phase_hint.phases_held(PROJECTS, "p", ["A", "B", "D"]))
+        self.assertEqual(["Future", "New Construction"], phase_hint.phases_held(PROJECTS, "p", ["C", "A"]))
 
-    def test_a_server_failure_is_no_hint_and_never_raises(self):
-        self.assertEqual([], phase_hint.phases_held(server({"A": (False, None, "could not reach")}), "p", ["A"]))
-        self.assertEqual([], phase_hint.phases_held(server({"A": (True, 200, "not json")}), "p", ["A"]))
-
-    def test_it_asks_once_per_model(self):
-        fetch = server({})
-        phase_hint.phases_held(fetch, "p", ["A", "B"])
-        self.assertEqual(2, len(fetch.asked))
+    def test_a_project_with_nothing_stored_or_unknown_is_no_hint_and_never_raises(self):
+        self.assertEqual([], phase_hint.phases_held(PROJECTS, "q", ["A"]))
+        self.assertEqual([], phase_hint.phases_held(PROJECTS, "nope", ["A"]))
+        self.assertEqual([], phase_hint.phases_held(None, "p", ["A"]))
 
 
 class DefaultPhase(unittest.TestCase):
