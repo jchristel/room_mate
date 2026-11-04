@@ -104,6 +104,25 @@ If that is unavailable the key goes into a file only your account can read
 removes the stored key. A shared RoomMate secret, unlike the key, has to sit in Claude Code's configuration file
 as a header, in plain text.
 
+Other AI clients
+----------------
+
+The installer registers Claude Code only. For another client it will not edit that client's own config
+file; it prints the entries and the file they go in, and you paste them:
+
+  powershell -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\Programs\RoomMate\Register-ClaudeMcp.ps1" -PrintConfig claude-desktop
+
+  Client           -PrintConfig    Config file (Windows)                              Format
+  Claude Desktop   claude-desktop  %APPDATA%\Claude\claude_desktop_config.json        JSON, "mcpServers"
+  Cursor           cursor          %USERPROFILE%\.cursor\mcp.json                     JSON, "mcpServers"
+  VS Code          vscode          .vscode\mcp.json, or "MCP: Open User Configuration" JSON, "servers" with "type"
+  Codex CLI        codex           %USERPROFILE%\.codex\config.toml                   TOML, [mcp_servers.*]
+
+On Mac/Linux: register-claude-mcp.sh --print-config <client>. These formats belong to the clients and can
+change; RoomMate has not tested them against each client. The dRofus entry holds no API key: store it once
+with  drofus-mcp.exe --store-key  (the key on standard input). A client that takes a URL and a header can also
+use a shared RoomMate server (the section below) without any of this.
+
 The MCP server
 --------------
 

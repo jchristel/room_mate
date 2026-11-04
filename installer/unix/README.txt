@@ -38,6 +38,9 @@ install.sh registers the RoomMate data server with Claude Code if it is installe
   register-claude-mcp.sh --url http://<address>:5152/mcp --ask-token
                                          (--token <secret> works but leaves it in your shell history)
                                          use a RoomMate server somebody else shares
+  register-claude-mcp.sh --print-config claude-desktop|cursor|vscode|codex
+                                         print the entries and file for another AI client (changes nothing;
+                                         formats are the client's own, not tested by us)
   register-claude-mcp.sh --remove        take them back out
 
 To share the MCP server with colleagues, run on this machine:

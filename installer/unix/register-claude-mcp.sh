@@ -10,6 +10,9 @@
 #   --drofus         ask for region, database, project and API key; register drofus-mcp. The key
 #                    goes into the OS credential store (macOS) or else a file only you can read;
 #                    Claude Code is given at most a path
+#   --print-config HOST
+#                    print the entry, and the file it goes in, for another AI client (claude-desktop, cursor,
+#                    vscode, codex); changes nothing. The dRofus entry holds no key (see --drofus)
 #   --remove         take both back out
 #   --dry-run        print what would run (the API key and token shown as ***)
 #
@@ -21,20 +24,57 @@ APP=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 SETTINGS=${ROOMMATE_HOME:-$HOME/.local/share/roommate}/settings
 # Where the dRofus key is kept: a file only this user can read, so Claude Code's configuration holds a path.
 KEY_FILE=${XDG_CONFIG_HOME:-$HOME/.config}/roommate/secrets/drofus.key
-URL= TOKEN=${ROOMMATE_MCP_TOKEN:-} ASK_TOKEN=0 DROFUS=0 REMOVE=0 DRY=0
+PRINT= URL= TOKEN=${ROOMMATE_MCP_TOKEN:-} ASK_TOKEN=0 DROFUS=0 REMOVE=0 DRY=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --url) URL=$2; shift 2 ;;
     --token) TOKEN=$2; echo "warning: --token puts the secret in your shell history; use --ask-token" >&2; shift 2 ;;
+    --print-config) PRINT=$2; shift 2 ;;
     --ask-token) ASK_TOKEN=1; shift ;;
     --drofus) DROFUS=1; shift ;;
     --remove) REMOVE=1; shift ;;
     --dry-run) DRY=1; shift ;;
-    -h|--help) sed -n '2,16p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,19p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
+
+# print_config HOST: where HOST keeps its MCP servers and the entries to put there. Printed, never written: another
+# application's config file is the person's to edit, and these formats are the clients' and may change.
+print_config() {
+  local host=$1 file kind
+  case "$host" in
+    claude-desktop) kind=json-mcpServers
+      case "$(uname -s)" in Darwin) file="$HOME/Library/Application Support/Claude/claude_desktop_config.json" ;; *) file="(Claude Desktop has no Linux build; see its documentation)" ;; esac ;;
+    cursor) kind=json-mcpServers; file="$HOME/.cursor/mcp.json" ;;
+    vscode) kind=json-servers; file=".vscode/mcp.json in a workspace, or 'MCP: Open User Configuration' in VS Code" ;;
+    codex) kind=toml; file="$HOME/.codex/config.toml" ;;
+    *) echo "unknown client: $host (claude-desktop, cursor, vscode, codex)" >&2; exit 2 ;;
+  esac
+  local have_drofus=0; [ -x "$APP/drofus-mcp" ] && have_drofus=1
+  local d_args='"--base-url", "https://api-no.drofus.com", "--database", "<database>", "--project", "<project>"'
+  echo "Add this to: $file"; echo "(Formats are the client's own and may change; this was not tested against it.)"; echo
+  case "$kind" in
+    json-mcpServers|json-servers)
+      local top=mcpServers type=
+      [ "$kind" = json-servers ] && { top=servers; type='"type": "stdio", '; }
+      echo "{"; echo "  \"$top\": {"
+      echo "    \"roommate\": { ${type}\"command\": \"$APP/mcp\", \"args\": [\"--server-settings\", \"$SETTINGS/server.toml\", \"--project-settings\", \"$SETTINGS/projects\"] }$([ $have_drofus = 1 ] && echo ,)"
+      [ $have_drofus = 1 ] && echo "    \"drofus\": { ${type}\"command\": \"$APP/drofus-mcp\", \"args\": [$d_args] }"
+      echo "  }"; echo "}" ;;
+    toml)
+      echo "[mcp_servers.roommate]"; echo "command = \"$APP/mcp\""
+      echo "args = [\"--server-settings\", \"$SETTINGS/server.toml\", \"--project-settings\", \"$SETTINGS/projects\"]"
+      if [ $have_drofus = 1 ]; then echo; echo "[mcp_servers.drofus]"; echo "command = \"$APP/drofus-mcp\""; echo "args = [$d_args]"; fi ;;
+  esac
+  if [ $have_drofus = 1 ]; then
+    echo; echo "The dRofus entry holds no API key. Store it once, from standard input:"
+    echo "  $APP/drofus-mcp --store-key        (macOS Keychain; on Linux put it in a file and add DROFUS_API_KEY_FILE=<path> to the entry's env)"
+  fi
+  exit 0
+}
+[ -n "$PRINT" ] && print_config "$PRINT"
 
 CLAUDE=$(command -v claude || true)
 [ -z "$CLAUDE" ] && [ -x "$HOME/.local/bin/claude" ] && CLAUDE=$HOME/.local/bin/claude

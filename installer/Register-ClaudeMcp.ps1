@@ -44,6 +44,10 @@
     and _KEY environment variables instead of asking, and never wait for a key press. The installer's own page
     collects them and sets them for this one process, so the key is on no command line.
 
+.PARAMETER PrintConfig
+    Print, for another AI client (claude-desktop, cursor, vscode, codex), the entries to add and the file they go in.
+    Changes nothing: another application's config file is yours to edit. The dRofus entry holds no API key.
+
 .PARAMETER Remove
     Remove the registrations this script makes.
 
@@ -57,6 +61,8 @@ param(
     [switch] $AskToken,
     [switch] $Drofus,
     [switch] $Unattended,
+    [ValidateSet('claude-desktop', 'cursor', 'vscode', 'codex')]
+    [string] $PrintConfig,
     [switch] $Remove,
     [switch] $DryRun
 )
@@ -87,6 +93,51 @@ function Stop-Here {
     # Hold the window only when somebody can read it: the installer runs this in its own console.
     if ([Environment]::UserInteractive -and -not $Unattended) { Read-Host 'Press Enter to close' | Out-Null }
     exit $Code
+}
+
+if ($PrintConfig) {
+    $roommate = @{ command = (Join-Path $AppRoot 'mcp.exe'); args = @('--server-settings', (Join-Path $Settings 'server.toml'), '--project-settings', (Join-Path $Settings 'projects')) }
+    $haveDrofus = Test-Path (Join-Path $AppRoot 'drofus-mcp.exe')
+    $drofus = @{ command = (Join-Path $AppRoot 'drofus-mcp.exe'); args = @('--base-url', 'https://api-no.drofus.com', '--database', '<database>', '--project', '<project>') }
+    $file = switch ($PrintConfig) {
+        'claude-desktop' { Join-Path $env:APPDATA 'Claude\claude_desktop_config.json' }
+        'cursor'         { Join-Path $env:USERPROFILE '.cursor\mcp.json' }
+        'vscode'         { ".vscode\mcp.json in a workspace, or 'MCP: Open User Configuration' in VS Code" }
+        'codex'          { Join-Path $env:USERPROFILE '.codex\config.toml' }
+    }
+    Write-Host "Add this to: $file"
+    Write-Host "(Formats are the client's own and may change; this was not tested against it.)"
+    Write-Host ''
+    if ($PrintConfig -eq 'codex') {
+        # TOML literal strings (single quotes) need no escaping of the backslashes in a Windows path.
+        $quote = { param($list) ($list | ForEach-Object { "'$_'" }) -join ', ' }
+        Write-Host '[mcp_servers.roommate]'
+        Write-Host "command = '$($roommate.command)'"
+        Write-Host "args = [$(& $quote $roommate.args)]"
+        if ($haveDrofus) {
+            Write-Host ''
+            Write-Host '[mcp_servers.drofus]'
+            Write-Host "command = '$($drofus.command)'"
+            Write-Host "args = [$(& $quote $drofus.args)]"
+        }
+    } else {
+        $entries = [ordered]@{ roommate = $roommate }
+        if ($haveDrofus) { $entries['drofus'] = $drofus }
+        $top = 'mcpServers'
+        if ($PrintConfig -eq 'vscode') {
+            $top = 'servers'
+            foreach ($k in @($entries.Keys)) {
+                $entries[$k] = [ordered]@{ type = 'stdio'; command = $entries[$k].command; args = $entries[$k].args }
+            }
+        }
+        Write-Host ([ordered]@{ $top = $entries } | ConvertTo-Json -Depth 6)
+    }
+    if ($haveDrofus) {
+        Write-Host ''
+        Write-Host 'The dRofus entry holds no API key. Store it once, from standard input (Windows Credential Manager):'
+        Write-Host "  <your key> | & '$(Join-Path $AppRoot 'drofus-mcp.exe')' --store-key"
+    }
+    exit 0
 }
 
 $Claude = Find-Claude
