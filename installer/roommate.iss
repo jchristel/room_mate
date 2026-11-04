@@ -421,7 +421,12 @@ begin
     SetEnvironmentVariable('ROOMMATE_SETUP_PROJECT', '');
     SetEnvironmentVariable('ROOMMATE_SETUP_KEY', '');
   end;
-  if (not Ran) or (ResultCode <> 0) then
+  if Ran and (ResultCode = 2) then
+    MsgBox('Claude Code was not found, so the dRofus MCP server was not set up and nothing was stored.' + #13#10#13#10 +
+           'Install Claude Code, then run:' + #13#10#13#10 +
+           'powershell -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\Register-ClaudeMcp.ps1') + '" -Drofus',
+           mbInformation, MB_OK)
+  else if (not Ran) or (ResultCode <> 0) then
     MsgBox('The dRofus MCP server could not be set up. Nothing was stored. To try again, run:' + #13#10#13#10 +
            'powershell -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\Register-ClaudeMcp.ps1') + '" -Drofus',
            mbInformation, MB_OK);

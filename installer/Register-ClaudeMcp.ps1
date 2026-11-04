@@ -93,7 +93,10 @@ $Claude = Find-Claude
 
 if (-not $Claude) {
     if ($Remove) { exit 0 }
-    Stop-Here @"
+    # Exit code 2 is "no Claude Code" to the installer, which is running this hidden and says so in a message box.
+    $missingCode = 0
+    if ($Unattended) { $missingCode = 2 }
+    Stop-Here -Code $missingCode -Message @"
 Claude Code was not found, so nothing was registered.
 Install it, then run this again:
   powershell -ExecutionPolicy Bypass -File "$PSCommandPath"
