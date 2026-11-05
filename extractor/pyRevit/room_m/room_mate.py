@@ -458,8 +458,8 @@ def _warn_no_type_code(project, return_value):
             "(room tags are). Name the type parameter that identifies an item's kind under Tag type code.")
 
 
-def _confirm_no_type_code(project, forms, return_value):
-    """Before a blueprint push: when the project's settings name no tag type code, say so and let the person decide.
+def _confirm_no_type_code(project, forms, return_value, what="blueprint"):
+    """Before a blueprint or sheets push: when the project's settings name no tag type code, say so and let the person decide.
     Item tags (FF&E and the like) cannot be keyed without it, so the blueprint would be stored with its room tags
     only. Returns True to go on (a code is set, or the person chose to push anyway)."""
     if project.get("tag_type_code"):
@@ -469,9 +469,9 @@ def _confirm_no_type_code(project, forms, return_value):
             project.get("name") or project.get("id")), run_report.HELD))
     go_on = forms.alert(
         "Project '{}' has no Tag type code in its settings.\n\n"
-        "Tags on items (FF&E, furniture) cannot be keyed without it, so this blueprint would be stored with its "
+        "Tags on items (FF&E, furniture) cannot be keyed without it, so this {what} would keep its "
         "room tags only. Set it under Tag type code in the project's settings, then push again to keep item tags.\n\n"
-        "Push anyway?".format(project.get("name") or project.get("id")),
+        "Push anyway?".format(project.get("name") or project.get("id"), what=what),
         title="Roommate - no tag type code", yes=True, no=True, warn_icon=True)
     return bool(go_on)
 
@@ -606,6 +606,11 @@ def sheets_export_entry(doc, uiapp, output, forms):
         if choice is None:
             return_value.append_message(run_report.say(
                 "Cancelled: no sheet was exported.", run_report.CANCELLED))
+            return return_value
+        if not _confirm_no_type_code(choice["project"], forms, return_value, what="sheet push"):
+            return_value.append_message(run_report.say(
+                "Cancelled: nothing was pushed. Set Tag type code in the project's settings first.",
+                run_report.CANCELLED))
             return return_value
         prefs.save_section("sheets", sheet_export_form.to_save(choice["project"], choice["filter"], choice["rule"]))
         _push_sheets(choice["project"], choice["assignments"], doc, None, return_value, forms)

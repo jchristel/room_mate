@@ -64,11 +64,28 @@ def _lines_of(result):
         return []
 
 
+def _record(text, state=None):
+    """Write what the person is shown into the log too, so the file tells the whole run and not only the failures:
+    a FAILED line is an error, a HELD one a warning. Nothing here may raise."""
+    try:
+        from room_m import task_log
+
+        if state == FAILED:
+            task_log.error(text)
+        elif state == HELD:
+            task_log.warning(text)
+        else:
+            task_log.info(text)
+    except Exception:
+        pass
+
+
 def say(line, state=None):
-    """Print `line`, with `state` (OK, FAILED, HELD) after it when given. Returns the line as printed."""
+    """Print `line`, with `state` (OK, FAILED, HELD) after it when given, and log it. Returns the line as printed."""
     text = line if state is None else "{} {}".format(line, state)
     _said.add(line)
     _said.add(text)
+    _record(text, state)
     try:
         _sink[0](text)
     except Exception:
@@ -205,8 +222,10 @@ def finish(result, what):
     if path:
         _sink[0]("Log file: {}".format(path))
     if ok:
-        _sink[0]("Finished: {} - completed with no problems.".format(what))
+        closing = "Finished: {} - completed with no problems.".format(what)
     else:
-        _sink[0]("Finished: {} - completed WITH PROBLEMS. Read the lines marked {} or {} above.".format(
-            what, FAILED, HELD))
+        closing = "Finished: {} - completed WITH PROBLEMS. Read the lines marked {} or {} above.".format(
+            what, FAILED, HELD)
+    _sink[0](closing)
+    _record(closing, None if ok else FAILED)
     return ok

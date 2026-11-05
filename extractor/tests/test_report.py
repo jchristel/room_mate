@@ -162,5 +162,33 @@ class ServerLabel(unittest.TestCase):
         self.assertEqual("Server: http://192.168.0.97:5151", sc.short(environ={"ROOMMATE_SERVER": "192.168.0.97"}))
 
 
+class LogMirror(unittest.TestCase):
+    def test_every_line_said_and_the_closing_line_are_in_the_log(self):
+        import shutil
+        import tempfile
+
+        from room_m import task_log
+
+        folder = tempfile.mkdtemp()
+        try:
+            path = task_log.start("Blueprint export", os.path.join(folder, "RoomMate"))
+            said = []
+            result = FakeResult()
+            report.begin(result, sink=said.append)
+            report.say("pushed blueprint WC", report.OK)
+            report.say("blueprint KITCHEN refused", report.FAILED)
+            result.update_sep(False, "x")
+            report.finish(result, "blueprint export")
+            with open(path) as handle:
+                text = handle.read()
+            self.assertIn("pushed blueprint WC [ok]", text)
+            self.assertIn("ERROR | ", text)
+            self.assertIn("blueprint KITCHEN refused [FAILED]", text)
+            self.assertIn("Finished: blueprint export - completed WITH PROBLEMS", text)
+        finally:
+            task_log.stop()
+            shutil.rmtree(folder, ignore_errors=True)
+
+
 if __name__ == "__main__":
     unittest.main()
