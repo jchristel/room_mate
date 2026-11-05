@@ -17,9 +17,10 @@ NS = "{http://schemas.microsoft.com/winfx/2006/xaml/presentation}"
 
 class Rules(unittest.TestCase):
     def test_captions_and_filter(self):
-        self.assertEqual(f.sheets_caption(0), "(none)")
-        self.assertEqual(f.sheets_caption(1), "1 sheet")
-        self.assertEqual(f.sheets_caption(3), "3 sheets")
+        self.assertEqual(f.sheets_caption([]), "(none)")
+        sheets = [{"number": n, "label": n} for n in ("A101", "A102", "A103")]
+        self.assertEqual(f.sheets_caption(sheets[:1]), "A101")
+        self.assertEqual(f.sheets_caption(sheets), "A101, A102, A103")
         self.assertTrue(f.matches("00.01 RAMPUS", "ramp"))
         self.assertTrue(f.matches("00.01 RAMPUS", " "))
         self.assertFalse(f.matches("00.01 RAMPUS", "bath"))
@@ -43,6 +44,16 @@ class Rules(unittest.TestCase):
         out = f.problems({"id": "p"}, "New", [("A", "Bed", 1), ("B", "bed", 1)])
         self.assertEqual(out, ["B: the name 'bed' is also A's."])
 
+    def test_names_shared_by_ticked_rooms_are_marked_and_unticked_ones_are_not(self):
+        rows = [("Bed", True), ("bed ", True), ("Bed", False), ("Bath", True), ("", True), ("", True)]
+        self.assertEqual({0, 1}, f.duplicate_names(rows))
+
+    def test_project_filter_and_rule_come_back(self):
+        projects = [{"id": "a"}, {"id": "b"}]
+        rule = f.make_rule("{Number}", "inside", "{Sheet Number}")
+        self.assertEqual((1, "ramp", rule), f.remembered(f.to_save(projects[1], "ramp", rule), projects))
+        self.assertEqual((None, "", None), f.remembered({"project": "gone", "rule": {"relation": "x"}}, projects))
+
     def test_a_long_list_of_problems_says_how_many_more(self):
         rooms = [(str(i), "", 0) for i in range(5)]
         out = f.problems({"id": "p"}, "New", rooms)
@@ -62,7 +73,7 @@ class Xaml(unittest.TestCase):
         self.assertNotIn(NS + "ListView", tags)
 
     def test_the_controls_the_window_reads_exist_once(self):
-        for name in ("tx_model", "cb_project", "cb_phase", "tb_find", "sp_rooms", "tx_status", "bt_export"):
+        for name in ("tx_model", "cb_project", "cb_phase", "tb_find", "sp_rooms", "tx_status", "bt_export", "tb_rule_room", "tb_rule_sheet", "cb_rule_relation", "tx_rule", "tx_found", "tx_phase_note"):
             self.assertEqual(1, self.names.count(name), name)
 
     def test_every_handler_in_the_xaml_is_a_method_of_the_window(self):

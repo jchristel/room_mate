@@ -15,6 +15,7 @@
             <StackPanel>
                 <TextBlock Text="Tasks" FontSize="20" FontWeight="Bold" Foreground="White"/>
                 <TextBlock x:Name="tx_model" FontSize="12" Foreground="White" Opacity="0.9" TextWrapping="Wrap"/>
+                <TextBlock x:Name="tx_server" FontSize="11" Foreground="White" Opacity="0.75" TextWrapping="Wrap"/>
             </StackPanel>
         </Border>
 

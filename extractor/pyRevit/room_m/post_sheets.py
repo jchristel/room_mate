@@ -56,12 +56,16 @@ def post_sheets(project_id, pushed):
     return ok, status, text, outcomes
 
 
-def describe_outcomes(outcomes):
-    """One line per sheet for the run's output. A held sheet says what to do next."""
+def describe_outcomes(outcomes, names=None):
+    """One line per sheet for the run's output. A held sheet says what to do next. `names` maps a sheet number to
+    its name, so a line reads `101 Ground Plan: updated`."""
     lines = []
     for o in outcomes:
         what = o.get("outcome")
         number = o.get("sheet_number", "?")
+        name = (names or {}).get(number)
+        if name:
+            number = "{} {}".format(number, name)
         if what == "created":
             lines.append("{}: added to the sheet library".format(number))
         elif what == "updated":

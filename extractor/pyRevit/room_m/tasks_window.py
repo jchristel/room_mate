@@ -10,6 +10,7 @@ survives a filter change.
 **Not yet run in Revit.**
 """
 
+from room_m import server_config
 import os
 
 from System.Windows import Thickness, Visibility
@@ -34,6 +35,7 @@ def show(forms, model_title, projects, load):
             self._boxes = []
             self._message = ""
             self.tx_model.Text = "Model: {}".format(model_title)
+            self.tx_server.Text = server_config.short()
             self.cb_project.ItemsSource = [p["name"] for p in self._projects]
             self.cb_kind.ItemsSource = [label for _key, label in form.KIND_FILTERS]
             self.cb_kind.SelectedIndex = 0

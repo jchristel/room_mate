@@ -44,6 +44,13 @@ pub struct ProjectFileSummary {
     pub tag_type_code: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The phase the server holds for each model of this project, by model id: the lineage's phase, fixed by the
+    /// first phased push. Filled by the HTTP list only, so the exporter learns every project's phases in the one
+    /// call that lists the projects and the window never asks again on a project change. Absent for a model with
+    /// nothing phased stored, and empty (left out) for a project nothing has been pushed to.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    #[ts(type = "Record<string, string>")]
+    pub model_phases: std::collections::BTreeMap<String, String>,
 }
 
 /// Wire shape of one project's settings: the parsed `Settings` plus which

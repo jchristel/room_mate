@@ -32,6 +32,60 @@ def entities_ticked(ticked):
     return tuple(key for name, key, _label in ENTITIES if name in ticked)
 
 
+def entities_all():
+    """The control names `Check all` ticks. FF&E by space is left out: it is the services-model alternative to FF&E by
+    room and the two are never both wanted (`problems` refuses both), so ticking everything must not tick both."""
+    return set(name for name, key, _label in ENTITIES if key != "ffe_by_space")
+
+
+def default_phase(phases, server_phases):
+    """`(phase, reason)`: the phase to pre-select, and a line that says why.
+
+    `server_phases` are the phases the server holds for the selected models in the chosen project (a model's
+    phase is fixed by its first push, so this is what the next push is checked against; `room_m.phase_hint`
+    reads them). The first of `phases` (the window's list, oldest first) the server holds wins; with none, this is
+    the project's first push for these models and the first phase is offered. `phase` is None only when there are
+    no phases at all."""
+    if not phases:
+        return None, ""
+    held = set(p for p in server_phases if p)
+    for phase in phases:
+        if phase in held:
+            return phase, "Phase from the last push to this project."
+    if held:
+        return phases[0], "The server holds {} for these models, which this model does not have.".format(
+            ", ".join(sorted(held)))
+    return phases[0], "First push to this project: the first phase is offered."
+
+
+def remembered(saved, projects, names):
+    """What the window starts with, from the saved section of `prefs`: `{"project": index or None,
+    "entities": set of control names, "levels": None for the whole model or the level names still present}`.
+    Anything saved that no longer exists (a project removed, a level renamed) is dropped, never an error."""
+    saved = saved or {}
+    index = None
+    for i, project in enumerate(projects):
+        if project.get("id") == saved.get("project"):
+            index = i
+    keys = set(saved.get("entities") or [])
+    ticked = set(name for name, key, _label in ENTITIES if key in keys)
+    levels = None
+    if saved.get("scope") == "levels":
+        kept = [n for n in (saved.get("levels") or []) if n in set(names)]
+        levels = kept or None
+    return {"project": index, "entities": ticked, "levels": levels}
+
+
+def to_save(project, entities, levels):
+    """The section `prefs` keeps after an export: the project id, the entity keys and the scope."""
+    return {
+        "project": (project or {}).get("id"),
+        "entities": list(entities),
+        "scope": "whole" if levels is None else "levels",
+        "levels": list(levels or []),
+    }
+
+
 def level_names(levels_by_doc):
     """The distinct level names across models, lowest first by the lowest elevation each name has.
     `levels_by_doc` is a list of lists of `{"id", "name", "elevation"}`."""

@@ -9,18 +9,26 @@ DataGrid or ListView, handlers are plain methods named in the XAML, rules in
 is chosen** (the rooms depend on it), and a room's sheet list is a Popup of check boxes **made when it
 is first opened**. A sheet ticked for one room is greyed in the others, because a sheet is offered once.
 
+What the person chose is kept on the row (`state["chosen"]`), not read back from the list, so the matching rule can
+set a room's sheets before its list was ever opened. A ticked row whose blueprint name another ticked row shares is
+shaded and says so; the rule and the filter are `room_m.match_rule`, shared with the sheet window.
+
 **Not yet run in Revit.**
 """
 
+from room_m import server_config
 import os
 
 from System.Windows import Thickness
 from System.Windows.Controls import Button, CheckBox, ColumnDefinition, Grid, StackPanel, TextBox
 from System.Windows.Controls import ScrollBarVisibility, ScrollViewer
 from System.Windows.Controls.Primitives import Popup, PlacementMode
+from System.Windows.Media import Color, SolidColorBrush
 from System.Windows import GridLength, GridUnitType, HorizontalAlignment, VerticalAlignment, Visibility
 
 from room_m import blueprint_export_form as form
+from room_m import export_form, match_rule
+from room_m.utils import sheets as utils_sheets
 
 XAML_PATH = os.path.join(os.path.dirname(__file__), "blueprint_export.xaml")
 
@@ -31,10 +39,15 @@ def _column(width):
     return column
 
 
-def show(forms, model_name, projects, phases, rooms_for, sheets):
+SHADE = SolidColorBrush(Color.FromRgb(255, 224, 224))
+
+
+def show(forms, model_name, projects, phases, rooms_for, sheets, saved=None, phase_lookup=None):
     """Show the window. `phases` are phase names, `rooms_for(phase)` the pick-list entries of the
-    placed rooms of that phase and `sheets` those of the model's sheets (`room_m.utils.sheets`).
-    Returns `{"project", "phase", "plan": [(room entry, name, [sheet entries])]}` for the rooms
+    placed rooms of that phase and `sheets` those of the model's sheets (`room_m.utils.sheets`). `saved` is what
+    `room_m.prefs` kept from the last export (project, filter, sheet rule) and `phase_lookup(project_id)` the phases
+    the server holds for this model, so the phase can be preselected as the export window does.
+    Returns `{"project", "phase", "plan": [(room entry, name, [sheet entries])], "filter", "rule"}` for the rooms
     ticked, or None when cancelled."""
 
     class BlueprintExportWindow(forms.WPFWindow):
@@ -46,14 +59,25 @@ def show(forms, model_name, projects, phases, rooms_for, sheets):
             self._phases = list(phases)
             self._rows = []
             self.tx_model.Text = "Model: {}".format(model_name)
+            self.tx_server.Text = server_config.short()
             self.cb_project.ItemsSource = [p["name"] for p in self._projects]
-            if len(self._projects) == 1:
-                self.cb_project.SelectedIndex = 0
+            index, text, rule = form.remembered(saved, self._projects)
             self.cb_phase.ItemsSource = self._phases
-            if len(self._phases) == 1:
+            if index is not None:
+                self.cb_project.SelectedIndex = index
+            elif len(self._projects) == 1:
+                self.cb_project.SelectedIndex = 0
+            self._phase_for_project()
+            if self._phase() is None and len(self._phases) == 1:
                 self.cb_phase.SelectedIndex = 0
+            self.cb_rule_relation.ItemsSource = [label for _key, label in form.RELATIONS]
+            self.cb_rule_relation.SelectedIndex = [k for k, _l in form.RELATIONS].index(rule["relation"]) if rule else 0
+            self.tb_rule_room.Text = rule["room"] if rule else match_rule.DEFAULT_ROOM
+            self.tb_rule_sheet.Text = rule["sheet"] if rule else match_rule.DEFAULT_SHEET
+            self.tb_find.Text = text
             self._ready = True
             self._fill_rooms()
+            self._rule_note()
             self._status()
 
         # -- rows -----------------------------------------------------------------------------
@@ -68,6 +92,7 @@ def show(forms, model_name, projects, phases, rooms_for, sheets):
             for entry in rooms_for(phase):
                 self._add_row(entry)
             self._filter(self.tb_find.Text)
+            self._mark_names()
 
         def _add_row(self, entry):
             row = Grid()
@@ -91,13 +116,13 @@ def show(forms, model_name, projects, phases, rooms_for, sheets):
             row.Children.Add(name)
 
             button = Button()
-            button.Content = form.sheets_caption(0)
+            button.Content = form.sheets_caption([])
             button.Margin = Thickness(6, 0, 0, 0)
             button.HorizontalContentAlignment = HorizontalAlignment.Left
             Grid.SetColumn(button, 2)
             row.Children.Add(button)
 
-            state = {"entry": entry, "row": row, "tick": tick, "name": name, "button": button, "popup": None, "boxes": []}
+            state = {"entry": entry, "row": row, "tick": tick, "name": name, "button": button, "popup": None, "boxes": [], "chosen": []}
             button.Click += lambda sender, args, s=state: self._open_sheets(s)
             self.sp_rooms.Children.Add(row)
             self._rows.append(state)
@@ -120,10 +145,12 @@ def show(forms, model_name, projects, phases, rooms_for, sheets):
             scroller.MaxHeight = 280
             scroller.VerticalScrollBarVisibility = ScrollBarVisibility.Auto
             inner = StackPanel()
+            chosen_ids = set(sheet["id"] for sheet in state["chosen"])
             for sheet in sheets:
                 box = CheckBox()
                 box.Content = sheet["label"]
                 box.Margin = Thickness(6, 2, 6, 2)
+                box.IsChecked = sheet["id"] in chosen_ids
                 box.Checked += lambda sender, args, s=state: self._sheets_changed(s)
                 box.Unchecked += lambda sender, args, s=state: self._sheets_changed(s)
                 inner.Children.Add(box)
@@ -135,16 +162,33 @@ def show(forms, model_name, projects, phases, rooms_for, sheets):
 
         @staticmethod
         def _chosen_sheets(state):
-            return [sheet for sheet, box in state["boxes"] if box.IsChecked]
+            return list(state["chosen"])
 
         def _sheets_changed(self, state):
-            state["button"].Content = form.sheets_caption(len(self._chosen_sheets(state)))
+            """A box in a room's sheet list was ticked or unticked: the room's sheets are the ticked ones."""
+            if state.get("syncing"):
+                return
+            self._set_sheets(state, [sheet for sheet, box in state["boxes"] if box.IsChecked], from_boxes=True)
+
+        def _set_sheets(self, state, chosen, from_boxes=False):
+            """The sheets of a room, kept on the row, shown on the button as their numbers and mirrored into the
+            list if it was ever opened."""
+            state["chosen"] = list(chosen)
+            state["button"].Content = form.sheets_caption(state["chosen"])
+            if not from_boxes and state["boxes"]:
+                ids = set(sheet["id"] for sheet in state["chosen"])
+                state["syncing"] = True
+                try:
+                    for sheet, box in state["boxes"]:
+                        box.IsChecked = sheet["id"] in ids
+                finally:
+                    state["syncing"] = False
             self._grey_taken()
             self._status()
 
         def _grey_taken(self):
             """A sheet ticked for one room cannot be ticked for another."""
-            held = [(s["entry"]["id"], [sh["id"] for sh in self._chosen_sheets(s)]) for s in self._rows]
+            held = [(s["entry"]["id"], [sh["id"] for sh in s["chosen"]]) for s in self._rows]
             for state in self._rows:
                 taken = form.taken_elsewhere(held, state["entry"]["id"])
                 for sheet, box in state["boxes"]:
@@ -154,6 +198,43 @@ def show(forms, model_name, projects, phases, rooms_for, sheets):
             for state in self._rows:
                 visible = form.matches(state["entry"]["label"], text)
                 state["row"].Visibility = Visibility.Visible if visible else Visibility.Collapsed
+            self.tx_found.Text = "{} of {} rooms".format(len(self._listed()), len(self._rows))
+
+        def _listed(self):
+            return [s for s in self._rows if s["row"].Visibility == Visibility.Visible]
+
+        def _mark_names(self):
+            """Shade every ticked row whose blueprint name another ticked row shares, and say why on the name."""
+            if not self._ready:
+                return
+            shared = form.duplicate_names([(s["name"].Text, bool(s["tick"].IsChecked)) for s in self._rows])
+            for i, state in enumerate(self._rows):
+                if i in shared:
+                    state["row"].Background = SHADE
+                    state["name"].ToolTip = "Another ticked room has this blueprint name: give each its own."
+                else:
+                    state["row"].Background = None
+                    state["name"].ToolTip = None
+
+        def _phase_for_project(self):
+            """Preselect the phase the server holds for this model in the chosen project (it came with the project
+            list), or the first phase for a first push."""
+            index = self.cb_project.SelectedIndex
+            if index < 0 or not self._phases:
+                return
+            held = phase_lookup(self._projects[index]["id"]) if phase_lookup else []
+            phase, why = export_form.default_phase(self._phases, held)
+            if phase is not None:
+                self.cb_phase.SelectedIndex = self._phases.index(phase)
+                self.tx_phase_note.Text = why + " The rooms listed are the placed rooms of the phase."
+
+        def _rule(self):
+            index = self.cb_rule_relation.SelectedIndex
+            return form.make_rule(
+                self.tb_rule_sheet.Text, form.RELATIONS[index][0] if index >= 0 else None, self.tb_rule_room.Text)
+
+        def _rule_note(self, extra=""):
+            self.tx_rule.Text = (form.describe_rule(self._rule()) + " " + extra).strip()
 
         def _phase(self):
             index = self.cb_phase.SelectedIndex
@@ -169,7 +250,46 @@ def show(forms, model_name, projects, phases, rooms_for, sheets):
         # -- handlers, named in the XAML ------------------------------------------------------
 
         def on_change(self, sender, args):
+            self._mark_names()
             self._status()
+
+        def on_project(self, sender, args):
+            if self._ready:
+                self._phase_for_project()
+                self._fill_rooms()
+                self._status()
+
+        def on_check_matched(self, sender, args):
+            for s in self._listed():
+                s["tick"].IsChecked = True
+
+        def on_check_none(self, sender, args):
+            for s in self._rows:
+                s["tick"].IsChecked = False
+
+        def on_rule_change(self, sender, args):
+            if self._ready:
+                self._rule_note()
+
+        def on_apply_rule(self, sender, args):
+            """Set the sheets of every LISTED room from the rule. A room the rule pairs with no sheet keeps what it
+            had, and a sheet already held by a room outside the list is not taken from it."""
+            rule = self._rule()
+            listed = self._listed()
+            rooms_listed = utils_sheets.ensure_params([s["entry"] for s in listed])
+            utils_sheets.ensure_params(sheets)
+            paired = unpaired = 0
+            for state in listed:
+                others = [sh["id"] for s in self._rows if s is not state for sh in s["chosen"]]
+                found = match_rule.sheets_for_room(rule, state["entry"], sheets, set(others))
+                if found:
+                    self._set_sheets(state, found)
+                    paired += 1
+                else:
+                    unpaired += 1
+            self._rule_note(" ".join(
+                ["{} room(s) got sheets; {} had no sheet that matches.".format(paired, unpaired)]
+                + match_rule.unknown_parameters(rule, sheets, rooms_listed)))
 
         def on_phase(self, sender, args):
             if self._ready:
@@ -192,6 +312,8 @@ def show(forms, model_name, projects, phases, rooms_for, sheets):
                 "project": self._project(),
                 "phase": self._phase(),
                 "plan": [(s["entry"], s["name"].Text.strip(), self._chosen_sheets(s)) for s in self._ticked()],
+                "filter": self.tb_find.Text,
+                "rule": self._rule(),
             }
             self.Close()
 
@@ -199,7 +321,7 @@ def show(forms, model_name, projects, phases, rooms_for, sheets):
 
         def _problems(self):
             ticked = [
-                (s["entry"]["label"], s["name"].Text, len(self._chosen_sheets(s))) for s in self._ticked()
+                (s["entry"]["label"], s["name"].Text, len(s["chosen"])) for s in self._ticked()
             ]
             return form.problems(self._project(), self._phase(), ticked)
 

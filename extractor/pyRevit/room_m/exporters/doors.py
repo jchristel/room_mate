@@ -41,6 +41,7 @@ from duHast.Data.Objects.Collectors import data_level_building as dl
 from duHast.Data.Utils.data_to_file import build_json_for_file
 
 from room_m.export_form import level_kwargs
+from room_m import report
 from room_m.post_doors import post_doors_stream
 
 from room_m.utils.openings import (
@@ -130,17 +131,12 @@ def post_bucket(run_envelope, entries, return_value):
     ok, status, text = post_doors_stream(run_envelope, entries)
     models = ", ".join(block["id"] for block, _ in entries)
     if ok:
-        return_value.append_message(
-            "{}: server accepted doors ({})".format(models, text)
-        )
+        report.say_ingest("doors", text, return_value)
         return True
 
     # There is no 202 here: unlike rooms, a doors push whose phase disagrees with
     # the model is REFUSED rather than quarantined, because activating it would
     # re-phase the model while its rooms stayed behind. So any non-2xx is a real
     # failure with a message worth surfacing.
-    return_value.update_sep(
-        False,
-        "{}: doors push failed ({}): {}".format(models, status, text),
-    )
+    report.server_failure("doors push", status, text, return_value, where=models)
     return False

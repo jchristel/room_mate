@@ -30,4 +30,11 @@ reference_sources: Array<string>,
  * summary because the pyRevit push picker reads it from this one call, and a push that
  * names no parameter cannot key its item tags.
  */
-tag_type_code?: string | null, error?: string | null, };
+tag_type_code?: string | null, error?: string | null, 
+/**
+ * The phase the server holds for each model of this project, by model id: the lineage's phase, fixed by the
+ * first phased push. Filled by the HTTP list only, so the exporter learns every project's phases in the one
+ * call that lists the projects and the window never asks again on a project change. Absent for a model with
+ * nothing phased stored, and empty (left out) for a project nothing has been pushed to.
+ */
+model_phases?: Record<string, string>, };

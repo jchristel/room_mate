@@ -208,6 +208,13 @@ def describe(environ=None, path=None):
     return "not set. " + NOT_SET_MESSAGE
 
 
+def short(environ=None, path=None):
+    """`Server: http://192.168.0.97:5151`, or `Server: not set`: the small print in a window's header, so a person
+    sees where a push is about to go before choosing anything."""
+    url = resolve(environ, path)[0]
+    return "Server: {}".format(url) if url else "Server: not set"
+
+
 def save(text, path=None, environ=None):
     """Keep `text` as the server address in `server.json` and return the base URL that was kept.
     The local words (`default`, `local`) keep the server on this computer; the reset words

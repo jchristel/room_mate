@@ -103,6 +103,37 @@ def _placed(doc, allowed):
     return _unique_labels(found)
 
 
+def parameter_texts(element):
+    """`{parameter name: text}` for every parameter of `element` that holds a value, as Revit shows it (a length in
+    the project's units, a yes/no as Yes/No), for the matching rule's `{Parameter}` placeholders
+    (`room_m.match_rule`). The first parameter of a name wins; one that cannot be read is left out."""
+    found = {}
+    try:
+        parameters = list(element.Parameters)
+    except Exception:
+        return found
+    for parameter in parameters:
+        try:
+            name = parameter.Definition.Name
+            if name in found or not parameter.HasValue:
+                continue
+            text = parameter.AsValueString() or parameter.AsString() or ""
+            if text.strip():
+                found[name] = text
+        except Exception:
+            continue
+    return found
+
+
+def ensure_params(entries):
+    """Fill `params` on every pick-list entry that has none yet. Done when a rule is first applied and not when the
+    list is built: a model has hundreds of rooms and most runs never use a rule."""
+    for entry in entries:
+        if "params" not in entry:
+            entry["params"] = parameter_texts(entry["element"])
+    return entries
+
+
 def _unique_labels(items):
     """The pick list returns the label string, so two items sharing one would silently
     resolve to whichever was found first. A shared label carries the element id."""

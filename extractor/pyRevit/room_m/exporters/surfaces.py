@@ -51,6 +51,7 @@ from duHast.Data.Objects.Collectors import data_level_building as dl
 from duHast.Data.Utils.data_to_file import build_json_for_file
 
 from room_m.export_form import level_kwargs
+from room_m import report
 from room_m.utils.generic import (
     elements_in_phase,
 )
@@ -214,18 +215,8 @@ def post_bucket(spec, run_envelope, entries, return_value):
         # pushed under, so that model's payload is quarantined and nothing reads
         # it until someone activates it. Reported distinctly, or a user reads
         # "accepted" and believes every model updated.
-        if status == 202:
-            return_value.append_message(
-                "{}: stored, but NOT every model is live -- {}".format(models, text)
-            )
-        else:
-            return_value.append_message(
-                "{}: server accepted {} ({})".format(models, spec.plural, text)
-            )
+        report.say_ingest(spec.plural, text, return_value)
         return True
 
-    return_value.update_sep(
-        False,
-        "{}: {} push failed ({}): {}".format(models, spec.plural, status, text),
-    )
+    report.server_failure(spec.plural + " push", status, text, return_value, where=models)
     return False
