@@ -80,8 +80,8 @@ def shown(row, text, kind_key, level):
 
 
 def problems(ticked_count):
-    return [] if ticked_count else ["Tick at least one task to run."]
+    return [] if ticked_count else ["Check at least one task to run."]
 
 
 def summary(ticked_count, shown_count, total):
-    return "{} ticked; {} of {} shown".format(ticked_count, shown_count, total)
+    return "{} checked; {} of {} shown".format(ticked_count, shown_count, total)

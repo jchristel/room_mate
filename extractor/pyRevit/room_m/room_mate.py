@@ -545,7 +545,7 @@ def _push_sheets(project, assignments, selected_doc, phase_name, return_value, f
 def sheets_export_entry(doc, uiapp, output, forms):
     """Push SHEETS you choose to the sheet library, in one window.
 
-    The window (`room_m.sheet_export_window`) lists the open model's sheets; tick the ones to export and,
+    The window (`room_m.sheet_export_window`) lists the open model's sheets; check the ones to export and,
     beside each, tick the rooms it covers (none, one, or several). **No room is linked to a sheet**: the
     rooms only supply the figures the library ranks a sheet on -- the size and proportions of the
     smallest rectangle round them, their area and their item count (`room_m.room_figures`) -- which are
@@ -625,7 +625,7 @@ def blueprint_export_entry(doc, uiapp, output, forms):
     """The BLUEPRINT push, in one window (`room_m.blueprint_export_window`).
 
     1. **Project and phase.** The rooms listed are the placed rooms of the phase you pick.
-    2. **Rooms.** Tick the rooms you want a blueprint from.
+    2. **Rooms.** Check the rooms you want a blueprint from.
     3. **Name and sheets, beside each room.** The blueprint's name defaults to the room's name; a name
        the project already has becomes a pending revision of that blueprint, to accept or reject in the
        viewer. **A room with no sheet is not pushed**: a blueprint is a room and its sheets together,

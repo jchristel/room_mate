@@ -109,7 +109,7 @@ def problems(ticked, project, phase, whole_model, chosen_levels):
     out = []
     entities = entities_ticked(ticked)
     if not entities:
-        out.append("Tick at least one thing to export.")
+        out.append("Check at least one thing to export.")
     if "ffe" in entities and "ffe_by_space" in entities:
         out.append("FF&E is identified by room OR by space, not both: they fill the same list.")
     if not project:

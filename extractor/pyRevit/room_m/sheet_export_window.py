@@ -193,7 +193,7 @@ def show(forms, model_name, projects, sheets, rooms, saved=None):
                     ticked += 1
                 else:
                     skipped += 1
-            self._rule_note("Ticked {} sheet(s) that have rooms; {} listed sheet(s) have no room and were left.".format(
+            self._rule_note("Checked {} sheet(s) that have rooms; {} listed sheet(s) have no room and were left.".format(
                 ticked, skipped))
 
         def on_check_none(self, sender, args):
