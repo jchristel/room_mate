@@ -906,11 +906,231 @@ pub fn rules_for(
         .collect())
 }
 
+/// The item rules an RLS creation task applies (plan decision 27, reworked 2026-11-05), worked out from `rules`.
+///
+/// **Per type code, viewport type and view side, ONE answer, whichever room blueprint it was learned in.**
+/// The generic pool (rules from the Sheets button) is used when it has the key; a rule learned on one item of
+/// any room blueprint is then ignored. Only a key the generic pool lacks falls back to the blueprint rules, and
+/// those are available to every instance of the type code, assigned or not.
+///
+/// **A pool is pooled by SAMPLES, not by rule.** Several rules can hold one key's samples (one per blueprint
+/// item, since a bound item rule holds one sample), and the median of their medians is not the median of the
+/// samples; `reduce` is applied to all of them, as it is for one rule. The rules also differ by the tag used
+/// (category, family, type): two different tags are not averaged, the one with the most samples wins (then the
+/// later update, then the id, so the choice does not move between runs).
+///
+/// The summary returned is the winning pool's most recently updated rule with the pooled placement and sample
+/// count, so `rule_id` still names a rule the library lists. Room, space and area rules are not item rules and
+/// are not returned (`rules_for` carries them).
+pub fn rls_item_rules(rules: &[TagRule], viewport_types: &[String], parameter: &str) -> Vec<RuleSummary> {
+    let wanted = |s: &str| s.trim().to_lowercase();
+    let types: Vec<String> = viewport_types.iter().map(|v| wanted(v)).collect();
+    let parameter = wanted(parameter);
+    if parameter.is_empty() {
+        return Vec::new();
+    }
+    // (type code, viewport type, view side) -> the rules for that key
+    type Group<'a> = ((String, String, String), Vec<&'a TagRule>);
+    let mut groups: Vec<Group> = Vec::new();
+    for r in rules {
+        if is_spatial(&r.tag_kind)
+            || wanted(&r.key.code_parameter) != parameter
+            || wanted(&r.key.type_code).is_empty()
+            || !types.contains(&wanted(&r.key.viewport_type))
+        {
+            continue;
+        }
+        let key = (wanted(&r.key.type_code), wanted(&r.key.viewport_type), wanted(&r.key.view_side));
+        match groups.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, members)) => members.push(r),
+            None => groups.push((key, vec![r])),
+        }
+    }
+    let mut out = Vec::new();
+    for (_, members) in groups {
+        let generic: Vec<&TagRule> = members.iter().copied().filter(|r| r.key.blueprint.is_empty()).collect();
+        let pool = if generic.is_empty() { members } else { generic };
+        if let Some(rule) = pooled(&pool) {
+            out.push(rule);
+        }
+    }
+    out.sort_by(|a, b| a.id.cmp(&b.id));
+    out
+}
+
+/// One pool of rules for a key, as the rule its samples agree on: the most used tag, its samples pooled.
+fn pooled(pool: &[&TagRule]) -> Option<RuleSummary> {
+    let identity = |r: &TagRule| {
+        (
+            r.key.tag_category.trim().to_lowercase(),
+            r.key.tag_family.trim().to_lowercase(),
+            r.key.tag_type.trim().to_lowercase(),
+        )
+    };
+    let weight = |r: &TagRule| r.samples.len().max(r.sample_count);
+    let mut tags: Vec<((String, String, String), usize)> = Vec::new();
+    for r in pool {
+        let id = identity(r);
+        match tags.iter_mut().find(|(t, _)| *t == id) {
+            Some((_, n)) => *n += weight(r),
+            None => tags.push((id, weight(r))),
+        }
+    }
+    // Most samples; a tie goes to the tag of the most recently updated rule, then to the lower id.
+    let best = tags
+        .iter()
+        .map(|(tag, n)| {
+            let newest = pool
+                .iter()
+                .filter(|r| identity(r) == *tag)
+                .map(|r| (r.updated_at.as_str(), std::cmp::Reverse(r.id.as_str())))
+                .max();
+            (*n, newest, tag)
+        })
+        .max_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)))?
+        .2
+        .clone();
+    let winners: Vec<&TagRule> = pool.iter().copied().filter(|r| identity(r) == best).collect();
+    let newest = winners
+        .iter()
+        .copied()
+        .max_by(|a, b| a.updated_at.cmp(&b.updated_at).then_with(|| b.id.cmp(&a.id)))?;
+    let samples: Vec<Sample> = winners.iter().flat_map(|r| r.samples.iter().cloned()).collect();
+    let mut summary = RuleSummary::from(newest);
+    if !samples.is_empty() {
+        summary.placement = reduce(&samples);
+    }
+    summary.sample_count = winners.iter().map(|r| weight(r)).sum();
+    Some(summary)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     // The blueprint-binding tests drive `observe` and the binding operations together, so they live here with the fixtures.
     use crate::tag_rule_binding::{bound_to, import_bound, unlink_blueprint};
+
+    // ---- rls_item_rules: the effective item rules of a create-RLS task ------------------------------
+
+    fn sample_at(x: f64, tag_id: i64) -> Sample {
+        Sample {
+            source: SampleSource {
+                sheet: SourceSheet { document_title: "m".into(), revit_sheet_id: "1".into(), sheet_number: "1".into() },
+                tag_id,
+                element_id: tag_id,
+            },
+            view_scale: 50.0,
+            head: Offset { x, y: 0.0 },
+            rotation: 0.0,
+            orientation: "Horizontal".into(),
+            has_leader: false,
+            leader_end_condition: String::new(),
+            elbow: None,
+            end: None,
+            boundary: None,
+        }
+    }
+
+    fn item_rule(
+        id: &str,
+        code: &str,
+        blueprint: &str,
+        instance: &str,
+        tag_type: &str,
+        xs: &[f64],
+        at: &str,
+    ) -> TagRule {
+        let samples: Vec<Sample> = xs.iter().enumerate().map(|(i, x)| sample_at(*x, i as i64)).collect();
+        TagRule {
+            schema_version: 2,
+            id: id.into(),
+            key: RuleKey {
+                tagged_category: "Furniture".into(),
+                code_parameter: "Assembly Code".into(),
+                type_code: code.into(),
+                tag_category: "Multi-Category Tags".into(),
+                tag_family: "T".into(),
+                tag_type: tag_type.into(),
+                viewport_type: "floor plan".into(),
+                blueprint: blueprint.into(),
+                instance: instance.into(),
+                view_side: String::new(),
+            },
+            tag_kind: "independent".into(),
+            placement: reduce(&samples),
+            sample_count: samples.len(),
+            updated_at: at.into(),
+            samples,
+        }
+    }
+
+    fn plan_types() -> Vec<String> {
+        vec!["floor plan".to_string()]
+    }
+
+    #[test]
+    fn test_a_rule_learned_on_a_blueprint_item_is_available_for_any_instance_of_the_code() {
+        let rules = [item_rule("a", "FQSN-113", "bp1", "i1", "Std", &[10.0], "1")];
+        let got = rls_item_rules(&rules, &plan_types(), "Assembly Code");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].placement.head.x, 10.0);
+    }
+
+    #[test]
+    fn test_blueprint_rules_for_one_code_are_pooled_by_sample_across_blueprints() {
+        // Three blueprints, one sample each: the median of the samples is 20, not a median of medians of something else.
+        let rules = [
+            item_rule("a", "C", "bp1", "i1", "Std", &[10.0], "1"),
+            item_rule("b", "C", "bp2", "i2", "Std", &[20.0], "2"),
+            item_rule("c", "C", "bp3", "i3", "Std", &[90.0], "3"),
+        ];
+        let got = rls_item_rules(&rules, &plan_types(), "Assembly Code");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].placement.head.x, 20.0);
+        assert_eq!(got[0].sample_count, 3);
+        assert_eq!(got[0].id, "c", "the rule_id is the most recently updated rule of the pool");
+    }
+
+    #[test]
+    fn test_the_generic_pool_wins_and_blueprint_rules_are_ignored_for_that_code() {
+        let rules = [
+            item_rule("g", "C", "", "", "Std", &[40.0], "1"),
+            item_rule("b", "C", "bp1", "i1", "Std", &[10.0], "2"),
+            item_rule("other", "D", "bp1", "i2", "Std", &[70.0], "2"),
+        ];
+        let got = rls_item_rules(&rules, &plan_types(), "Assembly Code");
+        let of = |id: &str| got.iter().find(|r| r.key.type_code == id).map(|r| r.placement.head.x);
+        assert_eq!(of("C"), Some(40.0), "generic wins for a code it has");
+        assert_eq!(of("D"), Some(70.0), "a code the generic pool lacks falls back to the blueprint rule");
+    }
+
+    #[test]
+    fn test_two_different_tags_are_not_averaged_the_one_with_most_samples_wins() {
+        let rules = [
+            item_rule("a", "C", "bp1", "i1", "Small", &[10.0], "1"),
+            item_rule("b", "C", "bp2", "i2", "Big", &[50.0, 60.0], "2"),
+        ];
+        let got = rls_item_rules(&rules, &plan_types(), "Assembly Code");
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].key.tag_type, "Big");
+        assert_eq!(got[0].placement.head.x, 55.0);
+    }
+
+    #[test]
+    fn test_other_viewport_types_parameters_and_room_tags_are_not_item_rules() {
+        let mut elevation = item_rule("e", "C", "bp1", "i1", "Std", &[1.0], "1");
+        elevation.key.viewport_type = "elevation".into();
+        let mut other_parameter = item_rule("p", "C", "bp1", "i1", "Std", &[1.0], "1");
+        other_parameter.key.code_parameter = "Type Mark".into();
+        let mut room = item_rule("r", "", "bp1", "", "Std", &[1.0], "1");
+        room.tag_kind = "room".into();
+        let rules = [elevation, other_parameter, room];
+        assert!(rls_item_rules(&rules, &plan_types(), "Assembly Code").is_empty());
+        assert!(
+            rls_item_rules(&rules, &plan_types(), "").is_empty(),
+            "a project with no code parameter has no item rules"
+        );
+    }
 
     /// A fresh directory per test, removed when dropped.
     struct TestDir(PathBuf);

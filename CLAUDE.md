@@ -710,10 +710,7 @@ the Tasks button's sheet handler places tags** from the server's tag plan (`rls.
   and a rule left empty is deleted (`tag_rule_binding::take_moved_samples_out`). **A sheet's binding decides its tags' scope**: a push that
   names no blueprint (the Sheets button) keeps the tags of a sheet already bound to one bound to it (`ObserveContext::sheet_blueprints`), so
   re-sending a bound sheet never leaves it bound with generic tags; a named blueprint wins. `rules_for` carries the generic rules and those bound to the
-  sheet's blueprint, never another's. For an item, `rls_tags::rule_for` takes the rule bound to the blueprint item the room's
-  item stands for, else the generic one by type code. **Which blueprint item an item stands for** is matched from the room's
-  assignment of the sheet's blueprint (`rls_tag_place::blueprint_placements`, `rls_tags::match_instances`: same type code, nearest
-  placement within `INSTANCE_MATCH_MM` = 500 mm, one to one); a room with no assignment gets generic rules.
+  sheet's blueprint, never another's. For an item, a **create-RLS task** applies ONE effective rule per type code, viewport type and view side (`tag_rules::rls_item_rules`, reworked 2026-11-05): the **generic pool's** rule when it has the key, and only for a key it lacks the rules learned in room blueprints, **pooled by sample across every blueprint** (`reduce` over all their samples, never a median of medians) and available to EVERY instance of the type code, assigned room or not. Where the winning pool holds more than one tag (category, family, type) the one with most samples wins, never an average. `rule_id` is the pool's most recently updated rule. The assignment matching (`match_instances`, `blueprint_placements`) is gone: which blueprint item a room's item stands for no longer decides anything for an RLS. Room, space and area rules are unchanged (generic, or bound to the sheet's blueprint).
 - **Room tags: two kinds by scope, and one fallback that is neither.** A rule bound to a blueprint is written against the wall of the room the
   sheet was made for; a generic rule against the sides of the room's rectangle. A rule whose room was not on the server when it was learned
   has no boundary at all and keeps only the old offset in the plan's axes: that is not a third kind of rule, it is what is left when the room
