@@ -132,6 +132,8 @@ FF&E is filtered on the level the modeller assigned before conversion and on the
 unchanged. Levels are the per-document ids, which each element's own `LevelId` reports (a room's level, a door's host level, a ceiling's host level).
 **Not run in Revit.**
 
+**The windows share their rules** (`match_rule`: filter words, the `{Parameter}` sheet-to-room rule, duplicate names; `prefs`: `%APPDATA%\RoomMate\prefs.json`; `phase_hint`: the phase the server holds, which arrives with the project list as `model_phases`, so a project change makes no request). "Check all matched" checks only what HAS a match. Every entry says one readable line per result and one Finished line (`report`, `_finishing`). **IronPython 2.7 cannot store `print`**; `test_py2_syntax.py` guards what CPython 3 accepts and Revit does not. Each button is described in [`docs/REVIT-BUTTONS.md`](docs/REVIT-BUTTONS.md). **Not run in Revit** except as noted there.
+
 **The panel**: the `RoomMate` panel on the duHast tab holds Export, Blueprint, Sheets, Tasks, RLS settings and Server. The older `Export` panel (Rooms + Doors, By category)
 was removed: the Export window covers every entity.
 

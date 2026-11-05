@@ -24,7 +24,9 @@ producer once both halves were in one place. See
 Two constraints follow from where the extractor runs:
 
 - **IronPython 2.7, inside Revit** — not CPython 3. Modern syntax and most
-  linters do not apply, which is also why it does not live in `scripts/`.
+  linters do not apply, which is also why it does not live in `scripts/`. The tests run on CPython 3,
+  so `extractor/tests/test_py2_syntax.py` fails on what Python 2 cannot parse (`print` used as a value,
+  f-strings, `nonlocal`, `yield from`): such a line passes every other test and fails only when Revit imports it.
 - **CI covers only what can run without Revit.** `.github/workflows/extractor.yml`
   checks that the extension bundles (no non-ASCII byte, every entry point exists), runs
   the pure parts on CPython (`extractor/tests`: the task planner, the RLS planner, the
@@ -41,13 +43,14 @@ Two constraints follow from where the extractor runs:
 
 The `RoomMate` panel (on the duHast tab) has six buttons: **Export** (one window: what to
 push, the project, the phase, whole model or chosen levels), **Blueprint**, **Sheets**,
-**Tasks**, **RLS settings** and **Server**. The extension is built with
+**Tasks**, **RLS settings** and **Server**. Each is described, with its icon, in
+[the Revit plugin](REVIT-BUTTONS.md). The extension is built with
 `installer\build-extension.ps1 -Deploy` (`-DuHastPath` uses a local duHast instead of the pinned one).
 
 | | State |
 |---|---|
-| Pushing the seven entities | Built and in daily use. |
-| **Tasks → room layout sheets** | **Run in Revit end to end** (2026-11-01 onwards). A window lists the open model's queued tasks (filter by room, kind and level); the ticked ones are claimed, checked as a whole before anything is made, and each sheet is built in one transaction group: the plan view, the elevations (each marker and its views placed from the template, the elevation line moved by its view pointer, cropped to the room's floor and the template's height), a 3D view with a section box at the template's height, the schedule, viewport types, titles and detail numbers, the annotation crop, and the room tag. Everything it needs is set in **RLS settings** (stored in the model). |
+| Pushing the seven entities | Built and in daily use. The Export, Sheets and Blueprint windows share their rules (`match_rule`, `prefs`, `phase_hint`), report one readable line per result with one Finished line (`report`), and were checked in Revit on 2026-11-05. |
+| **Tasks → room layout sheets** | **Run in Revit end to end** (2026-11-01 onwards). A window lists the open model's queued tasks (filter by room, kind and level); the checked ones are claimed, checked as a whole before anything is made, and each sheet is built in one transaction group: the plan view, the elevations (each marker and its views placed from the template, the elevation line moved by its view pointer, cropped to the room's floor and the template's height), a 3D view with a section box at the template's height, the schedule, viewport types, titles and detail numbers, the annotation crop, and the room tag. Everything it needs is set in **RLS settings** (stored in the model). |
 | Tasks → placing items | Built; **not run in Revit**. |
 | Tags on items, FF&E tags in elevations | Prototype. Elevations tag nothing by rule yet. |
 

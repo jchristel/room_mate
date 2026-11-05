@@ -191,6 +191,11 @@ MODULES = {
     "apply_tasks": ["extractor/pyRevit/room_m/apply_facts.py", "extractor/pyRevit/room_m/apply_geometry.py", "extractor/pyRevit/room_m/apply_run.py", "extractor/pyRevit/room_m/apply_write.py", "extractor/pyRevit/room_m/task_plan.py"],
     "post_authored": ["extractor/pyRevit/room_m/post_blueprints.py", "extractor/pyRevit/room_m/post_sheets.py", "extractor/pyRevit/room_m/post_tags.py", "extractor/pyRevit/room_m/post_tasks.py", "extractor/pyRevit/room_m/sheet_tags.py"],
     "post_surfaces": ["extractor/pyRevit/room_m/post_surfaces.py", "extractor/pyRevit/room_m/post_ceilings.py", "extractor/pyRevit/room_m/post_floors.py", "extractor/pyRevit/room_m/utils/surfaces.py"],
+    # ---- added 2026-11-05: the exporter windows' shared rules, the readable-output layer and the two choosers
+    "tasks_ui": ["extractor/pyRevit/room_m/tasks_form.py", "extractor/pyRevit/room_m/tasks_window.py", "extractor/pyRevit/room_m/task_dispatch.py"],
+    "bp_export_ui": ["extractor/pyRevit/room_m/blueprint_export_form.py", "extractor/pyRevit/room_m/blueprint_export_window.py"],
+    "win_shared": ["extractor/pyRevit/room_m/match_rule.py", "extractor/pyRevit/room_m/prefs.py", "extractor/pyRevit/room_m/phase_hint.py"],
+    "run_report": ["extractor/pyRevit/room_m/report.py", "extractor/pyRevit/room_m/task_log.py"],
     "server_config": ["extractor/pyRevit/room_m/server_config.py"],
     "u_revit_state": ["extractor/pyRevit/room_m/project_settings.py", "extractor/pyRevit/room_m/utils/provenance.py", "extractor/pyRevit/room_m/utils/tag_codes.py"],
     "u_tidy": ["extractor/pyRevit/room_m/ring_tidy.py", "extractor/pyRevit/room_m/textutil.py"],

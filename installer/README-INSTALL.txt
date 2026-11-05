@@ -67,10 +67,20 @@ connections to the server in the firewall of the computer it runs on. Use a
 fixed address (or the computer's .local name) so it does not change. A DNS name
 other than the computer's own must be listed with --allow-host.
 
-If you installed the pyRevit toolbar component, the buttons are on the duHast
-tab, in the RoomMate panel: the Export button asks which entities, project,
-phase and levels to push. Restart Revit after installing to see
-them. Revit 2025 or newer, and pyRevit has to be installed already.
+If you installed the pyRevit toolbar component (the RoomMate Revit plugin), the
+buttons are on the duHast tab, in the RoomMate panel:
+
+  Export        pushes rooms, doors, windows, FF&E, spaces, ceilings and floors:
+                check what to push, the project, the phase and the levels.
+  Blueprint     sends a room and its room layout sheets as a blueprint.
+  Sheets        sends chosen sheets to the sheet library.
+  Tasks         carries out the room tasks the server holds for the open model.
+  RLS settings  how room layout sheets are made in this model.
+  Server        which RoomMate server this computer pushes to.
+
+Restart Revit after installing to see them. Revit 2025 or newer, and pyRevit has
+to be installed already. Each button is described at
+https://github.com/jchristel/room_mate/blob/main/docs/REVIT-BUTTONS.md
 
 The toolbar carries its own copy of duHast, so it does not matter whether you
 have duHast installed separately. Every export starts by printing which

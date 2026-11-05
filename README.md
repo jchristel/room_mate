@@ -107,17 +107,22 @@ for completeness. Reference: [docs/SETTINGS.md](docs/SETTINGS.md).
 
 ## 2. The Revit plugins
 
-The `RoomMate` panel on the duHast tab of pyRevit ([`extractor/`](extractor)):
-IronPython inside Revit, shipped by the installer.
+The `RoomMate` panel on the duHast tab of Revit's ribbon: a **pyRevit extension**
+(`RoomMate.extension`, in [`extractor/`](extractor)), IronPython inside Revit 2025 or newer, shipped by the
+installer as an optional component. A section per button, with what it does in four sentences:
+[docs/REVIT-BUTTONS.md](docs/REVIT-BUTTONS.md).
 
-| Button | What it does |
-|---|---|
-| **Export** | One window: choose the entities, project, phase and whole model or levels. Pushes the seven entities to the server. In daily use. |
-| **Blueprint** | Sends a room and its sheets to the server as a blueprint (the server captures the room contents itself). |
-| **Sheets** | Sends chosen sheets to the library. |
-| **Tasks** | Lists the open model's queued tasks, claims the ticked ones, checks them all, then **creates the room layout sheets** (plan, elevations, 3D view, schedule, tags). Run in Revit end to end. Placing items is built but not yet run in Revit. |
-| **RLS settings** | Per-model settings for how sheets are made (title blocks, view types, name templates), stored in the model. |
-| **Server** | Which server this model talks to. |
+| | Button | What it does |
+|---|---|---|
+| <img src="extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/ExportAll.pushbutton/Icon.png" alt="" width="32"> | **Export** | One window: check the entities, choose the project and phase (preselected from the server) and the whole model or chosen levels. Pushes the seven entities to the server; remembers your choices. In daily use. |
+| <img src="extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/Blueprint.pushbutton/Icon.png" alt="" width="32"> | **Blueprint** | Sends rooms and their room layout sheets to the server as blueprints. Sheets can be matched to rooms by a rule written with `{Parameter}` placeholders; duplicate blueprint names are flagged. |
+| <img src="extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/Sheets.pushbutton/Icon.png" alt="" width="32"> | **Sheets** | Sends chosen sheets to the library, with a filter, check-all-matched and the same room-matching rule. |
+| <img src="extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/Tasks.pushbutton/Icon.png" alt="" width="32"> | **Tasks** | Lists the open model's queued tasks (with Refresh), claims the checked ones, checks them all, then **creates the room layout sheets** (plan, elevations, 3D view, schedule, tags). Run in Revit end to end. Placing items is built but not yet run in Revit. |
+| <img src="extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/RlsSettings.pushbutton/Icon.png" alt="" width="32"> | **RLS settings** | Per-model settings for how sheets are made (title blocks, view types, name templates), stored in the model. |
+| <img src="extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/Server.pushbutton/Icon.png" alt="" width="32"> | **Server** | Which server this model talks to; shown in the blue header of every window. |
+
+Every run reports one readable line per result and one Finished line; a server error says its number
+and where the log is (`%APPDATA%\RoomMate\RoomMate.log`).
 
 Extractor and server share a versioned contract and change together. What has and has
 not been run in Revit: [docs/EXTRACTOR.md](docs/EXTRACTOR.md).
