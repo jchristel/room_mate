@@ -49,6 +49,8 @@ def begin(result=None, sink=None, title=None):
             if task_log.start(title) is None:
                 say("No log file could be written: {}".format(
                     (task_log.last_error() or "unknown reason").strip().splitlines()[-1]), FAILED)
+            else:
+                say("Log file: {}".format(task_log.path()))
         except Exception:
             pass  # no log is not a reason to lose a run
 
@@ -200,7 +202,7 @@ def finish(result, what):
         pass
     _sink[0]("")
     path = log_path()
-    if not ok and path:
+    if path:
         _sink[0]("Log file: {}".format(path))
     if ok:
         _sink[0]("Finished: {} - completed with no problems.".format(what))

@@ -1029,7 +1029,7 @@ def tasks_entry(doc, uiapp, output, forms):
         report_build(return_value, output)
         run_report.begin(return_value)
         if log_path:
-            return_value.append_message("Log: {}".format(log_path))
+            return_value.append_message(run_report.say("Log file: {}".format(log_path)))
         else:
             return_value.append_message("No log was written: {}".format(
                 (task_log.last_error() or "unknown reason").strip().splitlines()[-1]))
