@@ -6,9 +6,11 @@ A run that dies inside Revit leaves nothing on the screen, so each line is writt
 it is made and the last one says where the run was. The file is `RoomMate\\RoomMate.log` under the
 user's application data (`APPDATA`, else the home folder), beside `server.json`, and rotates at 5 MB.
 
-**It uses duHast's `LoggerObject` when the copy of duHast in use has one** (file handler, line format
-and rotation are duHast's own) and the standard `logging` module otherwise, so a log never depends on
-which duHast is loaded. **Nothing here ever raises**: a log that could fail a run would be worse than
+**It uses the standard `logging` module only**, with duHast's line format. duHast's `LoggerObject` was used
+while it had one, and a run's log came up empty on one machine (cause not pinned down); that class reconfigures the root
+logger (`logging.basicConfig`) and shares one named logger across runs, so what reaches the file depends on
+which duHast is loaded. A plain rotating handler on a logger of our own cannot be affected by that.
+**Nothing here ever raises**: a log that could fail a run would be worse than
 no log. Until `start` is called every function does nothing, which keeps the tests and any module
 that logs quiet when it is run on its own.
 """
@@ -19,7 +21,6 @@ import traceback
 
 NAME = "RoomMate"
 FILE_LEVEL = 10  # DEBUG
-CONSOLE_LEVEL = 100  # above CRITICAL: the output window has its own lines
 
 _logger = None
 _path = None
@@ -30,22 +31,6 @@ def log_dir(environ=None):
     environ = os.environ if environ is None else environ
     root = environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), ".config")
     return os.path.join(root, NAME)
-
-
-def _duhast_logger(directory):
-    """duHast's logger writing to `directory`, or None when this duHast has none."""
-    try:
-        from duHast.Utilities.Objects.logger_object import LoggerObject
-
-        made = LoggerObject(
-            log_name=NAME,
-            output_path=os.path.dirname(directory),
-            log_level=(FILE_LEVEL, CONSOLE_LEVEL),
-            file_format=".log",
-        )
-        return made.get_logger_obj(), made.log_file_path
-    except Exception:
-        return None
 
 
 def _plain_logger(directory):
@@ -75,11 +60,8 @@ def start(title, directory=None):
     global _logger, _path
     try:
         directory = directory or log_dir()
-        made = _duhast_logger(directory) if _logger is None else None
-        if made is None and _logger is None:
-            made = _plain_logger(directory)
-        if made is not None:
-            _logger, _path = made
+        if _logger is None:
+            _logger, _path = _plain_logger(directory)
         info("---- {} ----".format(title))
         return _path
     except Exception:
