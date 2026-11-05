@@ -85,3 +85,15 @@ def problems(ticked_count):
 
 def summary(ticked_count, shown_count, total):
     return "{} checked; {} of {} shown".format(ticked_count, shown_count, total)
+
+
+def refresh_note(before_ids, after_ids):
+    """What a refresh found, as a status line: how many tasks are queued now and how many are new or gone."""
+    before, after = set(before_ids), set(after_ids)
+    new, gone = len(after - before), len(before - after)
+    line = "Refreshed: {} queued".format(len(after))
+    if new:
+        line += ", {} new".format(new)
+    if gone:
+        line += ", {} no longer queued".format(gone)
+    return line + "."

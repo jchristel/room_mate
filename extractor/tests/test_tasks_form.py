@@ -104,5 +104,14 @@ class Xaml(unittest.TestCase):
             self.assertTrue(re.search(r"def {}\(self, sender, args\)".format(h), source), h)
 
 
+class RefreshNote(unittest.TestCase):
+    def test_it_says_how_many_are_queued_and_what_changed(self):
+        self.assertEqual("Refreshed: 3 queued.", form.refresh_note(["a", "b", "c"], ["a", "b", "c"]))
+        self.assertEqual("Refreshed: 3 queued, 2 new.", form.refresh_note(["a"], ["a", "b", "c"]))
+        self.assertEqual("Refreshed: 2 queued, 1 new, 2 no longer queued.",
+                         form.refresh_note(["a", "b", "c"], ["a", "z"]))
+        self.assertEqual("Refreshed: 0 queued, 1 no longer queued.", form.refresh_note(["a"], []))
+
+
 if __name__ == "__main__":
     unittest.main()
