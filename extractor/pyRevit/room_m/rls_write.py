@@ -26,6 +26,7 @@ rectangle drawn round an item a person chose to tag, and a tag's own text. Sched
 import math
 
 from Autodesk.Revit.DB import (
+    TagMode,
     TagOrientation,
     BuiltInCategory,
     BuiltInParameter,
@@ -38,6 +39,20 @@ from Autodesk.Revit.DB import (
 )
 
 from duHast.Revit.Annotation.independent_tags_create import create_independent_tag_without_transaction_wrapper
+
+
+def _independent_tag(doc, view, element, head, tag_type_id, *rest):
+    """Tag `element` in `view` with the project's independent tag, which is a MULTI CATEGORY tag family.
+
+    It must be made in `TM_ADDBY_MULTICATEGORY`: duHast's default, `TM_ADDBY_CATEGORY`, needs a tag type loaded for the
+    element's own category and fails with "There is no loaded tag type that can be used when tagging referenceToTag with
+    tagMode" in a model that has only the multi category one. A duHast without the `tag_mode` argument (an older copy)
+    raises TypeError before it does anything, and then gets the call it always had."""
+    try:
+        return create_independent_tag_without_transaction_wrapper(
+            doc, view, element, head, tag_type_id, *rest, tag_mode=TagMode.TM_ADDBY_MULTICATEGORY)
+    except TypeError:
+        return create_independent_tag_without_transaction_wrapper(doc, view, element, head, tag_type_id, *rest)
 from duHast.Revit.Common.element_id import get_el_id_int, get_element_id_from_int
 from duHast.Revit.Common.transaction import in_transaction, in_transaction_group
 from duHast.Revit.Family.family_symbol_lookup import (
@@ -519,7 +534,7 @@ class RlsWriter(object):
                     outcome = self._step(
                         "RoomMate: elevation tag",
                         lambda element=element, head=head, view=view, leader=leader, elbow=elbow, end=end, orientation=orientation:
-                        create_independent_tag_without_transaction_wrapper(
+                        _independent_tag(
                             self.doc, view, element, head, independent.Id, orientation, leader, elbow, end),
                     )
                     made += 1 if outcome.status else 0
@@ -547,7 +562,7 @@ class RlsWriter(object):
                     head = XYZ(_ft(tag["head"][0]), _ft(tag["head"][1]), z)
                     outcome = self._step(
                         "RoomMate: tag",
-                        lambda element=element, head=head: create_independent_tag_without_transaction_wrapper(
+                        lambda element=element, head=head: _independent_tag(
                             self.doc, plan_view, element, head, independent.Id),
                     )
                     made += 1 if outcome.status else 0
