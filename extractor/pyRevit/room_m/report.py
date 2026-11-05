@@ -46,7 +46,9 @@ def begin(result=None, sink=None, title=None):
         try:
             from room_m import task_log
 
-            task_log.start(title)
+            if task_log.start(title) is None:
+                say("No log file could be written: {}".format(
+                    (task_log.last_error() or "unknown reason").strip().splitlines()[-1]), FAILED)
         except Exception:
             pass  # no log is not a reason to lose a run
 

@@ -605,7 +605,7 @@ kind to its handler through `task_dispatch.HANDLER_OF`: populate and update task
 `create_rls` tasks make the sheets (`_rls_group`, below). **A new kind of task is a line in that table and a function, not another button.**
 A kind nobody handles, a handler that raises and any task never reached are reported failed (`_free_tasks`), so the server never holds a
 claimed task `in_progress` for a run that ended. **Every step is logged** (`room_m/task_log.py`: `RoomMate\RoomMate.log` in the application data,
-written line by line so the last one says where a run that died silently stopped; the standard library's rotating file handler only (duHast's `LoggerObject` reconfigures the root logger and was dropped when a run's log came up empty; the cause was not pinned down); it never raises, and does nothing until `tasks_entry` starts it). The sheet handler (`room_m/rls_task.py`
+written line by line so the last one says where a run that died silently stopped; one open-append-close per line with no `logging` module or duHast logger (both left a run's log empty on a machine; it says why when it cannot start); it never raises, and does nothing until `tasks_entry` starts it). The sheet handler (`room_m/rls_task.py`
 plans, `room_m/rls_write.py` writes) makes room layout sheets from `create_rls` tasks, **and has run in Revit end to end (2026-11-01)**; the item-placing handler (`apply_write`) has not. Order: the model's RLS settings first (extensible
 storage, `rls` key; missing or incomplete ones open the settings window, still incomplete = stop), then the claim, then the WHOLE list is
 checked before anything is made, then one transaction group per task (`duHast...in_transaction_group`), reported as it finishes.

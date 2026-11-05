@@ -1030,6 +1030,9 @@ def tasks_entry(doc, uiapp, output, forms):
         run_report.begin(return_value)
         if log_path:
             return_value.append_message("Log: {}".format(log_path))
+        else:
+            return_value.append_message("No log was written: {}".format(
+                (task_log.last_error() or "unknown reason").strip().splitlines()[-1]))
         # Tasks are only ever applied to the open model, never to a link.
         selected_doc = doc
         choice = _choose_tasks(selected_doc, forms)
