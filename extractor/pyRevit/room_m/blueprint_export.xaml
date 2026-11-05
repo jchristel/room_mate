@@ -43,16 +43,18 @@
                 <DockPanel Grid.Row="0" Margin="0,0,0,4" LastChildFill="True">
                     <TextBlock DockPanel.Dock="Left" x:Name="tx_found" Text="Rooms" FontWeight="SemiBold" VerticalAlignment="Center" Width="110"/>
                     <Button DockPanel.Dock="Right" Content="Check none" Padding="8,1" Margin="6,0,0,0" Click="on_check_none"/>
-                    <Button DockPanel.Dock="Right" Content="Check all matched" Padding="8,1" Margin="6,0,0,0" Click="on_check_matched"/>
+                    <Button DockPanel.Dock="Right" Content="Check all matched" Padding="8,1" Margin="6,0,0,0" Click="on_check_matched" ToolTip="Checks the listed rooms that have sheets"/>
                     <TextBox x:Name="tb_find" TextChanged="on_find" ToolTip="Words must all appear in the room label; -word leaves out rooms containing it"/>
                 </DockPanel>
                 <StackPanel Grid.Row="1" Margin="0,0,0,2">
                     <DockPanel LastChildFill="True" Margin="0,0,0,2">
-                        <TextBlock DockPanel.Dock="Left" Text="Sheets" VerticalAlignment="Center" Width="110"/>
+                        <TextBlock DockPanel.Dock="Left" Text="Match" FontWeight="SemiBold" VerticalAlignment="Center" Width="110"/>
                         <Button DockPanel.Dock="Right" Content="Apply to listed rooms" Padding="8,1" Margin="6,0,0,0" Click="on_apply_rule"/>
-                        <TextBox DockPanel.Dock="Left" x:Name="tb_rule_room" Width="150" TextChanged="on_rule_change" ToolTip="Text with {Parameter} placeholders, filled from each room's parameters, e.g. {Number}"/>
+                        <TextBlock DockPanel.Dock="Left" Text="Sheet" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                        <TextBox DockPanel.Dock="Left" x:Name="tb_rule_sheet" Width="150" TextChanged="on_rule_change" ToolTip="Text with {Parameter} placeholders, filled from each SHEET's parameters, e.g. {Sheet Number}"/>
                         <ComboBox DockPanel.Dock="Left" x:Name="cb_rule_relation" Width="90" Margin="4,0,4,0" SelectionChanged="on_rule_change"/>
-                        <TextBox x:Name="tb_rule_sheet" ToolTip="Text with {Parameter} placeholders, filled from each sheet's parameters, e.g. {Sheet Number}"/>
+                        <TextBlock DockPanel.Dock="Left" Text="room" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                        <TextBox x:Name="tb_rule_room" ToolTip="Text with {Parameter} placeholders, filled from each ROOM's parameters, e.g. {Number} or {Name}"/>
                     </DockPanel>
                     <TextBlock x:Name="tx_rule" Margin="110,2,0,0" FontSize="11" Opacity="0.7" TextWrapping="Wrap"/>
                 </StackPanel>

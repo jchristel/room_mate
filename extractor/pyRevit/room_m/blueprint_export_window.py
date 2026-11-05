@@ -211,7 +211,7 @@ def show(forms, model_name, projects, phases, rooms_for, sheets, saved=None, pha
             for i, state in enumerate(self._rows):
                 if i in shared:
                     state["row"].Background = SHADE
-                    state["name"].ToolTip = "Another ticked room has this blueprint name: give each its own."
+                    state["name"].ToolTip = "Another checked room has this blueprint name: give each its own."
                 else:
                     state["row"].Background = None
                     state["name"].ToolTip = None
@@ -260,8 +260,17 @@ def show(forms, model_name, projects, phases, rooms_for, sheets, saved=None, pha
                 self._status()
 
         def on_check_matched(self, sender, args):
+            """Tick the listed rooms that have a sheet (from the rule or by hand): a blueprint needs one, so a room
+            without is left as it is and counted, and a rule that matched nothing is seen."""
+            ticked = skipped = 0
             for s in self._listed():
-                s["tick"].IsChecked = True
+                if s["chosen"]:
+                    s["tick"].IsChecked = True
+                    ticked += 1
+                else:
+                    skipped += 1
+            self._rule_note("Checked {} room(s) that have sheets; {} listed room(s) have no sheet and were left.".format(
+                ticked, skipped))
 
         def on_check_none(self, sender, args):
             for s in self._rows:

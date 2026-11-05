@@ -31,8 +31,9 @@
                 <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="110"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                     <TextBlock Text="Level" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_level" SelectionChanged="on_filter"/></Grid>
                 <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                    <Button x:Name="bt_tick" Content="Tick shown" Width="110" Click="on_tick_shown"/>
-                    <Button x:Name="bt_untick" Content="Untick shown" Width="110" Margin="8,0,0,0" Click="on_untick_shown"/>
+                    <Button x:Name="bt_tick" Content="Check shown" Width="110" Click="on_tick_shown"/>
+                    <Button x:Name="bt_untick" Content="Uncheck shown" Width="110" Margin="8,0,0,0" Click="on_untick_shown"/>
+                    <Button x:Name="bt_refresh" Content="Refresh" Width="90" Margin="24,0,0,0" Click="on_refresh" ToolTip="Ask the server for the model's queued tasks again; what you checked stays checked"/>
                 </StackPanel>
             </StackPanel>
         </Border>

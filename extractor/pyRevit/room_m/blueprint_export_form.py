@@ -71,7 +71,7 @@ def problems(project, phase, rooms):
     if phase is None:
         out.append("Choose the phase the rooms are read in.")
     if not rooms:
-        out.append("Tick at least one room.")
+        out.append("Check at least one room.")
     seen = {}
     for label, name, sheets in rooms:
         name = (name or "").strip()

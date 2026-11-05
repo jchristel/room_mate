@@ -116,8 +116,9 @@ twice is not a port clash.
 
 ## The pyRevit toolbar, and the duHast inside it
 
-The installer's second component is the producer: the pyRevit extension that
-pushes from Revit. It is assembled by
+The installer's second component is the producer: the pyRevit extension (the
+Revit plugin, a `RoomMate` panel of six buttons described in
+[docs/REVIT-BUTTONS.md](../docs/REVIT-BUTTONS.md)) that pushes from Revit. It is assembled by
 [`build-extension.ps1`](build-extension.ps1) from three sources that are
 deliberately not one:
 

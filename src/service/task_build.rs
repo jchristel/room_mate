@@ -19,8 +19,8 @@ use super::elevation_facing::model_room_ring;
 use super::items::{assemble_items, ItemScope};
 use super::placement;
 use super::rls_plan::{check_size, has_elevations, size_token, transfer, MarkerPlan, RlsPlan, RlsRequest};
-use super::rls_tag_place::{blueprint_placements, room_tag_head, INSTANCE_MATCH_MM};
-use super::rls_tags::{match_instances, plan_tags, type_code_of, RoomItem};
+use super::rls_tag_place::room_tag_head;
+use super::rls_tags::{plan_tags, type_code_of, RoomItem};
 use super::room_locator::RoomRef;
 use super::rooms::{assemble_rooms, RoomScope};
 use super::sheet_suggest::{distance, room_summary, Signature};
@@ -311,6 +311,37 @@ fn tag_rules_for(
     }
 }
 
+/// The tag rules a create-RLS task carries: the room, space and area rules as for any task (generic, and those
+/// bound to the sheet's blueprint), and for items the effective rules (`tag_rules::rls_item_rules`): per type
+/// code, the generic pool's rule or else the rule pooled from every room blueprint, applied to any instance of
+/// the type whether or not the room has an assignment. A store that cannot be read is a finding and no rules.
+fn rls_tag_rules(
+    projects_dir: &std::path::Path,
+    project: &str,
+    sheets: &[BlueprintSheet],
+    parameter: &str,
+    blueprint: Option<&str>,
+    findings: &mut Vec<Value>,
+) -> Vec<RuleSummary> {
+    let mut rules: Vec<RuleSummary> =
+        tag_rules_for(projects_dir, project, sheets, parameter, None, blueprint, findings)
+            .into_iter()
+            .filter(|r| tag_rules::is_spatial(&r.tag_kind))
+            .collect();
+    let types = viewport_types(sheets);
+    if !types.is_empty() && !parameter.is_empty() {
+        match tag_rules::load_all(projects_dir, project) {
+            Ok(all) => rules.extend(tag_rules::rls_item_rules(&all, &types, parameter)),
+            Err(_) if findings.iter().any(|f| f["kind"] == "tag_rules_unreadable") => {}
+            Err(_) => findings.push(finding(
+                "tag_rules_unreadable",
+                "the tag rules could not be read, so no tags will be placed".to_string(),
+            )),
+        }
+    }
+    rules
+}
+
 /// An update task for one assignment: the layout as the resolver places it now, with no sheets
 /// and no tags (an update moves and changes items; it does not make a layout sheet).
 pub fn update_from_assignment(
@@ -358,7 +389,6 @@ fn room_items(state: &AppState, project: &str, room: &RoomRef, parameter: &str) 
                 type_name: it.item.type_name.clone(),
                 category: it.item.category.clone(),
                 type_code: type_code_of(parameter, &type_properties, &properties),
-                instance: None,
                 footprint: it
                     .item
                     .loops
@@ -486,23 +516,17 @@ pub fn rls_from_sheet(
     // No items are placed: the rules for every element are carried, for the plug-in to apply to
     // whatever it finds in the room.
     let parameter = type_code_parameter(state, project);
-    let tag_rules = tag_rules_for(
+    let tag_rules = rls_tag_rules(
         projects_dir,
         project,
         std::slice::from_ref(&sheet_for_rules(&record)),
         &parameter,
-        None,
         record.blueprint.as_deref(),
         &mut findings,
     );
     let tags = match &request.tags {
         Some(t) => {
-            let mut items = room_items(state, project, room, &parameter)?;
-            // A sheet bound to a blueprint knows which of the room's items the blueprint placed.
-            if let Some(blueprint) = record.blueprint.as_deref() {
-                let placements = blueprint_placements(state, projects_dir, project, blueprint, room, &parameter)?;
-                match_instances(&mut items, &placements, INSTANCE_MATCH_MM);
-            }
+            let items = room_items(state, project, room, &parameter)?;
             Some(plan_tags(&record.sheet, &items, &markers, &tag_rules, t))
         }
         None => None,

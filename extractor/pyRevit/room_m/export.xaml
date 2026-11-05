@@ -35,7 +35,7 @@
                         <DockPanel Margin="0,0,0,6" LastChildFill="False">
                             <TextBlock DockPanel.Dock="Left" Text="What to export" FontWeight="SemiBold" VerticalAlignment="Center"/>
                             <Button DockPanel.Dock="Right" Content="Check none" Padding="8,1" Margin="6,0,0,0" Click="on_entities_none"/>
-                            <Button DockPanel.Dock="Right" Content="Check all" Padding="8,1" Click="on_entities_all" ToolTip="Ticks everything except FF&amp;E by space, which is the alternative to FF&amp;E by room"/>
+                            <Button DockPanel.Dock="Right" Content="Check all" Padding="8,1" Click="on_entities_all" ToolTip="Checks everything except FF&amp;E by space, which is the alternative to FF&amp;E by room"/>
                         </DockPanel>
                         <CheckBox x:Name="cb_rooms" Content="Rooms" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>
                         <CheckBox x:Name="cb_doors" Content="Doors" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>

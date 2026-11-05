@@ -532,6 +532,14 @@ class RlsWriter(object):
         independent = self.facts.tag_symbol("independent", plan["independent_tag"]) if plan["independent_tag"] else None
         room_tag = self.facts.tag_symbol("room", plan["room_tag"]) if plan["room_tag"] else None
         made, problems = 0, []
+        elevation_planned = sum(len(v) for v in (plan.get("elevation_tags") or {}).values())
+        task_log.info("tags: the task carries {} plan tag(s) and {} elevation tag(s) for items; {} item(s) have no "
+                      "tag from the server; independent tag {}; room tag {}".format(
+                          len(plan["tags"]), elevation_planned, plan.get("untagged_items", 0),
+                          "'{}' found".format(plan["independent_tag"]) if independent is not None
+                          else "{} NOT FOUND in the model".format(repr(plan["independent_tag"])),
+                          "'{}' found".format(plan["room_tag"]) if room_tag is not None
+                          else "{} NOT FOUND in the model".format(repr(plan["room_tag"]))))
         if independent is not None:
             for tag in plan["tags"]:
                 try:
@@ -568,6 +576,10 @@ class RlsWriter(object):
                 )
             except Exception as e:
                 problems.append("room tag not placed: {}".format(e))
+        if not plan["tags"] and not elevation_planned and plan.get("untagged_items"):
+            notes.append("no item was tagged: the server found no tag rule for {} item(s) in this room (a rule bound to a "
+                         "blueprint applies only to a room the blueprint is assigned to)".format(plan["untagged_items"]))
+        task_log.info("tags: {} placed, {} not placed".format(made, len(problems)))
         notes.append("{} tag(s) placed".format(made))
         for p in problems[:5]:
             notes.append(p)

@@ -63,6 +63,12 @@ def show(forms, model_title, projects, load):
         def on_untick_shown(self, sender, args):
             self._set_shown(False)
 
+        def on_refresh(self, sender, args):
+            """Ask the server for the queued tasks again, keeping what was checked and the filters; a task that is
+            no longer queued drops out. A failed request leaves the list as it was and says so."""
+            if self.cb_project.SelectedIndex >= 0:
+                self._load(refresh=True)
+
         def on_cancel(self, sender, args):
             self.result = None
             self.Close()
@@ -76,23 +82,37 @@ def show(forms, model_title, projects, load):
 
         # -- helpers --------------------------------------------------------------------------
 
-        def _load(self):
+        def _load(self, refresh=False):
+            before = [row["id"] for row in self._rows]
+            checked = set(self._ticked_ids())
+            level = self.cb_level.SelectedItem
             ok, answer = load(self._projects[self.cb_project.SelectedIndex])
+            if refresh and not ok:
+                self._message = "Refresh failed, the list is as it was: {}".format(answer)
+                self._status()
+                return
             self._rows = answer if ok else []
-            self._message = "" if ok else str(answer)
+            if not ok:
+                self._message = str(answer)
+            elif refresh:
+                self._message = form.refresh_note(before, [r["id"] for r in self._rows])
+            else:
+                self._message = ""
             self.sp_tasks.Children.Clear()
             self._boxes = []
             for row in self._rows:
                 box = CheckBox()
                 box.Content = row["text"]
                 box.Margin = Thickness(0, 2, 0, 2)
+                box.IsChecked = row["id"] in checked
                 box.Checked += self.on_filter
                 box.Unchecked += self.on_filter
                 self.sp_tasks.Children.Add(box)
                 self._boxes.append(box)
             self._ready = False
-            self.cb_level.ItemsSource = form.level_choices(self._rows)
-            self.cb_level.SelectedIndex = 0
+            choices = form.level_choices(self._rows)
+            self.cb_level.ItemsSource = choices
+            self.cb_level.SelectedIndex = choices.index(level) if refresh and level in choices else 0
             self._ready = True
             self._apply_filter()
 

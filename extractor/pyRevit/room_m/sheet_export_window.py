@@ -184,8 +184,17 @@ def show(forms, model_name, projects, sheets, rooms, saved=None):
                 self._apply_filter()
 
         def on_check_matched(self, sender, args):
+            """Tick the listed sheets that have a room (from the rule or by hand). A listed sheet with none is left as
+            it is and counted, so a rule that matched nothing is seen and not silently exported without rooms."""
+            ticked = skipped = 0
             for s in self._listed():
-                s["tick"].IsChecked = True
+                if s["chosen"]:
+                    s["tick"].IsChecked = True
+                    ticked += 1
+                else:
+                    skipped += 1
+            self._rule_note("Checked {} sheet(s) that have rooms; {} listed sheet(s) have no room and were left.".format(
+                ticked, skipped))
 
         def on_check_none(self, sender, args):
             for s in self._rows:

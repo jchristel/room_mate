@@ -132,6 +132,8 @@ FF&E is filtered on the level the modeller assigned before conversion and on the
 unchanged. Levels are the per-document ids, which each element's own `LevelId` reports (a room's level, a door's host level, a ceiling's host level).
 **Not run in Revit.**
 
+**The windows share their rules** (`match_rule`: filter words, the `{Parameter}` sheet-to-room rule, duplicate names; `prefs`: `%APPDATA%\RoomMate\prefs.json`; `phase_hint`: the phase the server holds, which arrives with the project list as `model_phases`, so a project change makes no request). "Check all matched" checks only what HAS a match. Every entry says one readable line per result and one Finished line (`report`, `_finishing`). **IronPython 2.7 cannot store `print`**; `test_py2_syntax.py` guards what CPython 3 accepts and Revit does not. Each button is described in [`docs/REVIT-BUTTONS.md`](docs/REVIT-BUTTONS.md). **Not run in Revit** except as noted there.
+
 **The panel**: the `RoomMate` panel on the duHast tab holds Export, Blueprint, Sheets, Tasks, RLS settings and Server. The older `Export` panel (Rooms + Doors, By category)
 was removed: the Export window covers every entity.
 
@@ -603,8 +605,7 @@ kind to its handler through `task_dispatch.HANDLER_OF`: populate and update task
 `create_rls` tasks make the sheets (`_rls_group`, below). **A new kind of task is a line in that table and a function, not another button.**
 A kind nobody handles, a handler that raises and any task never reached are reported failed (`_free_tasks`), so the server never holds a
 claimed task `in_progress` for a run that ended. **Every step is logged** (`room_m/task_log.py`: `RoomMate\RoomMate.log` in the application data,
-written line by line so the last one says where a run that died silently stopped; duHast's `LoggerObject` when the loaded duHast has one,
-the standard library otherwise; it never raises, and does nothing until `tasks_entry` starts it). The sheet handler (`room_m/rls_task.py`
+written line by line so the last one says where a run that died silently stopped; one open-append-close per line with no `logging` module or duHast logger (both left a run's log empty on a machine; it says why when it cannot start); it never raises, and does nothing until `tasks_entry` starts it). The sheet handler (`room_m/rls_task.py`
 plans, `room_m/rls_write.py` writes) makes room layout sheets from `create_rls` tasks, **and has run in Revit end to end (2026-11-01)**; the item-placing handler (`apply_write`) has not. Order: the model's RLS settings first (extensible
 storage, `rls` key; missing or incomplete ones open the settings window, still incomplete = stop), then the claim, then the WHOLE list is
 checked before anything is made, then one transaction group per task (`duHast...in_transaction_group`), reported as it finishes.
@@ -709,10 +710,7 @@ the Tasks button's sheet handler places tags** from the server's tag plan (`rls.
   and a rule left empty is deleted (`tag_rule_binding::take_moved_samples_out`). **A sheet's binding decides its tags' scope**: a push that
   names no blueprint (the Sheets button) keeps the tags of a sheet already bound to one bound to it (`ObserveContext::sheet_blueprints`), so
   re-sending a bound sheet never leaves it bound with generic tags; a named blueprint wins. `rules_for` carries the generic rules and those bound to the
-  sheet's blueprint, never another's. For an item, `rls_tags::rule_for` takes the rule bound to the blueprint item the room's
-  item stands for, else the generic one by type code. **Which blueprint item an item stands for** is matched from the room's
-  assignment of the sheet's blueprint (`rls_tag_place::blueprint_placements`, `rls_tags::match_instances`: same type code, nearest
-  placement within `INSTANCE_MATCH_MM` = 500 mm, one to one); a room with no assignment gets generic rules.
+  sheet's blueprint, never another's. For an item, a **create-RLS task** applies ONE effective rule per type code, viewport type and view side (`tag_rules::rls_item_rules`, reworked 2026-11-05): the **generic pool's** rule when it has the key, and only for a key it lacks the rules learned in room blueprints, **pooled by sample across every blueprint** (`reduce` over all their samples, never a median of medians) and available to EVERY instance of the type code, assigned room or not. Where the winning pool holds more than one tag (category, family, type) the one with most samples wins, never an average. `rule_id` is the pool's most recently updated rule. The assignment matching (`match_instances`, `blueprint_placements`) is gone: which blueprint item a room's item stands for no longer decides anything for an RLS. Room, space and area rules are unchanged (generic, or bound to the sheet's blueprint).
 - **Room tags: two kinds by scope, and one fallback that is neither.** A rule bound to a blueprint is written against the wall of the room the
   sheet was made for; a generic rule against the sides of the room's rectangle. A rule whose room was not on the server when it was learned
   has no boundary at all and keeps only the old offset in the plan's axes: that is not a third kind of rule, it is what is left when the room

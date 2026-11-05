@@ -458,6 +458,24 @@ def _warn_no_type_code(project, return_value):
             "(room tags are). Name the type parameter that identifies an item's kind under Tag type code.")
 
 
+def _confirm_no_type_code(project, forms, return_value, what="blueprint"):
+    """Before a blueprint or sheets push: when the project's settings name no tag type code, say so and let the person decide.
+    Item tags (FF&E and the like) cannot be keyed without it, so the blueprint would be stored with its room tags
+    only. Returns True to go on (a code is set, or the person chose to push anyway)."""
+    if project.get("tag_type_code"):
+        return True
+    return_value.append_message(run_report.say(
+        "Warning: project '{}' has no tag type code set, so tags on items would not be kept (room tags are).".format(
+            project.get("name") or project.get("id")), run_report.HELD))
+    go_on = forms.alert(
+        "Project '{}' has no Tag type code in its settings.\n\n"
+        "Tags on items (FF&E, furniture) cannot be keyed without it, so this {what} would keep its "
+        "room tags only. Set it under Tag type code in the project's settings, then push again to keep item tags.\n\n"
+        "Push anyway?".format(project.get("name") or project.get("id"), what=what),
+        title="Roommate - no tag type code", yes=True, no=True, warn_icon=True)
+    return bool(go_on)
+
+
 def _report_tags(project, pushed, return_value):
     """Say which tags could not be read, then send the ones that were to the tag rules store.
     A failure here is reported and never stops the sheet push: the layout does not need its tags.
@@ -545,7 +563,7 @@ def _push_sheets(project, assignments, selected_doc, phase_name, return_value, f
 def sheets_export_entry(doc, uiapp, output, forms):
     """Push SHEETS you choose to the sheet library, in one window.
 
-    The window (`room_m.sheet_export_window`) lists the open model's sheets; tick the ones to export and,
+    The window (`room_m.sheet_export_window`) lists the open model's sheets; check the ones to export and,
     beside each, tick the rooms it covers (none, one, or several). **No room is linked to a sheet**: the
     rooms only supply the figures the library ranks a sheet on -- the size and proportions of the
     smallest rectangle round them, their area and their item count (`room_m.room_figures`) -- which are
@@ -589,6 +607,11 @@ def sheets_export_entry(doc, uiapp, output, forms):
             return_value.append_message(run_report.say(
                 "Cancelled: no sheet was exported.", run_report.CANCELLED))
             return return_value
+        if not _confirm_no_type_code(choice["project"], forms, return_value, what="sheet push"):
+            return_value.append_message(run_report.say(
+                "Cancelled: nothing was pushed. Set Tag type code in the project's settings first.",
+                run_report.CANCELLED))
+            return return_value
         prefs.save_section("sheets", sheet_export_form.to_save(choice["project"], choice["filter"], choice["rule"]))
         _push_sheets(choice["project"], choice["assignments"], doc, None, return_value, forms)
     except Exception as e:
@@ -625,7 +648,7 @@ def blueprint_export_entry(doc, uiapp, output, forms):
     """The BLUEPRINT push, in one window (`room_m.blueprint_export_window`).
 
     1. **Project and phase.** The rooms listed are the placed rooms of the phase you pick.
-    2. **Rooms.** Tick the rooms you want a blueprint from.
+    2. **Rooms.** Check the rooms you want a blueprint from.
     3. **Name and sheets, beside each room.** The blueprint's name defaults to the room's name; a name
        the project already has becomes a pending revision of that blueprint, to accept or reject in the
        viewer. **A room with no sheet is not pushed**: a blueprint is a room and its sheets together,
@@ -683,6 +706,11 @@ def blueprint_export_entry(doc, uiapp, output, forms):
             return_value.append_message(run_report.say("Cancelled: nothing was exported.", run_report.CANCELLED))
             return return_value
         project = choice["project"]
+        if not _confirm_no_type_code(project, forms, return_value):
+            return_value.append_message(run_report.say(
+                "Cancelled: nothing was pushed. Set Tag type code in the project's settings first.",
+                run_report.CANCELLED))
+            return return_value
         from room_m import blueprint_export_form
         prefs.save_section("blueprints", blueprint_export_form.to_save(project, choice["filter"], choice["rule"]))
         return_value.append_message("Phase '{}'".format(choice["phase"]))
@@ -1029,7 +1057,10 @@ def tasks_entry(doc, uiapp, output, forms):
         report_build(return_value, output)
         run_report.begin(return_value)
         if log_path:
-            return_value.append_message("Log: {}".format(log_path))
+            return_value.append_message(run_report.say("Log file: {}".format(log_path)))
+        else:
+            return_value.append_message("No log was written: {}".format(
+                (task_log.last_error() or "unknown reason").strip().splitlines()[-1]))
         # Tasks are only ever applied to the open model, never to a link.
         selected_doc = doc
         choice = _choose_tasks(selected_doc, forms)

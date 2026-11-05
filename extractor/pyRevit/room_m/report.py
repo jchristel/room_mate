@@ -23,7 +23,14 @@ CANCELLED = "[cancelled]"
 
 _said = set()
 _baseline = [0]
-_sink = [print]
+
+
+def _print(text):
+    """`print` as a function: IronPython 2.7's is a statement, which cannot be named or stored."""
+    print(text)
+
+
+_sink = [_print]
 
 
 def begin(result=None, sink=None, title=None):
@@ -34,12 +41,16 @@ def begin(result=None, sink=None, title=None):
     `server_failure` writes what a server said in full."""
     _said.clear()
     _baseline[0] = len(_lines_of(result))
-    _sink[0] = sink or print
+    _sink[0] = sink or _print
     if title:
         try:
             from room_m import task_log
 
-            task_log.start(title)
+            if task_log.start(title) is None:
+                say("No log file could be written: {}".format(
+                    (task_log.last_error() or "unknown reason").strip().splitlines()[-1]), FAILED)
+            else:
+                say("Log file: {}".format(task_log.path()))
         except Exception:
             pass  # no log is not a reason to lose a run
 
@@ -53,11 +64,28 @@ def _lines_of(result):
         return []
 
 
+def _record(text, state=None):
+    """Write what the person is shown into the log too, so the file tells the whole run and not only the failures:
+    a FAILED line is an error, a HELD one a warning. Nothing here may raise."""
+    try:
+        from room_m import task_log
+
+        if state == FAILED:
+            task_log.error(text)
+        elif state == HELD:
+            task_log.warning(text)
+        else:
+            task_log.info(text)
+    except Exception:
+        pass
+
+
 def say(line, state=None):
-    """Print `line`, with `state` (OK, FAILED, HELD) after it when given. Returns the line as printed."""
+    """Print `line`, with `state` (OK, FAILED, HELD) after it when given, and log it. Returns the line as printed."""
     text = line if state is None else "{} {}".format(line, state)
     _said.add(line)
     _said.add(text)
+    _record(text, state)
     try:
         _sink[0](text)
     except Exception:
@@ -191,11 +219,13 @@ def finish(result, what):
         pass
     _sink[0]("")
     path = log_path()
-    if not ok and path:
+    if path:
         _sink[0]("Log file: {}".format(path))
     if ok:
-        _sink[0]("Finished: {} - completed with no problems.".format(what))
+        closing = "Finished: {} - completed with no problems.".format(what)
     else:
-        _sink[0]("Finished: {} - completed WITH PROBLEMS. Read the lines marked {} or {} above.".format(
-            what, FAILED, HELD))
+        closing = "Finished: {} - completed WITH PROBLEMS. Read the lines marked {} or {} above.".format(
+            what, FAILED, HELD)
+    _sink[0](closing)
+    _record(closing, None if ok else FAILED)
     return ok

@@ -80,8 +80,20 @@ def shown(row, text, kind_key, level):
 
 
 def problems(ticked_count):
-    return [] if ticked_count else ["Tick at least one task to run."]
+    return [] if ticked_count else ["Check at least one task to run."]
 
 
 def summary(ticked_count, shown_count, total):
-    return "{} ticked; {} of {} shown".format(ticked_count, shown_count, total)
+    return "{} checked; {} of {} shown".format(ticked_count, shown_count, total)
+
+
+def refresh_note(before_ids, after_ids):
+    """What a refresh found, as a status line: how many tasks are queued now and how many are new or gone."""
+    before, after = set(before_ids), set(after_ids)
+    new, gone = len(after - before), len(before - after)
+    line = "Refreshed: {} queued".format(len(after))
+    if new:
+        line += ", {} new".format(new)
+    if gone:
+        line += ", {} no longer queued".format(gone)
+    return line + "."

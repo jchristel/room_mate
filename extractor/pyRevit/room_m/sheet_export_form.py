@@ -50,5 +50,5 @@ def problems(project, sheets_ticked):
     if project is None:
         out.append("Choose the project to export to.")
     if sheets_ticked <= 0:
-        out.append("Tick at least one sheet.")
+        out.append("Check at least one sheet.")
     return out
