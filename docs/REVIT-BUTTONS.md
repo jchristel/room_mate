@@ -18,6 +18,8 @@ Opens one window to push Revit data to the RoomMate server. Check what to export
 
 Pushes a room and its room layout sheets to the server as a blueprint. Choose the project and phase, check the rooms, name each blueprint and pick its sheets by hand or with a matching rule such as "sheet number is part of room number". A room needs a sheet and a name before it can be pushed, and rows that share a blueprint name are shaded. The server captures the room's contents itself, so push the rooms and FF&E first; a name the project already has becomes a pending revision to accept in the viewer.
 
+*Before it pushes, it checks the project's settings on the server: with no **Tag type code** set, tags on items (FF&E) cannot be kept, so it warns and asks whether to push anyway.*
+
 ### <img src="../extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/Sheets.pushbutton/Icon.png" alt="" width="40" align="absmiddle"> Sheets
 
 Sends the sheets you choose to the server's sheet library. A filter, "Check all matched" and a matching rule help choose the sheets and the rooms each one covers. The rooms only supply the size, area and item count the sheet is ranked on later; none is linked to it. A progress bar and one readable line per sheet report the result.

@@ -458,6 +458,24 @@ def _warn_no_type_code(project, return_value):
             "(room tags are). Name the type parameter that identifies an item's kind under Tag type code.")
 
 
+def _confirm_no_type_code(project, forms, return_value):
+    """Before a blueprint push: when the project's settings name no tag type code, say so and let the person decide.
+    Item tags (FF&E and the like) cannot be keyed without it, so the blueprint would be stored with its room tags
+    only. Returns True to go on (a code is set, or the person chose to push anyway)."""
+    if project.get("tag_type_code"):
+        return True
+    return_value.append_message(run_report.say(
+        "Warning: project '{}' has no tag type code set, so tags on items would not be kept (room tags are).".format(
+            project.get("name") or project.get("id")), run_report.HELD))
+    go_on = forms.alert(
+        "Project '{}' has no Tag type code in its settings.\n\n"
+        "Tags on items (FF&E, furniture) cannot be keyed without it, so this blueprint would be stored with its "
+        "room tags only. Set it under Tag type code in the project's settings, then push again to keep item tags.\n\n"
+        "Push anyway?".format(project.get("name") or project.get("id")),
+        title="Roommate - no tag type code", yes=True, no=True, warn_icon=True)
+    return bool(go_on)
+
+
 def _report_tags(project, pushed, return_value):
     """Say which tags could not be read, then send the ones that were to the tag rules store.
     A failure here is reported and never stops the sheet push: the layout does not need its tags.
@@ -683,6 +701,11 @@ def blueprint_export_entry(doc, uiapp, output, forms):
             return_value.append_message(run_report.say("Cancelled: nothing was exported.", run_report.CANCELLED))
             return return_value
         project = choice["project"]
+        if not _confirm_no_type_code(project, forms, return_value):
+            return_value.append_message(run_report.say(
+                "Cancelled: nothing was pushed. Set Tag type code in the project's settings first.",
+                run_report.CANCELLED))
+            return return_value
         from room_m import blueprint_export_form
         prefs.save_section("blueprints", blueprint_export_form.to_save(project, choice["filter"], choice["rule"]))
         return_value.append_message("Phase '{}'".format(choice["phase"]))
