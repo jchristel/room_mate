@@ -43,7 +43,7 @@
                 <DockPanel Grid.Row="0" Margin="0,0,0,4" LastChildFill="True">
                     <TextBlock DockPanel.Dock="Left" x:Name="tx_found" Text="Rooms" FontWeight="SemiBold" VerticalAlignment="Center" Width="110"/>
                     <Button DockPanel.Dock="Right" Content="Check none" Padding="8,1" Margin="6,0,0,0" Click="on_check_none"/>
-                    <Button DockPanel.Dock="Right" Content="Check all matched" Padding="8,1" Margin="6,0,0,0" Click="on_check_matched"/>
+                    <Button DockPanel.Dock="Right" Content="Check all matched" Padding="8,1" Margin="6,0,0,0" Click="on_check_matched" ToolTip="Ticks the listed rooms that have sheets"/>
                     <TextBox x:Name="tb_find" TextChanged="on_find" ToolTip="Words must all appear in the room label; -word leaves out rooms containing it"/>
                 </DockPanel>
                 <StackPanel Grid.Row="1" Margin="0,0,0,2">
