@@ -23,7 +23,14 @@ CANCELLED = "[cancelled]"
 
 _said = set()
 _baseline = [0]
-_sink = [print]
+
+
+def _print(text):
+    """`print` as a function: IronPython 2.7's is a statement, which cannot be named or stored."""
+    print(text)
+
+
+_sink = [_print]
 
 
 def begin(result=None, sink=None, title=None):
@@ -34,7 +41,7 @@ def begin(result=None, sink=None, title=None):
     `server_failure` writes what a server said in full."""
     _said.clear()
     _baseline[0] = len(_lines_of(result))
-    _sink[0] = sink or print
+    _sink[0] = sink or _print
     if title:
         try:
             from room_m import task_log
