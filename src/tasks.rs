@@ -34,7 +34,7 @@ use serde_json::Value;
 use crate::service::blueprint_model::{BlueprintSheet, ItemClass, Property};
 use crate::service::rls_plan::RlsPlan;
 use crate::state::is_path_safe_component;
-use crate::tag_rules::RuleSummary;
+use crate::tag_rules::TaskRule;
 
 pub const SCHEMA_VERSION: u32 = 1;
 const MAX_TASKS_PER_PROJECT: usize = 50_000;
@@ -183,9 +183,10 @@ pub struct Task {
     pub rls: Option<RlsPlan>,
     /// How to tag what the sheets show, as the rules were when the task was made: one per key
     /// (`tag_rules`), for the viewport types of the sheets and, for a populate task, only the
-    /// families and types it places. The plug-in applies them to the items it places or finds.
+    /// type codes it places. Where each tag goes, never which tag: that is the model's RLS settings
+    /// (`tag_rules::TaskRule`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub tag_rules: Vec<RuleSummary>,
+    pub tag_rules: Vec<TaskRule>,
     /// What the resolver said the room changes, and any other warning from making the task.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub findings: Vec<Value>,
@@ -272,7 +273,7 @@ pub struct NewTask {
     pub items: Vec<TaskItem>,
     pub sheets: Vec<BlueprintSheet>,
     pub rls: Option<RlsPlan>,
-    pub tag_rules: Vec<RuleSummary>,
+    pub tag_rules: Vec<TaskRule>,
     pub findings: Vec<Value>,
 }
 

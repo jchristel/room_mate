@@ -196,13 +196,18 @@ pub fn transfer(sheet: &Value, template: &[Pt], target: &[Pt], request: &RlsRequ
             notes.push(format!("view {}: it has no marker in the sheet, so it was not placed", ev.view_id));
             continue;
         };
-        match ev.faces.first() {
+        match &ev.wall {
             Some(face) if ev.line_start.is_some() && ev.line_end.is_some() && ev.looks.is_some() => {
                 placeable.push((ev, face.edge, marker_id, index));
             }
             _ => notes.push(format!(
-                "view {}: it faces no wall of the template room, so it was not placed",
-                ev.view_id
+                "view {}: it faces no wall of the template room, so it was not placed{}",
+                ev.view_id,
+                if ev.findings.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", ev.findings.join("; "))
+                }
             )),
         }
     }
@@ -416,6 +421,7 @@ mod tests {
                     looks: Some(looks),
                     depth_mm: None,
                     faces: Vec::new(),
+                    wall: None,
                     findings: Vec::new(),
                 }
             })

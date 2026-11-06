@@ -100,10 +100,8 @@ export interface TagRule {
     tagged_category: string;
     code_parameter: string;
     type_code: string;
-    tag_category: string;
-    tag_family: string;
-    tag_type: string;
     viewport_type: string;
+    view_side?: string;
   };
   tag_kind: string;
   placement: { head: Offset; rotation: number; has_leader: boolean };

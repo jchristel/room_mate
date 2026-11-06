@@ -31,7 +31,7 @@ use crate::contract::Point2D;
 use crate::service::blueprint_model::BlueprintSheet;
 use crate::sheets::{self, SheetError, SheetRoom};
 use crate::state::AppState;
-use crate::tag_rules::{self, RuleSummary};
+use crate::tag_rules::{self, RuleSummary, TaskRule};
 use crate::tasks::{BlueprintRef, NewTask, TaskItem, TaskKind, TaskRoom, UpdateMode};
 
 /// A sheet whose room differs from the target by more than this (the mean of the three
@@ -229,7 +229,7 @@ pub fn populate_from_assignment(
         library_sheet_id: None,
         items,
         sheets: bound,
-        tag_rules,
+        tag_rules: tag_rules.iter().map(TaskRule::from).collect(),
         findings,
     })
 }
@@ -548,7 +548,7 @@ pub fn rls_from_sheet(
         blueprint: None,
         library_sheet_id: Some(record.id.clone()),
         items: Vec::new(),
-        tag_rules,
+        tag_rules: tag_rules.iter().map(TaskRule::from).collect(),
         sheets: vec![BlueprintSheet {
             revit_sheet_id: record.revit_sheet_id,
             document_title: record.document_title,

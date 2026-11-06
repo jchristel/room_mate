@@ -360,6 +360,57 @@ impl From<&TagRule> for RuleSummary {
     }
 }
 
+/// A rule as a TASK carries it: where the tag goes, never which tag. The model's RLS settings name the room tag and
+/// the independent tag the plug-in uses, so a tag family in the task would be a second answer to that question, and
+/// one that is wrong whenever the settings name another tag. The rule store still keys by the tag it learned from
+/// (that is what the samples measured); the task drops it. A task stored with the whole key still reads: serde
+/// ignores the fields this leaves out.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskRule {
+    pub id: String,
+    pub key: TaskRuleKey,
+    pub tag_kind: String,
+    pub placement: Placement,
+    pub sample_count: usize,
+    #[serde(default)]
+    pub updated_at: String,
+}
+
+/// [`RuleKey`] without the tag's category, family and type.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TaskRuleKey {
+    pub tagged_category: String,
+    #[serde(default)]
+    pub code_parameter: String,
+    #[serde(default)]
+    pub type_code: String,
+    pub viewport_type: String,
+    #[serde(default)]
+    pub blueprint: String,
+    #[serde(default)]
+    pub view_side: String,
+}
+
+impl From<&RuleSummary> for TaskRule {
+    fn from(r: &RuleSummary) -> Self {
+        TaskRule {
+            id: r.id.clone(),
+            key: TaskRuleKey {
+                tagged_category: r.key.tagged_category.clone(),
+                code_parameter: r.key.code_parameter.clone(),
+                type_code: r.key.type_code.clone(),
+                viewport_type: r.key.viewport_type.clone(),
+                blueprint: r.key.blueprint.clone(),
+                view_side: r.key.view_side.clone(),
+            },
+            tag_kind: r.tag_kind.clone(),
+            placement: r.placement.clone(),
+            sample_count: r.sample_count,
+            updated_at: r.updated_at.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Skipped {
     pub tag_id: i64,
@@ -915,12 +966,11 @@ pub fn rules_for(
 ///
 /// **A pool is pooled by SAMPLES, not by rule.** Several rules can hold one key's samples (one per blueprint
 /// item, since a bound item rule holds one sample), and the median of their medians is not the median of the
-/// samples; `reduce` is applied to all of them, as it is for one rule. The rules also differ by the tag used
-/// (category, family, type): two different tags are not averaged, the one with the most samples wins (then the
-/// later update, then the id, so the choice does not move between runs).
+/// samples; `reduce` is applied to all of them, as it is for one rule. Rules learned with different tags are
+/// pooled too: the task places the tag the model's RLS settings name, never the one a rule was learned with.
 ///
-/// The summary returned is the winning pool's most recently updated rule with the pooled placement and sample
-/// count, so `rule_id` still names a rule the library lists. Room, space and area rules are not item rules and
+/// The summary returned is the pool's most recently updated rule with the pooled placement and sample count, so
+/// `rule_id` still names a rule the library lists. Room, space and area rules are not item rules and
 /// are not returned (`rules_for` carries them).
 pub fn rls_item_rules(rules: &[TagRule], viewport_types: &[String], parameter: &str) -> Vec<RuleSummary> {
     let wanted = |s: &str| s.trim().to_lowercase();
@@ -958,49 +1008,21 @@ pub fn rls_item_rules(rules: &[TagRule], viewport_types: &[String], parameter: &
     out
 }
 
-/// One pool of rules for a key, as the rule its samples agree on: the most used tag, its samples pooled.
+/// One pool of rules for a key, as one rule: every sample of every rule in it, reduced together. The rules may
+/// have been learned with different tags (category, family, type), and that no longer divides them: the task places
+/// the tag the model's RLS settings name, so each sample is just one more answer to where a tag of that item goes.
 fn pooled(pool: &[&TagRule]) -> Option<RuleSummary> {
-    let identity = |r: &TagRule| {
-        (
-            r.key.tag_category.trim().to_lowercase(),
-            r.key.tag_family.trim().to_lowercase(),
-            r.key.tag_type.trim().to_lowercase(),
-        )
-    };
     let weight = |r: &TagRule| r.samples.len().max(r.sample_count);
-    let mut tags: Vec<((String, String, String), usize)> = Vec::new();
-    for r in pool {
-        let id = identity(r);
-        match tags.iter_mut().find(|(t, _)| *t == id) {
-            Some((_, n)) => *n += weight(r),
-            None => tags.push((id, weight(r))),
-        }
-    }
-    // Most samples; a tie goes to the tag of the most recently updated rule, then to the lower id.
-    let best = tags
-        .iter()
-        .map(|(tag, n)| {
-            let newest = pool
-                .iter()
-                .filter(|r| identity(r) == *tag)
-                .map(|r| (r.updated_at.as_str(), std::cmp::Reverse(r.id.as_str())))
-                .max();
-            (*n, newest, tag)
-        })
-        .max_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)))?
-        .2
-        .clone();
-    let winners: Vec<&TagRule> = pool.iter().copied().filter(|r| identity(r) == best).collect();
-    let newest = winners
+    let newest = pool
         .iter()
         .copied()
         .max_by(|a, b| a.updated_at.cmp(&b.updated_at).then_with(|| b.id.cmp(&a.id)))?;
-    let samples: Vec<Sample> = winners.iter().flat_map(|r| r.samples.iter().cloned()).collect();
+    let samples: Vec<Sample> = pool.iter().flat_map(|r| r.samples.iter().cloned()).collect();
     let mut summary = RuleSummary::from(newest);
     if !samples.is_empty() {
         summary.placement = reduce(&samples);
     }
-    summary.sample_count = winners.iter().map(|r| weight(r)).sum();
+    summary.sample_count = pool.iter().map(|r| weight(r)).sum();
     Some(summary)
 }
 
@@ -1105,15 +1127,28 @@ mod tests {
     }
 
     #[test]
-    fn test_two_different_tags_are_not_averaged_the_one_with_most_samples_wins() {
+    fn test_rules_learned_with_different_tags_are_pooled_because_the_settings_choose_the_tag() {
         let rules = [
             item_rule("a", "C", "bp1", "i1", "Small", &[10.0], "1"),
             item_rule("b", "C", "bp2", "i2", "Big", &[50.0, 60.0], "2"),
         ];
         let got = rls_item_rules(&rules, &plan_types(), "Assembly Code");
         assert_eq!(got.len(), 1);
-        assert_eq!(got[0].key.tag_type, "Big");
-        assert_eq!(got[0].placement.head.x, 55.0);
+        assert_eq!(got[0].placement.head.x, 50.0, "the median of 10, 50 and 60");
+        assert_eq!(got[0].sample_count, 3);
+    }
+
+    #[test]
+    fn test_a_task_rule_carries_no_tag() {
+        let summary = RuleSummary::from(&item_rule("a", "C", "", "", "Std", &[10.0], "1"));
+        let text = serde_json::to_string(&TaskRule::from(&summary)).unwrap();
+        assert!(
+            !text.contains("tag_family") && !text.contains("tag_type") && !text.contains("tag_category"),
+            "{text}"
+        );
+        // A task stored with the whole key still reads.
+        let old: TaskRule = serde_json::from_str(&serde_json::to_string(&summary).unwrap()).unwrap();
+        assert_eq!(old.key.type_code, "C");
     }
 
     #[test]
