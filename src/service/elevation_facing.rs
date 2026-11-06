@@ -14,6 +14,12 @@
 //! [`MIN_SQUARE_ON`] are not faced, and a faced edge shorter than [`MIN_VISIBLE_MM`] inside the
 //! footprint is not reported (a corner clipped by the view's edge is not a wall it shows).
 //!
+//! **The wall a view is OF is a different question, answered direction first** ([`wall_of`]). Placing an
+//! elevation in another room needs one wall, and the view's depth must not decide it: a far clip dragged by hand to
+//! about the wall stops in front of its face as often as behind it (House A's `WC 00.03`, 28.5 mm short, faced
+//! nothing by the footprint rule and was not placed). So the wall is the one the view looks at most squarely, in
+//! front of the line and across its width, and the line is then placed against it; the depth is only carried over.
+//!
 //! **Occlusion is not judged.** A nib or a wall further along the same line of sight can hide a
 //! wall behind it; the answer is what the view *covers*, not what it shows unobstructed.
 //!
@@ -42,6 +48,9 @@ use super::ServiceError;
 pub const MIN_SQUARE_ON: f64 = 0.1;
 /// A faced edge must have at least this much of its length inside the view's footprint.
 pub const MIN_VISIBLE_MM: f64 = 100.0;
+/// Walls this close to the most square-on one (in `square_on`, about 5 degrees near straight on) are equally square,
+/// so the overlap with the line chooses between them: a jog or a nib is parallel to the wall it stands in.
+pub const SQUARE_TIE: f64 = 0.004;
 
 /// One wall an elevation looks at.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -75,6 +84,9 @@ pub struct Elevation {
     /// How far the view looks, mm. Absent when the view is not depth limited or it is unknown.
     pub depth_mm: Option<f64>,
     pub faces: Vec<Face>,
+    /// The one wall the view is of ([`wall_of`]): what placing it in another room maps. Absent when no wall of the
+    /// room faces the way it looks, in front of its line.
+    pub wall: Option<Face>,
     pub findings: Vec<String>,
 }
 
@@ -145,6 +157,20 @@ pub fn faces(ring: &[Pt], start: Pt, end: Pt, looks: Pt, depth: Option<f64>) -> 
     out
 }
 
+/// The ONE wall of `ring` an elevation is of, chosen by DIRECTION: of the walls whose room side faces back at the
+/// viewer, in front of the line and across at least [`MIN_VISIBLE_MM`] of its width, the most square-on; among
+/// walls about as square ([`SQUARE_TIE`]) the one overlapping the line most, then the nearest. The depth plays no
+/// part, so a far clip that stops short of the wall, or runs past it into the next room, changes nothing. A view
+/// looking at a wall from behind it, or at nothing in front, has none.
+pub fn wall_of(ring: &[Pt], start: Pt, end: Pt, looks: Pt) -> Option<Face> {
+    let candidates = faces(ring, start, end, looks, None);
+    let best = candidates.iter().map(|f| f.square_on).fold(f64::MIN, f64::max);
+    candidates
+        .into_iter()
+        .filter(|f| f.square_on >= best - SQUARE_TIE)
+        .max_by(|a, b| a.visible_mm.total_cmp(&b.visible_mm).then_with(|| b.nearest_mm.total_cmp(&a.nearest_mm)))
+}
+
 /// Narrow `[u0, u1]` to where `p0 + u * dp` stays within `lo..=hi`; false when nothing is left.
 fn clip(p0: f64, dp: f64, lo: f64, hi: f64, u0: &mut f64, u1: &mut f64) -> bool {
     if dp.abs() < 1e-9 {
@@ -191,11 +217,16 @@ pub fn read_sheet(sheet: &Value, ring: &[Pt]) -> (Vec<Marker>, Vec<Elevation>) {
             }
         }
         let mut found = Vec::new();
+        let mut wall = None;
         match (line_start, line_end, looks) {
             (Some(s), Some(e), Some(l)) => {
                 found = faces(ring, (s[0], s[1]), (e[0], e[1]), (l[0], l[1]), depth_mm);
                 if found.is_empty() {
                     findings.push("no wall of the room lies in this view".into());
+                }
+                wall = wall_of(ring, (s[0], s[1]), (e[0], e[1]), (l[0], l[1]));
+                if wall.is_none() {
+                    findings.push("no wall of the room faces the way this view looks, in front of its line".into());
                 }
             }
             _ => findings.push("the elevation line or direction was not exported".into()),
@@ -210,6 +241,7 @@ pub fn read_sheet(sheet: &Value, ring: &[Pt]) -> (Vec<Marker>, Vec<Elevation>) {
             looks,
             depth_mm,
             faces: found,
+            wall,
             findings,
         });
     }
@@ -322,6 +354,54 @@ mod tests {
         let f = faces(&room(), (500.0, 1500.0), (3500.0, 1500.0), (0.0, -1.0), None);
         assert!(f.iter().all(|x| x.edge != 2), "the top wall is behind the viewer");
         assert!(f.iter().all(|x| x.edge != 1 && x.edge != 3), "the side walls are edge on");
+    }
+
+    #[test]
+    fn the_wall_a_view_is_of_does_not_depend_on_its_depth() {
+        // The WC 00.03 case: the far clip stops short of the wall the view looks at.
+        let line = ((500.0, 1500.0), (3500.0, 1500.0));
+        assert!(faces(&room(), line.0, line.1, (0.0, -1.0), Some(1471.5)).is_empty());
+        let w = wall_of(&room(), line.0, line.1, (0.0, -1.0)).unwrap();
+        assert_eq!(w.edge, 0);
+        // Looking the other way it is the top wall; the walls behind and edge on are never the one.
+        assert_eq!(wall_of(&room(), line.0, line.1, (0.0, 1.0)).unwrap().edge, 2);
+    }
+
+    #[test]
+    fn of_two_parallel_walls_the_one_across_most_of_the_line_wins() {
+        // A room with a nib in its bottom wall: the bottom is in two pieces at y = 0 (x 0..1000) and y = 300
+        // (x 1000..4000, the nib's face). Looking down from y = 1500 across the whole width, the nib's face spans
+        // most of the line and wins although it is not the furthest.
+        let ring = vec![
+            (0.0, 0.0),
+            (1000.0, 0.0),
+            (1000.0, 300.0),
+            (4000.0, 300.0),
+            (4000.0, 3000.0),
+            (0.0, 3000.0),
+        ];
+        let w = wall_of(&ring, (0.0, 1500.0), (4000.0, 1500.0), (0.0, -1.0)).unwrap();
+        assert_eq!((w.a, w.b), ([1000.0, 300.0], [4000.0, 300.0]));
+        // Across only the first metre, the deeper piece is the one.
+        let w = wall_of(&ring, (0.0, 1500.0), (900.0, 1500.0), (0.0, -1.0)).unwrap();
+        assert_eq!((w.a, w.b), ([0.0, 0.0], [1000.0, 0.0]));
+    }
+
+    #[test]
+    fn a_wall_more_square_on_wins_over_a_longer_one_at_an_angle() {
+        // The bottom is straight for 1 m, then rises 1 m over 3 m (18 degrees). Looking straight down across the
+        // room, the slanted piece spans three times as much of the line, but the view is square to the straight one.
+        let ring = vec![
+            (0.0, 0.0),
+            (1000.0, 0.0),
+            (4000.0, 1000.0),
+            (4000.0, 3000.0),
+            (0.0, 3000.0),
+        ];
+        let all = faces(&ring, (0.0, 2900.0), (4000.0, 2900.0), (0.0, -1.0), None);
+        assert!(all.iter().any(|f| f.edge == 1 && f.visible_mm > 3000.0), "{all:?}");
+        let w = wall_of(&ring, (0.0, 2900.0), (4000.0, 2900.0), (0.0, -1.0)).unwrap();
+        assert_eq!(w.edge, 0);
     }
 
     #[test]
