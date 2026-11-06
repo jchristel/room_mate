@@ -218,8 +218,9 @@ def _room_tag_head(task):
 
 def _plan_crop(task):
     """The plan view's crop the server worked out for this room (the template crop's offset from its room's box,
-    side by side): `{"centre": [x, y], "size": [w, h]}` in the model's frame, mm; None when the task carries none and
-    the writer is to crop round the room as before."""
+    side by side): `{"centre": [x, y], "size": [w, h], "min": [x, y], "max": [x, y]}` in the model's frame, mm; None
+    when the task carries none and the writer is to crop round the room as before. The 3D views take the same
+    footprint (min and max) for their section box."""
     crop = (task.get("rls") or {}).get("plan_crop") or {}
     lo, hi = crop.get("min"), crop.get("max")
     try:
@@ -228,7 +229,8 @@ def _plan_crop(task):
         return None
     if len(lo) != 2 or len(hi) != 2 or hi[0] <= lo[0] or hi[1] <= lo[1]:
         return None
-    return {"centre": [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0], "size": [hi[0] - lo[0], hi[1] - lo[1]]}
+    return {"centre": [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0], "size": [hi[0] - lo[0], hi[1] - lo[1]],
+            "min": lo, "max": hi}
 
 
 def build(task, settings, values):
