@@ -93,7 +93,7 @@ from room_m import rls_settings
 from room_m import task_log
 from room_m.apply_facts import RevitFacts
 
-# How far beyond the room a plan view's crop reaches when the template viewport carried none.
+# How far beyond the room a plan view's crop reaches when the task carries no crop and the template viewport none.
 CROP_MARGIN_MM = 600.0
 # How far a 3D view's section box stands off the room on every side.
 SECTION_MARGIN_MM = 600.0
@@ -262,12 +262,18 @@ class RlsWriter(object):
             raise RuntimeError("plan view {}: {}".format(plan["plan_name"], outcome.message.strip()))
         view = outcome.result[0]
 
-        box = room.get_BoundingBox(None)
-        room_w = (box.Max.X - box.Min.X) * geo.MM_PER_FT + 2 * CROP_MARGIN_MM
-        room_h = (box.Max.Y - box.Min.Y) * geo.MM_PER_FT + 2 * CROP_MARGIN_MM
         vp = plan["plan_viewport"]
-        size = (geo.crop_size_mm(vp, room_w, room_h) if vp else None) or (room_w, room_h)
-        centre = XYZ((box.Max.X + box.Min.X) / 2.0, (box.Max.Y + box.Min.Y) / 2.0, self._level_z)
+        placed = plan.get("plan_crop")
+        if placed:
+            # The server kept the template crop's offset from its room's box on every side (rls_plan::plan_crop).
+            size = placed["size"]
+            centre = XYZ(_ft(placed["centre"][0]), _ft(placed["centre"][1]), self._level_z)
+        else:
+            box = room.get_BoundingBox(None)
+            room_w = (box.Max.X - box.Min.X) * geo.MM_PER_FT + 2 * CROP_MARGIN_MM
+            room_h = (box.Max.Y - box.Min.Y) * geo.MM_PER_FT + 2 * CROP_MARGIN_MM
+            size = (geo.crop_size_mm(vp, room_w, room_h) if vp else None) or (room_w, room_h)
+            centre = XYZ((box.Max.X + box.Min.X) / 2.0, (box.Max.Y + box.Min.Y) / 2.0, self._level_z)
 
         def crop():
             view.Scale = int(plan["plan_scale"])
