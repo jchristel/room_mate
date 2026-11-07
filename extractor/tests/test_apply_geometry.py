@@ -127,6 +127,16 @@ class ElevationHead(unittest.TestCase):
         head = g.elevation_head_ft((10.0, 20.0, 0.0), (-1, 0, 0), (0, 0, 1), [304.8, 0.0])
         self.assertEqual((9.0, 20.0, 0.0), tuple(round(v, 9) for v in head))
 
+    def test_a_rule_from_the_centre_starts_at_the_middle_of_the_box_and_an_older_one_at_the_point(self):
+        # three towel rails share one insertion point at the level; only their boxes are at their heights
+        point = (10.0, 20.0, 0.0)
+        box = ((9.0, 19.9, 2.8), (11.0, 20.1, 3.2))
+        self.assertEqual((10.0, 20.0, 3.0), g.elevation_reference_ft({"from_centre": True}, point, box))
+        self.assertEqual(point, g.elevation_reference_ft({}, point, box))
+        self.assertEqual(point, g.elevation_reference_ft({"from_centre": False}, point, None))
+        # from the centre with no box: no place the rule measured
+        self.assertIsNone(g.elevation_reference_ft({"from_centre": True}, point, None))
+
 
 if __name__ == "__main__":
     unittest.main()

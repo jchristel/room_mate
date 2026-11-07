@@ -19,8 +19,8 @@ docs/PLAN-blueprints.md, track B.
 
 from room_m import room_figures, section_box
 from room_m.post_common import duhast_to_plain
-from room_m.sheet_tags import attach_type_codes, take_tags
-from room_m.utils.tag_codes import type_code_reader
+from room_m.sheet_tags import attach_centres, attach_type_codes, take_tags
+from room_m.utils.tag_codes import centre_reader, type_code_reader
 
 
 MM_PER_FT = 304.8
@@ -84,6 +84,9 @@ def read_sheet(doc, entry, room=None, phase_name=None, rooms=None, type_code_par
             _attach_section_boxes(pushed, source)
         except Exception:
             pass  # a sheet without them still travels; the 3D view then gets the room plus a margin
+    if pushed["tags"]:
+        # an elevation tag is measured from the middle of its item, which only Revit can say
+        attach_centres(pushed["tags"], centre_reader(doc))
     if type_code_parameter and pushed["tags"]:
         pushed["tags_without_code"] = attach_type_codes(pushed["tags"], type_code_reader(doc, type_code_parameter))
     if room is not None:

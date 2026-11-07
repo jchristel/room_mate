@@ -76,6 +76,28 @@ def attach_type_codes(observations, read_code):
     return missing
 
 
+def attach_centres(observations, read_centre):
+    """Put the middle of each tagged item's bounding box on it (in place, `centre`, model mm as `{"x", "y", "z"}`),
+    and return the number of items left without one.
+
+    `read_centre(tagged_element)` returns `(x, y, z)` in mm or None (`room_m.utils.tag_codes.centre_reader`). An
+    elevation tag is measured from it on the server, because a family that sets its height with a parameter keeps its
+    insertion point at the level whatever the height (three towel rails at three heights share one point). A room,
+    space or area tag has no item and gets none; an item without one is measured from its point, as before."""
+    missing = 0
+    for observation in observations:
+        tag = observation.get("tag") or {}
+        if str(tag.get("tag_kind") or "").strip().lower() in SPATIAL_KINDS:
+            continue
+        for element in tag.get("tagged_elements") or []:
+            centre = read_centre(element)
+            if centre:
+                element["centre"] = {"x": centre[0], "y": centre[1], "z": centre[2]}
+            else:
+                missing += 1
+    return missing
+
+
 def describe_problems(label, problems):
     """Lines for the run's output: tags that could not be read, as a warning and never a stop."""
     lines = []

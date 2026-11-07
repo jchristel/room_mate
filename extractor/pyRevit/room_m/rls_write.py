@@ -171,6 +171,16 @@ def _ft(mm):
     return geo.mm_to_ft(mm)
 
 
+def _reference_point(element, tag):
+    """The XYZ an elevation tag's offsets start from (`geo.elevation_reference_ft`): the item's bounding box in the
+    model, not in a view, because the samples were read that way."""
+    point = element.Location.Point
+    box = element.get_BoundingBox(None)
+    box_ft = ((box.Min.X, box.Min.Y, box.Min.Z), (box.Max.X, box.Max.Y, box.Max.Z)) if box is not None else None
+    at = geo.elevation_reference_ft(tag, (point.X, point.Y, point.Z), box_ft)
+    return XYZ(*at) if at is not None else None
+
+
 class RlsWriter(object):
     def __init__(self, doc, facts):
         self.doc = doc
@@ -523,8 +533,9 @@ class RlsWriter(object):
         )
 
     def _elevation_tags(self, plan, independent, problems):
-        """Tag items in the new elevations where the server's rules put them: the item's own point moved along
-        the view's right and up (`geo.elevation_head_ft`). Returns how many were placed."""
+        """Tag items in the new elevations where the server's rules put them: the item's own point (or the middle of
+        its bounding box, when the rule was measured from it) moved along the view's right and up
+        (`geo.elevation_head_ft`). Returns how many were placed."""
         made = 0
         for view_id, tags in (plan.get("elevation_tags") or {}).items():
             view = self._elevation_views.get(view_id)
@@ -536,7 +547,11 @@ class RlsWriter(object):
             for tag in tags:
                 try:
                     element = self.doc.GetElement(get_element_id_from_int(int(tag["item_id"])))
-                    point = element.Location.Point
+                    point = _reference_point(element, tag)
+                    if point is None:
+                        problems.append("elevation tag on item {} not placed: its rule is measured from the item's "
+                                        "middle and the item has no bounding box".format(tag.get("item_id")))
+                        continue
                     head = at(point, tag["view_offset_mm"])
                     leader = bool(tag.get("has_leader")) and tag.get("end_offset_mm") is not None
                     elbow = at(point, tag["elbow_offset_mm"]) if leader and tag.get("elbow_offset_mm") else None

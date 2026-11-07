@@ -80,6 +80,20 @@ def elevation_head_ft(point_ft, right, up, offset_mm):
     return tuple(point_ft[i] + right[i] * dx + up[i] * dy for i in range(3))
 
 
+def elevation_reference_ft(tag, point_ft, box_ft):
+    """The point an elevation tag's offsets are added to, `(x, y, z)` in feet: the middle of the item's bounding box
+    (`box_ft`, `(min, max)`) when the server's rule was measured from it (`from_centre`), else the insertion point. A
+    family that lifts itself with a parameter keeps its insertion point at the level, so three rails at three heights
+    would otherwise get one tag place. None when the rule is from the centre and the item has no box: the tag would go
+    somewhere the rule never measured."""
+    if not tag.get("from_centre"):
+        return tuple(point_ft)
+    if not box_ft:
+        return None
+    low, high = box_ft
+    return tuple((low[i] + high[i]) / 2.0 for i in range(3))
+
+
 def _norm(s):
     return (s or "").strip().lower()
 

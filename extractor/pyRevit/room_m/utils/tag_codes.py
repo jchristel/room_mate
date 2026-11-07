@@ -11,6 +11,9 @@ server decides what a missing one means.
 A tagged element in a LINKED model (`link_element_id` is set) is not read: its type lives in
 another document, and the observation then goes without a code and is skipped by the server with
 a reason. **Not run in Revit.**
+
+`centre_reader` reads the middle of a tagged element's bounding box, which an elevation tag is measured from
+(`room_m.sheet_tags.attach_centres`). Same rule for a linked element: not read. **Not run in Revit.**
 """
 
 from duHast.Revit.Common.element_id import get_element_id_from_int
@@ -51,5 +54,31 @@ def type_code_reader(doc, parameter_name):
                 code = _text(type_element.LookupParameter(parameter_name))
             cache[key] = code or None
         return cache[key]
+
+    return read
+
+
+MM_PER_FT = 304.8
+
+
+def centre_reader(doc):
+    """A function `read(tagged_element) -> (x, y, z) mm or None` for the elements of `doc`: the middle of the
+    element's bounding box in the model (`get_BoundingBox(None)`), in the model's own frame, as duHast's tag points
+    are. None for a linked element, a missing one or one with no box."""
+
+    def read(tagged_element):
+        if tagged_element.get("link_element_id", 0) > 0:
+            return None
+        element_id = tagged_element.get("host_element_id")
+        if not element_id or element_id <= 0:
+            return None
+        element = doc.GetElement(get_element_id_from_int(element_id))
+        if element is None:
+            return None
+        box = element.get_BoundingBox(None)
+        if box is None:
+            return None
+        low, high = box.Min, box.Max
+        return ((low.X + high.X) / 2.0 * MM_PER_FT, (low.Y + high.Y) / 2.0 * MM_PER_FT, (low.Z + high.Z) / 2.0 * MM_PER_FT)
 
     return read

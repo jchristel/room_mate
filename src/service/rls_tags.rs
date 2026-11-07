@@ -136,6 +136,10 @@ pub struct PlacedTag {
     /// then up. The plug-in adds it to the item's point (it reads the height).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub view_offset_mm: Option<[f64; 2]>,
+    /// Elevations: the offsets are from the middle of the item's bounding box, not its insertion point (the rule's
+    /// samples were measured that way). Absent: from the point, as every rule learned before the centre was read.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub from_centre: bool,
     /// Elevations, from a rule: `Horizontal` or `Vertical` (an elevation tag's turn is its orientation).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub orientation: Option<String>,
@@ -370,6 +374,7 @@ fn elevation_tag(item: &RoomItem, r: &RuleSummary, scale: f64, along: Option<f64
         rotation: Some(r.placement.rotation),
         along_line_mm: along,
         view_offset_mm: Some(out(r.placement.head)),
+        from_centre: r.placement.from_centre,
         orientation: Some(r.placement.orientation.clone()).filter(|o| !o.trim().is_empty()),
         has_leader: r.placement.has_leader,
         elbow_offset_mm: r.placement.elbow.filter(|_| r.placement.has_leader).map(out),
@@ -439,6 +444,7 @@ pub fn plan_tags(
                         rotation: Some(f.1.atan2(f.0) + r.placement.rotation),
                         along_line_mm: None,
                         view_offset_mm: None,
+                        from_centre: false,
                         orientation: None,
                         has_leader: false,
                         elbow_offset_mm: None,
@@ -463,6 +469,7 @@ pub fn plan_tags(
                         rotation: None,
                         along_line_mm: along,
                         view_offset_mm: None,
+                        from_centre: false,
                         orientation: None,
                         has_leader: false,
                         elbow_offset_mm: None,
@@ -532,6 +539,7 @@ mod tests {
                 elbow: None,
                 end: None,
                 boundary: None,
+                from_centre: false,
             },
             sample_count: 3,
             updated_at: String::new(),
@@ -601,6 +609,16 @@ mod tests {
         assert!(!tag.has_leader && tag.end_offset_mm.is_none());
         assert!(tag.head.is_none() && tag.along_line_mm.is_some());
         assert!(elevation.candidates.is_empty());
+        // a rule learned before the centre was read is from the point, and says nothing more
+        assert!(!tag.from_centre);
+        let mut centred = rules.clone();
+        centred[0].placement.from_centre = true;
+        let plan = plan_tags(&sheet(), &items, &markers(), &centred, &TagRequest::default());
+        let elevation = plan.views.iter().find(|v| v.view_type == "elevation").unwrap();
+        assert!(
+            elevation.tagged[0].from_centre,
+            "the plug-in must be told to add the offset to the item's centre"
+        );
     }
 
     #[test]
