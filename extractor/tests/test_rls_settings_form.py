@@ -35,6 +35,21 @@ class Choices(unittest.TestCase):
 
 
 class Tokens(unittest.TestCase):
+    def test_only_the_title_on_sheet_boxes_offer_seq_counter_first(self):
+        self.assertEqual(["Seq_Counter", "Number"], form.tokens_for("tb_title_elevation", ["Number"]))
+        self.assertEqual(["Number"], form.tokens_for("tb_view_name", ["Number"]))
+        self.assertEqual("E {Seq_Counter}", form.add_token("E ", form.tokens_for("tb_title_plan", ["Number"]), 1))
+
+    def test_seq_counter_is_known_only_where_it_is_allowed(self):
+        self.assertEqual(["Seq_Counter"], form.unknown_tokens("{Seq_Counter}", ["Number"]))
+        self.assertEqual([], form.unknown_tokens("{Seq_Counter} {Number}", ["Number"], (form.SEQ_COUNTER,)))
+
+    def test_the_title_templates_are_saved_with_the_settings(self):
+        saved = form.to_settings({"other": 1}, {}, {"tb_title_plan": " PLAN {Seq_Counter} ", "tb_title_schedule": ""})
+        self.assertEqual("PLAN {Seq_Counter}", saved["title_on_sheet_plan"])
+        self.assertEqual("", saved["title_on_sheet_schedule"])
+        self.assertEqual(1, saved["other"])
+
     def test_a_picked_parameter_is_added_in_braces(self):
         params = ["Number", "Name"]
         self.assertEqual("RLS-{Name}", form.add_token("RLS-", params, 2))

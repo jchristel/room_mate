@@ -94,6 +94,29 @@
                     <TextBlock Text="Fixed text and {Room Parameter} in braces, for example RLS-{Number}." Opacity="0.6" Margin="170,2,0,0" TextWrapping="Wrap"/>
                     </StackPanel>
                 </Border>
+                <!-- title on sheet -->
+                <Border BorderBrush="Gray" BorderThickness="1" CornerRadius="2" Padding="10" Margin="0,4,0,4">
+                        <StackPanel>
+                    <TextBlock Text="Title on sheet" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                    <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions>
+                        <TextBlock Text="Plan" VerticalAlignment="Center"/>
+                        <TextBox Grid.Column="1" x:Name="tb_title_plan" TextChanged="on_change"/>
+                        <ComboBox Grid.Column="2" x:Name="tk_title_plan" SelectionChanged="on_token_title_plan" Margin="6,0,0,0"/></Grid>
+                    <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions>
+                        <TextBlock Text="Elevation" VerticalAlignment="Center"/>
+                        <TextBox Grid.Column="1" x:Name="tb_title_elevation" TextChanged="on_change"/>
+                        <ComboBox Grid.Column="2" x:Name="tk_title_elevation" SelectionChanged="on_token_title_elevation" Margin="6,0,0,0"/></Grid>
+                    <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions>
+                        <TextBlock Text="3D" VerticalAlignment="Center"/>
+                        <TextBox Grid.Column="1" x:Name="tb_title_three_d" TextChanged="on_change"/>
+                        <ComboBox Grid.Column="2" x:Name="tk_title_three_d" SelectionChanged="on_token_title_three_d" Margin="6,0,0,0"/></Grid>
+                    <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions>
+                        <TextBlock Text="Schedule" VerticalAlignment="Center"/>
+                        <TextBox Grid.Column="1" x:Name="tb_title_schedule" TextChanged="on_change"/>
+                        <ComboBox Grid.Column="2" x:Name="tk_title_schedule" SelectionChanged="on_token_title_schedule" Margin="6,0,0,0"/></Grid>
+                    <TextBlock Text="Fixed text, {Room Parameter} and {Seq_Counter}: 1, 2, 3 ... per viewport of the same kind on the sheet, for example ELEVATION {Seq_Counter} - {Name}. Empty: Revit's own title." Opacity="0.6" Margin="170,2,0,0" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
             </StackPanel>
         </ScrollViewer>
 

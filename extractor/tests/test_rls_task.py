@@ -153,6 +153,34 @@ class Plan(unittest.TestCase):
         self.assertEqual("TB : A2", v["plan"]["title_block"])
 
 
+class TitleOnSheet(unittest.TestCase):
+    TITLES = dict(SETTINGS, title_on_sheet_plan="PLAN - {Name}", title_on_sheet_elevation="ELEVATION {Seq_Counter} {Number}",
+                  title_on_sheet_three_d="3D {seq_counter}", title_on_sheet_schedule="SCHEDULE {Seq_Counter}")
+
+    def test_each_kind_takes_its_template_and_seq_counter_counts_viewports_of_that_kind_from_1(self):
+        t = task()
+        t["sheets"][0]["sheet"]["view_ports"].append(dict(viewport("three d", 4, 600, 100),
+            view={"forward_direction": {"x": 1, "y": 1, "z": -1}, "up_direction": {"x": 0, "y": 0, "z": 1}}))
+        v = verdict(t, settings=self.TITLES)
+        self.assertEqual([], v["aborts"], v["aborts"])
+        p = v["plan"]
+        self.assertEqual("PLAN - STUDY", p["plan_title"])
+        self.assertEqual(["ELEVATION 1 01.09", "ELEVATION 2 01.09"], [e["title"] for e in p["elevations"]])
+        self.assertEqual(["3D 1"], [x["title"] for x in p["three_ds"]], "case is ignored, as for room parameters")
+        self.assertEqual("SCHEDULE 1", p["schedule_title"])
+
+    def test_no_template_leaves_revits_own_title(self):
+        p = verdict()["plan"]
+        self.assertIsNone(p["plan_title"])
+        self.assertIsNone(p["schedule_title"])
+        self.assertEqual([None, None], [e["title"] for e in p["elevations"]])
+
+    def test_a_room_parameter_the_room_lacks_aborts_once_per_kind(self):
+        v = verdict(settings=dict(SETTINGS, title_on_sheet_elevation="{Seq_Counter} {Wing}"))
+        self.assertEqual([rt.TEMPLATE_UNRESOLVED], codes(v["aborts"]))
+        self.assertIn("{Wing}", v["aborts"][0]["message"])
+
+
 class UnhappyPath(unittest.TestCase):
     def aborts(self, **facts):
         return codes(verdict(facts=Facts(**facts))["aborts"])

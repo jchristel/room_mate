@@ -44,10 +44,12 @@ def show(forms, model_name, settings, options):
                 combo = getattr(self, name)
                 combo.ItemsSource = form.NUMBERING_LABELS
                 combo.SelectedIndex = form.numbering_selected(self._existing.get(key))
+            self._tokens = {}
             for name, key in form.TEXTS:
                 getattr(self, name).Text = self._existing.get(key) or ""
                 token_combo = getattr(self, "tk_" + name[3:])
-                token_combo.ItemsSource = form.token_labels(self._parameters)
+                self._tokens[name] = form.tokens_for(name, self._parameters)
+                token_combo.ItemsSource = form.token_labels(self._tokens[name])
                 token_combo.SelectedIndex = 0
             self._ready = True
             self._status()
@@ -62,6 +64,18 @@ def show(forms, model_name, settings, options):
 
         def on_token_view_name(self, sender, args):
             self._insert(sender, self.tb_view_name)
+
+        def on_token_title_plan(self, sender, args):
+            self._insert(sender, self.tb_title_plan)
+
+        def on_token_title_elevation(self, sender, args):
+            self._insert(sender, self.tb_title_elevation)
+
+        def on_token_title_three_d(self, sender, args):
+            self._insert(sender, self.tb_title_three_d)
+
+        def on_token_title_schedule(self, sender, args):
+            self._insert(sender, self.tb_title_schedule)
 
         def on_change(self, sender, args):
             self._status()
@@ -80,7 +94,7 @@ def show(forms, model_name, settings, options):
             index = combo.SelectedIndex
             if index < 1:
                 return
-            box.Text = form.add_token(box.Text, self._parameters, index)
+            box.Text = form.add_token(box.Text, self._tokens.get(box.Name, self._parameters), index)
             combo.SelectedIndex = 0
             self._status()
 

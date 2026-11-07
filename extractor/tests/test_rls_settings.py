@@ -119,3 +119,12 @@ class Validate(unittest.TestCase):
         errors, _w = rs.validate(self.settings(sheet_name="{Wing}", plan_detail_numbering="roman"), self.OPTIONS)
         self.assertEqual(2, len(errors))
         self.assertIn("{Wing}", errors[0])
+
+    def test_a_title_on_sheet_may_use_seq_counter_and_room_parameters_and_nothing_else(self):
+        ok = self.settings(title_on_sheet_elevation="ELEV {Seq_Counter} {Number}", title_on_sheet_plan="")
+        self.assertEqual(([], []), rs.validate(ok, self.OPTIONS))
+        errors, _w = rs.validate(self.settings(title_on_sheet_three_d="{Seq_Counter} {Wing}"), self.OPTIONS)
+        self.assertEqual(["3D title on sheet: not a room parameter: {Wing}"], errors)
+        # a Seq_Counter in the view name is not allowed: it means nothing there
+        errors, _w = rs.validate(self.settings(view_name="{Number} {Seq_Counter}"), self.OPTIONS)
+        self.assertEqual(1, len(errors))
