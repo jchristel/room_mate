@@ -86,6 +86,12 @@ def validate(settings, options):
         bad = rls_settings_form.unknown_tokens(s.get(key), (options or {}).get("room_parameters"))
         if bad:
             errors.append("{}: not a room parameter: {}".format(label, " ".join("{" + t + "}" for t in bad)))
+    for _name, key, kind in rls_settings_form.TITLE_TEXTS:
+        bad = rls_settings_form.unknown_tokens(
+            s.get(key), (options or {}).get("room_parameters"), (rls_settings_form.SEQ_COUNTER,))
+        if bad:
+            errors.append("{} title on sheet: not a room parameter: {}".format(
+                kind.replace("three_d", "3D").replace("_", " "), " ".join("{" + t + "}" for t in bad)))
     for key in detail_numbers.SETTING_OF.values():
         if s.get(key) is not None and s.get(key) not in detail_numbers.STYLES:
             errors.append("{} '{}' is not numeric or alphabetic".format(key.replace("_", " "), s.get(key)))

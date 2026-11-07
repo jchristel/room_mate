@@ -291,8 +291,32 @@ class RlsWriter(object):
 
         self._step("RoomMate: crop {}".format(plan["plan_name"]), crop)
         self._annotation_crop(view, vp, plan["plan_name"])
+        self._title_on_sheet(view, plan.get("plan_title"), plan["plan_name"], notes)
         self._viewport(sheet, view, vp, notes, "plan", "plan")
         return view
+
+    def _title_on_sheet(self, view, title, name, notes):
+        """Write `title` to the view's Title on Sheet (`BuiltInParameter.VIEW_DESCRIPTION`, which the Revit API
+        documents as `ParameterTypeId.ViewDescription`), the text the viewport's title shows instead of the view
+        name. Nothing is done when the settings have no template for this kind. A view without the parameter (a
+        schedule may have none) or one that refuses it is a note: the view is made either way."""
+        if not title:
+            return
+        parameter = view.get_Parameter(BuiltInParameter.VIEW_DESCRIPTION) or view.LookupParameter("Title on Sheet")
+        if parameter is None or parameter.IsReadOnly:
+            notes.append("{}: it has no Title on Sheet to write '{}' to".format(name, title))
+            return
+
+        def work():
+            result = Result()
+            if not parameter.Set(str(title)):
+                result.update_sep(False, "Revit did not take the value")
+            return result
+
+        try:
+            self._step("RoomMate: title on sheet of {}".format(name), work)
+        except Exception as e:
+            notes.append("{}: its Title on Sheet was not set ({})".format(name, e))
 
     def _annotation_crop(self, view, template_vp, name):
         """Give the view the annotation crop its template view has (on or off, and where its edges are from the
@@ -417,6 +441,7 @@ class RlsWriter(object):
             looks = e["looks"]
             if (-d.X * looks[0] - d.Y * looks[1]) < FACES_PLAN:
                 notes.append("{} does not face the way the plan says (the marker's other views are at fixed quarter turns)".format(e["name"]))
+            self._title_on_sheet(view, e.get("title"), e["name"], notes)
             self._viewport(sheet, view, e["viewport"], notes, e["name"], "elevation")
 
     def _check_vertical_extent(self, view, e, bottom, notes):
@@ -464,6 +489,7 @@ class RlsWriter(object):
                     self.doc, view_type, v["name"], v["forward"], v["up"], low, high, phase),
             ).result[0]
             self._hide_walls_in_the_way(view, room, low, high, v["forward"], v["name"], notes)
+            self._title_on_sheet(view, v.get("title"), v["name"], notes)
             self._viewport(sheet, view, v["viewport"], notes, v["name"], "three_d")
 
     def _hide_walls_in_the_way(self, view, room, low, high, forward, name, notes):
@@ -519,6 +545,7 @@ class RlsWriter(object):
             "RoomMate: schedule filter",
             lambda: set_first_filter_value_without_transaction_wrapper(copy, str(room.Number)),
         )
+        self._title_on_sheet(copy, plan.get("schedule_title"), plan["schedule_name"], notes)
         vp = plan["schedule_viewport"]
         box = (vp or {}).get("bounding_box") or {}
         try:

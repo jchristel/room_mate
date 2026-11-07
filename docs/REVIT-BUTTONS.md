@@ -30,7 +30,7 @@ Carries out the room tasks the server holds for the open model. The window lists
 
 ### <img src="../extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/RlsSettings.pushbutton/Icon.png" alt="" width="40" align="absmiddle"> RLS settings
 
-Sets how a room layout sheet is made in the open model: the title block per sheet size, view types, schedule base, tags, and the number, name and view-name templates. The settings are kept in the model itself and checked against it, with anything the model lacks marked "(not in this model)". The Tasks button reads them, and opens this window itself when they are missing or incomplete. No server is needed.
+Sets how a room layout sheet is made in the open model: the title block per sheet size, view types, schedule base, tags, the number, name and view-name templates, and a **Title on sheet** template for each kind of view (plan, elevation, 3D, schedule): fixed text, `{Room Parameter}` and `{Seq_Counter}` (1, 2, 3 ... per viewport of that kind on the sheet), written to each new view's Title on Sheet; an empty one keeps Revit's title. The settings are kept in the model itself and checked against it, with anything the model lacks marked "(not in this model)". The Tasks button reads them, and opens this window itself when they are missing or incomplete. No server is needed.
 
 ### <img src="../extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/Server.pushbutton/Icon.png" alt="" width="40" align="absmiddle"> Server
 

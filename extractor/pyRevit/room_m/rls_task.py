@@ -37,7 +37,7 @@ import re
 from room_m import apply_geometry as geo
 from room_m import detail_numbers
 from room_m import rls_settings
-from room_m.rls_template import TOKEN
+from room_m.rls_template import SEQ_COUNTER, TOKEN
 
 CREATE_RLS = "create_rls"
 
@@ -217,6 +217,40 @@ def _room_tag_head(task):
     return None
 
 
+TITLE_KINDS = (
+    ("plan", "title_on_sheet_plan", "plan"),
+    ("elevation", "title_on_sheet_elevation", "elevation"),
+    ("three_d", "title_on_sheet_three_d", "3D"),
+    ("schedule", "title_on_sheet_schedule", "schedule"),
+)
+
+
+def _title_renderer(settings, values, aborts):
+    """`titles(kind, n)`: the Title on Sheet of the `n`th viewport of `kind` on the sheet (from 1), or None when
+    the settings have no template for that kind (the view keeps Revit's own title). `{Seq_Counter}` is `n`; every
+    other word is a room parameter, and one the room lacks aborts the task once per kind, as the naming logic does."""
+    templates = dict((kind, (settings.get(key) or "").strip()) for kind, key, _label in TITLE_KINDS)
+    labels = dict((kind, label) for kind, _key, label in TITLE_KINDS)
+    reported = set()
+
+    def titles(kind, n):
+        template = templates.get(kind)
+        if not template:
+            return None
+        filled = dict(values or {})
+        filled[SEQ_COUNTER] = n
+        text, missing = render(template, filled)
+        if missing and kind not in reported:
+            reported.add(kind)
+            aborts.append(finding(
+                TEMPLATE_UNRESOLVED,
+                "the {} title on sheet uses {} which the room does not have".format(
+                    labels[kind], ", ".join("{" + m + "}" for m in missing))))
+        return text.strip() or None
+
+    return titles
+
+
 def _plan_crop(task):
     """The plan view's crop the server worked out for this room (the template crop's offset from its room's box,
     side by side): `{"centre": [x, y], "size": [w, h], "min": [x, y], "max": [x, y]}` in the model's frame, mm; None
@@ -265,9 +299,14 @@ def build(task, settings, values):
         aborts.append(finding(TEMPLATE_UNRESOLVED, "the view name logic gives an empty name for this room"))
 
     plan_vp = _first_of_type(template, geo.PLAN)
+    titles = _title_renderer(settings, values, aborts)
     schedule_vp = _first_of_type(template, "schedule")
     elevations = _elevations(task, template, base)
     three_ds, three_d_skipped = _three_ds(template, base)
+    for n, e in enumerate(elevations, 1):
+        e["title"] = titles("elevation", n)
+    for n, v in enumerate(three_ds, 1):
+        v["title"] = titles("three_d", n)
     plan = {
         "number": number,
         "name": rendered["sheet_name"],
@@ -275,12 +314,14 @@ def build(task, settings, values):
         "title_block": title_block,
         "base": base,
         "plan_name": "{} PLAN".format(base),
+        "plan_title": titles("plan", 1),
         "plan_viewport": plan_vp,
         "plan_scale": (geo.viewport_scale(plan_vp) if plan_vp else None) or DEFAULT_SCALE,
         "elevations": elevations,
         "three_ds": three_ds,
         "three_d_skipped": three_d_skipped,
         "schedule_name": "{} SCHEDULE".format(base),
+        "schedule_title": titles("schedule", 1),
         "schedule_viewport": schedule_vp,
         "plan_view_type": settings.get("plan_view_type"),
         "elevation_view_type": settings.get("elevation_view_type"),

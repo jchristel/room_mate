@@ -9,7 +9,7 @@ survives this one saving.
 """
 
 from room_m import detail_numbers
-from room_m.rls_template import TOKEN
+from room_m.rls_template import SEQ_COUNTER, TOKEN
 from room_m.textutil import is_text
 
 NOT_SET = "(not set)"
@@ -36,7 +36,21 @@ TEXTS = [
     ("tb_sheet_number", "sheet_number"),
     ("tb_sheet_name", "sheet_name"),
     ("tb_view_name", "view_name"),
+    ("tb_title_plan", "title_on_sheet_plan"),
+    ("tb_title_elevation", "title_on_sheet_elevation"),
+    ("tb_title_three_d", "title_on_sheet_three_d"),
+    ("tb_title_schedule", "title_on_sheet_schedule"),
 ]
+
+# The Title on Sheet templates, one per kind of view (`rls_task` fills them, `rls_write` writes them to the view's
+# Title on Sheet). Optional: an empty one leaves Revit's own title (the view name). They take `{Seq_Counter}` too.
+TITLE_TEXTS = [
+    ("tb_title_plan", "title_on_sheet_plan", "plan"),
+    ("tb_title_elevation", "title_on_sheet_elevation", "elevation"),
+    ("tb_title_three_d", "title_on_sheet_three_d", "three_d"),
+    ("tb_title_schedule", "title_on_sheet_schedule", "schedule"),
+]
+_TITLE_BOXES = set(name for name, _key, _kind in TITLE_TEXTS)
 
 
 # (control name, settings key, label): how the viewports of each kind are numbered on the sheet
@@ -102,6 +116,12 @@ def token_labels(parameters):
     return [TOKEN_PROMPT] + list(parameters or [])
 
 
+def tokens_for(name, parameters):
+    """The names a text box's token combo offers: the room parameters, and `Seq_Counter` first for a Title on Sheet
+    box (the only templates it means anything in)."""
+    return ([SEQ_COUNTER] if name in _TITLE_BOXES else []) + list(parameters or [])
+
+
 def add_token(text, parameters, index):
     """`text` with `{parameter}` added at the end, for the entry `index` of `token_labels`; `text`
     as it is when the prompt (index 0) or nothing was picked."""
@@ -110,12 +130,13 @@ def add_token(text, parameters, index):
     return "{}{{{}}}".format(text or "", parameters[index - 1])
 
 
-def unknown_tokens(template, parameters):
-    """The `{token}` names of `template` that are not a room parameter the model offered. Empty when
-    the model offered none (a list that could not be read must not make everything look wrong)."""
+def unknown_tokens(template, parameters, extra=()):
+    """The `{token}` names of `template` that are not a room parameter the model offered, nor one of `extra`
+    (`Seq_Counter`, for a Title on Sheet template). Empty when the model offered none (a list that could not be
+    read must not make everything look wrong)."""
     if not parameters:
         return []
-    known = set(p.strip().lower() for p in parameters)
+    known = set(p.strip().lower() for p in list(parameters) + list(extra))
     return [t for t in TOKEN.findall(template or "") if t.strip().lower() not in known]
 
 
