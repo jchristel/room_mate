@@ -79,6 +79,20 @@ class TypeCodes(unittest.TestCase):
         self.assertEqual(0, st.attach_type_codes(found, lambda e: asked.append(e)))
         self.assertEqual([], asked)
 
+    def test_each_tagged_item_gets_the_middle_of_its_box_and_a_room_tag_none(self):
+        centres = {1: (100.0, 200.0, 1500.0)}
+        found = [observation("independent", {"host_element_id": 1}, {"host_element_id": 9}),
+                 observation("room", {"host_element_id": 1})]
+        self.assertEqual(1, st.attach_centres(found, lambda e: centres.get(e.get("host_element_id"))))
+        self.assertEqual({"x": 100.0, "y": 200.0, "z": 1500.0}, found[0]["tag"]["tagged_elements"][0]["centre"])
+        self.assertNotIn("centre", found[0]["tag"]["tagged_elements"][1])
+        self.assertNotIn("centre", found[1]["tag"]["tagged_elements"][0])
+
+    def test_the_sheet_reader_attaches_centres_whether_or_not_a_type_code_parameter_is_set(self):
+        here = os.path.join(os.path.dirname(__file__), "..", "pyRevit", "room_m")
+        with open(os.path.join(here, "exporters", "sheets.py")) as f:
+            self.assertIn("attach_centres(pushed[\"tags\"], centre_reader(doc))", f.read())
+
     def test_the_sheet_reader_hands_the_parameter_to_the_code_reader_and_the_push_sends_it(self):
         here = os.path.join(os.path.dirname(__file__), "..", "pyRevit", "room_m")
         with open(os.path.join(here, "exporters", "sheets.py")) as f:

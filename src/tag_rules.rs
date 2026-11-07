@@ -107,6 +107,11 @@ pub struct TaggedElement {
     pub type_code: Option<String>,
     #[serde(default)]
     pub location_point: Option<Location>,
+    /// The middle of the element's bounding box, model mm, read by the extractor. An elevation sample is measured
+    /// from it when present: a family that sets its height with a parameter (a towel rail at 900, 1200 and 1500 mm)
+    /// keeps one insertion point at the level for every height, so offsets from that point put every tag in one place.
+    #[serde(default)]
+    pub centre: Option<P3>,
     #[serde(default)]
     pub elbow_location: Option<P3>,
     #[serde(default)]
@@ -302,6 +307,10 @@ pub struct Sample {
     /// For a room tag whose room was on the server: the head written against the room's boundary.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boundary: Option<Boundary>,
+    /// Elevations: the offsets are from the element's bounding-box centre, not its insertion point. A sample stored
+    /// before the centre was read is from the point, and the two cannot be converted into each other.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub from_centre: bool,
 }
 
 /// The one answer for a key: what a task applies.
@@ -320,6 +329,10 @@ pub struct Placement {
     /// `head`, is what is applied, so the tag follows the room's walls and not the plan's axes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub boundary: Option<Boundary>,
+    /// Elevations: the offsets are from the item's bounding-box centre (see [`Sample::from_centre`]), so the
+    /// plug-in must add them to the centre of the item it tags and not to its insertion point.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub from_centre: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -719,7 +732,10 @@ fn samples_of(
             } else {
                 facing_of(loc).ok_or_else(|| format!("tagged element {}: it has no plan facing", el.host_element_id))?
             };
-            let from = loc.translation_coord;
+            // An elevation is measured from the item's middle when the extractor read it, because the insertion point
+            // need not be at the item's height (a plan keeps the point: its offsets turn with the item's facing).
+            let centre = el.centre.filter(|_| looks.is_some());
+            let from = centre.unwrap_or(loc.translation_coord);
             let element_id = if el.link_element_id > 0 { el.link_element_id } else { el.host_element_id };
             // Bound to the push's blueprint: a room tag always, an item's tag only when the item is one of
             // the blueprint's (its id is the Revit element id, which the blueprint kept).
@@ -761,6 +777,7 @@ fn samples_of(
                 elbow: el.elbow_location.filter(|_| tag.has_leader).map(offset),
                 end: el.leader_end.filter(|_| tag.has_leader).map(offset),
                 boundary,
+                from_centre: centre.is_some(),
             };
             let kind = if tag.tag_kind.trim().is_empty() {
                 "independent".to_string()
@@ -807,7 +824,13 @@ fn mode(values: impl Iterator<Item = String>) -> String {
 
 /// The single placement a rule's samples agree on. Median per component; a rotation is the
 /// median of angles taken around the first (so a spread across +-pi does not average to nothing).
+/// Samples measured from an item's centre and from its insertion point are offsets from two different places, so
+/// they are never mixed: when any sample is from the centre only those count, and the rule is from the centre. A
+/// rule whose samples are all older stays from the point until its sheets are pushed again.
 pub fn reduce(samples: &[Sample]) -> Placement {
+    let centred: Vec<Sample> = samples.iter().filter(|s| s.from_centre).cloned().collect();
+    let from_centre = !centred.is_empty();
+    let samples = if from_centre { &centred[..] } else { samples };
     let anchor = samples.first().map_or(0.0, |s| s.rotation);
     let rotation = wrap(anchor + median(samples.iter().map(|s| wrap(s.rotation - anchor)).collect()));
     let leaders = samples.iter().filter(|s| s.has_leader).count();
@@ -834,6 +857,7 @@ pub fn reduce(samples: &[Sample]) -> Placement {
             None
         },
         boundary: reduce_boundary(samples),
+        from_centre,
     }
 }
 
@@ -1050,6 +1074,7 @@ mod tests {
             elbow: None,
             end: None,
             boundary: None,
+            from_centre: false,
         }
     }
 
@@ -1302,6 +1327,58 @@ mod tests {
     }
 
     #[test]
+    fn test_rails_at_three_heights_on_one_insertion_point_learn_one_offset_from_their_centres() {
+        // House A's WC: three towel rails share an insertion point at the level, and the family lifts each to
+        // 900, 1200 and 1500 mm. Their tags sit 100 mm below each rail. From the point the three samples are three
+        // answers (the task took the median and stacked every tag); from the centres they are one.
+        let d = dir();
+        let rail = |tag_id: i64, height: f64| {
+            let mut o = elevation_obs(tag_id, (1.0, 0.0));
+            o.tag.point = P3 { x: 200.0, y: 0.0, z: height - 100.0 };
+            o.tag.tagged_elements[0].centre = Some(P3 { x: 0.0, y: 0.0, z: height });
+            o
+        };
+        let out = push(d.path(), vec![rail(1, 900.0), rail(2, 1200.0), rail(3, 1500.0)]);
+        assert_eq!(out.samples, 3, "{:?}", out.skipped);
+        let rules = load_all(d.path(), "p").unwrap();
+        assert_eq!(rules.len(), 1);
+        let r = &rules[0];
+        assert!(r.samples.iter().all(|s| s.from_centre));
+        assert!(r.placement.from_centre);
+        // 200 mm right and 100 mm down at 1:50
+        assert!(
+            (r.placement.head.x - 4.0).abs() < 1e-9 && (r.placement.head.y + 2.0).abs() < 1e-9,
+            "{:?}",
+            r.placement
+        );
+    }
+
+    #[test]
+    fn test_a_plan_keeps_the_insertion_point_and_old_samples_are_not_mixed_with_centred_ones() {
+        let d = dir();
+        // a plan tag is measured from the point even when the centre was read
+        let mut plan = obs(1, 0.0, (1.0, 0.0), (200.0, 0.0));
+        plan.tag.tagged_elements[0].centre = Some(P3 { x: 50.0, y: 0.0, z: 400.0 });
+        push(d.path(), vec![plan]);
+        let rules = load_all(d.path(), "p").unwrap();
+        assert!(!rules[0].placement.from_centre && !rules[0].samples[0].from_centre);
+        assert!((rules[0].placement.head.x - 4.0).abs() < 1e-9);
+        // two samples from the point and one from the centre: the centre's alone decides, and says so
+        let mut old = sample_at(10.0, 1);
+        let old2 = sample_at(12.0, 2);
+        let mut new = sample_at(-3.0, 3);
+        new.from_centre = true;
+        let p = reduce(&[old.clone(), old2.clone(), new]);
+        assert!(p.from_centre);
+        assert_eq!(p.head.x, -3.0);
+        // and with none from the centre, nothing changes
+        old.head.x = 11.0;
+        let p = reduce(&[old, old2]);
+        assert!(!p.from_centre);
+        assert_eq!(p.head.x, 11.5);
+    }
+
+    #[test]
     fn test_an_elevation_with_no_view_direction_gives_no_sample_and_a_plan_rule_keeps_its_id() {
         let d = dir();
         let mut o = elevation_obs(1, (0.0, 1.0));
@@ -1426,6 +1503,7 @@ mod tests {
             elbow: None,
             end: None,
             boundary: Some(Boundary { of: BoundaryOf::Wall, edge, along, off }),
+            from_centre: false,
         };
         let p = reduce(&[at(2, 0.2, 10.0), at(2, 0.4, 14.0), at(1, 0.9, 99.0)]);
         let b = p.boundary.unwrap();
@@ -1728,6 +1806,7 @@ mod tests {
             elbow: None,
             end: None,
             boundary: None,
+            from_centre: false,
         };
         let p = reduce(&[s(3.1), s(-3.1), s(3.12)]);
         assert!(p.rotation.abs() > 3.0, "{}", p.rotation);

@@ -115,3 +115,19 @@ class RefreshNote(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Remembered(unittest.TestCase):
+    PROJECTS = [{"id": "a", "name": "A"}, {"id": "b", "name": "B"}]
+
+    def test_what_a_run_saved_comes_back(self):
+        saved = form.to_save({"id": "b", "name": "B"}, "00.0", form.KIND_RLS, "LEVEL 1")
+        self.assertNotIn("task_ids", saved, "the checked tasks are never kept")
+        index, text, kind, level = form.remembered(saved, self.PROJECTS)
+        self.assertEqual((1, "00.0", "LEVEL 1"), (index, text, level))
+        self.assertEqual(form.KIND_RLS, form.KIND_FILTERS[kind][0])
+
+    def test_nothing_saved_or_a_project_gone_is_the_default(self):
+        self.assertEqual((None, "", 0, form.ALL_LEVELS), form.remembered({}, self.PROJECTS))
+        self.assertEqual((None, "", 0, form.ALL_LEVELS),
+                         form.remembered({"project": "gone", "kind": "nonsense"}, self.PROJECTS))

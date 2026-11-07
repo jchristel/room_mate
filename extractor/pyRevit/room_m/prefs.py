@@ -1,10 +1,10 @@
-"""What the windows remember between runs: the last project, what was exported, the sheet filter and room rule.
+"""What the windows remember between runs: the last project, what was exported, the filters and room rules.
 
 ASCII only, and no em-dashes: IronPython 2.7 will not parse a file containing one. Pure Python, so CPython runs
 it (`extractor/tests/test_prefs.py`).
 
 **A file beside `server.json`** (`RoomMate\\prefs.json` in the user's application data), one JSON object with a
-section per window (`export`, `sheets`). It is a convenience and never a requirement: a missing, unreadable or
+section per window (`export`, `sheets`, `blueprints`, `tasks`). It is a convenience and never a requirement: a missing, unreadable or
 half-written file is an empty answer, and a write that fails is reported with False and never raised, so a
 window that cannot remember still works. A section is replaced whole by `save_section`; the others are kept.
 What is stored is what a person typed or ticked (a project id, entity keys, level names): nothing secret.

@@ -303,6 +303,21 @@ class RoomTag(unittest.TestCase):
         self.assertIsNone(verdict()["plan"]["room_tag_head"])
 
 
+class PlanCrop(unittest.TestCase):
+    def test_the_server_s_crop_becomes_a_centre_and_a_size(self):
+        t = task()
+        t["rls"]["plan_crop"] = {"min": [1000, 2000], "max": [5000, 4000], "offsets_mm": {}}
+        self.assertEqual(
+            {"centre": [3000.0, 3000.0], "size": [4000.0, 2000.0], "min": [1000.0, 2000.0], "max": [5000.0, 4000.0]},
+            verdict(t)["plan"]["plan_crop"])
+
+    def test_no_crop_or_a_broken_one_means_the_writer_crops_round_the_room(self):
+        self.assertIsNone(verdict()["plan"]["plan_crop"])
+        t = task()
+        t["rls"]["plan_crop"] = {"min": [5000, 2000], "max": [1000, 4000]}
+        self.assertIsNone(verdict(t)["plan"]["plan_crop"])
+
+
 class Source(unittest.TestCase):
     def test_sheets_and_items_go_to_their_own_handlers(self):
         from room_m import task_dispatch
