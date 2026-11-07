@@ -57,12 +57,15 @@ What is genuinely different about FF&E, and why:
   Not an exception to the rule above: the export does not carry it at all, so
   this fills a gap rather than choosing between two answers.
 
-- **Components are pushed, not filtered.** `super_component_id` rides every
-  item and the server's `[ffe] nested_components` decides at read time. 179 of
-  647 House A instances are components; dropping them here would put the count
-  where nobody can see it, which is exactly how 2236 hardware "doors" stayed
-  invisible on one job. `nested_reason` below is therefore never reached, and
-  says so.
+- **Components are pushed, not filtered, unless the export window says so.**
+  `super_component_id` rides every item and the server's `[ffe]
+  nested_components` decides at read time. 179 of 647 House A instances are
+  components; dropping them here puts the count where nobody can see it, which
+  is exactly how 2236 hardware "doors" stayed invisible on one job, so the
+  window's "Include shared nested families" starts ticked for FF&E. Unticked,
+  every item with a super component is left out (`export_form.
+  is_left_out_nested`) and the empty-push message says so. Either way each host
+  item carries `sub_components`, what is nested in it (`utils.nesting`).
 
 - **An empty FF&E push is refused here, though the server accepts one.** The
   asymmetry every entity has, for the reason `post_doors` records: the server
@@ -228,6 +231,8 @@ def translate_item(item, contribution):
         # has no footprint, and the viewer draws it as a marker.
         "loops": loops_from_polygon(item.get("polygon")),
         "super_component_id": parent,
+        # the other direction: what is nested in this item, every depth (`utils.nesting`); empty for none
+        "sub_components": (contribution.get("nesting") or {}).get(item_id, []),
         "type_id": str(type_props.get("id", "unknown")),
         "type_name": type_props.get("name", "Unknown Type"),
         # Read from Revit by `item_facts` because the export carries neither: no
@@ -247,11 +252,9 @@ FFE = EntityPush(
     url="/ffe",
     url_stream="/ffe/stream",
     translate=translate_item,
-    # Never reached: this producer applies no nested filter, because whether a
-    # component is an item is a project convention and lives in the server's
-    # `[ffe] nested_components`. Stated rather than left empty so an empty push
-    # cannot silently report a reason it did not use.
-    nested_reason="components are not filtered by this producer",
+    # Reached only when the export window left components out (by default they
+    # are pushed and the server's `[ffe] nested_components` decides).
+    nested_reason="nested in another family (left out by the export window)",
 )
 
 # Kept as module constants because callers and tests reference them by name.

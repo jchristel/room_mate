@@ -26,6 +26,60 @@ ENTITIES = [
 ]
 
 
+# (control name, entity key, ticked by default): "Include shared nested families", one box beside each entity that
+# has a nested rule. Only a SHARED nested family is an instance of its own in the project, so it is the only kind
+# an export can see. The defaults are what the producer did before the boxes existed:
+# - doors and windows drop an instance nested in another of the same category (`utils.openings.nested_opening_ids`:
+#   a leaf, a panel, glazing; 55% of one facade file's "doors"), so they start unticked;
+# - FF&E pushed every component and left the decision to the server's `[ffe] nested_components` at read time, so it
+#   starts ticked. Unticked drops every item with a super component before it is sent, and then the server cannot
+#   see it at all: a create-RLS task cannot tag a nested part (a shower rail) the library has a rule for.
+# Whichever is chosen, each host still carries its `sub_components` (`utils.nesting`).
+NESTED = [
+    ("cb_nested_doors", "doors", False),
+    ("cb_nested_windows", "windows", False),
+    ("cb_nested_ffe", "ffe", True),
+    ("cb_nested_ffe_by_space", "ffe_by_space", True),
+]
+
+NESTED_LABEL = "Include Shared Nested Families"
+
+
+def nested_default():
+    """The entity keys whose nested families are included when nothing says otherwise (the single-entity buttons,
+    a first run of the window)."""
+    return set(key for _name, key, on in NESTED if on)
+
+
+def nested_ticked(ticked):
+    """The entity keys whose "Include shared nested families" box is ticked. `ticked` is the set of control names."""
+    return set(key for name, key, _on in NESTED if name in ticked)
+
+
+def apply_nested(entity, contribution, include):
+    """Make one model's `contribution` to `entity`'s bucket say what the nested choice asked for; the push step
+    (`is_left_out_nested`, below) drops what it names. Doors and windows always read their nested ids, so
+    including them is forgetting the set; FF&E reads none, so leaving them out is a flag that drops any item whose
+    `super_component_id` is set. An entity with no nested rule is left alone."""
+    if contribution is None:
+        return contribution
+    if entity in ("doors", "windows"):
+        if include:
+            contribution["nested_ids"] = set()
+    elif entity in ("ffe", "ffe_by_space"):
+        contribution["drop_components"] = not include
+    return contribution
+
+
+def is_left_out_nested(element, contribution, nested_ids):
+    """Whether the run's nested choice leaves `element` out: an opening the exporter named as nested in another
+    of its category (`nested_ids`, emptied when the export window includes them), or an FF&E component when the
+    window asked for none (`drop_components`, set by `export_form.apply_nested`)."""
+    if element["id"] in nested_ids:
+        return True
+    return bool(contribution.get("drop_components")) and bool(element.get("super_component_id"))
+
+
 def entities_ticked(ticked):
     """The entity keys ticked, in the window's order. `ticked` is the set of control names that are
     ticked."""
@@ -60,8 +114,9 @@ def default_phase(phases, server_phases):
 
 def remembered(saved, projects, names):
     """What the window starts with, from the saved section of `prefs`: `{"project": index or None,
-    "entities": set of control names, "levels": None for the whole model or the level names still present}`.
-    Anything saved that no longer exists (a project removed, a level renamed) is dropped, never an error."""
+    "entities": set of control names, "levels": None for the whole model or the level names still present,
+    "nested": set of nested control names}`. Anything saved that no longer exists (a project removed, a level
+    renamed) is dropped, never an error; a save from before the nested boxes gets their defaults."""
     saved = saved or {}
     index = None
     for i, project in enumerate(projects):
@@ -73,16 +128,20 @@ def remembered(saved, projects, names):
     if saved.get("scope") == "levels":
         kept = [n for n in (saved.get("levels") or []) if n in set(names)]
         levels = kept or None
-    return {"project": index, "entities": ticked, "levels": levels}
+    nested_keys = set(saved["nested"]) if "nested" in saved else nested_default()
+    nested = set(name for name, key, _on in NESTED if key in nested_keys)
+    return {"project": index, "entities": ticked, "levels": levels, "nested": nested}
 
 
-def to_save(project, entities, levels):
-    """The section `prefs` keeps after an export: the project id, the entity keys and the scope."""
+def to_save(project, entities, levels, nested=None):
+    """The section `prefs` keeps after an export: the project id, the entity keys, the scope and the entity keys
+    whose nested families were included."""
     return {
         "project": (project or {}).get("id"),
         "entities": list(entities),
         "scope": "whole" if levels is None else "levels",
         "levels": list(levels or []),
+        "nested": sorted(nested_default() if nested is None else nested),
     }
 
 

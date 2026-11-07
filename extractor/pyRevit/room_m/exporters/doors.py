@@ -44,6 +44,7 @@ from room_m.export_form import level_kwargs
 from room_m import report
 from room_m.post_doors import post_doors_stream
 
+from room_m.utils.nesting import read_nesting
 from room_m.utils.openings import (
     nested_opening_ids,
     opening_placements,
@@ -66,7 +67,7 @@ def export_model(selected_doc, phase_name, return_value, level_ids=None):
     Failures are recorded and swallowed rather than raised, so one unreadable
     document costs its own doors and not the rest of the run's.
 
-    :return: `{"elements", "levels", "placements", "allowed_ids", "nested_ids"}` --
+    :return: `{"elements", "levels", "placements", "allowed_ids", "nested_ids", "nesting"}` --
         the raw duHast exports, the Revit-read placements, this document's phase
         filter, and the doors that are components of another door.
     :rtype: dict
@@ -77,6 +78,7 @@ def export_model(selected_doc, phase_name, return_value, level_ids=None):
         # door at all" are different fates, and an empty push has to be able to
         # name which one emptied it. See `nested_opening_ids`.
         nested_ids = nested_opening_ids(selected_doc, BuiltInCategory.OST_Doors)
+        nesting = read_nesting(selected_doc)
         # Read from the Revit API, not from the export -- see `opening_placements`.
         # Keyed by bare door id and therefore only ever used against ITS OWN
         # model's doors, which is why it rides the contribution rather than being
@@ -112,6 +114,8 @@ def export_model(selected_doc, phase_name, return_value, level_ids=None):
         "placements": placements,
         "allowed_ids": allowed_door_ids,
         "nested_ids": nested_ids,
+        # every opening's shared nested families, whether or not they are pushed (`utils.nesting`)
+        "nesting": nesting,
     }
 
 

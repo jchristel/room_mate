@@ -2259,6 +2259,7 @@ pub async fn get_ffe(
         milestone: query.milestone.as_deref(),
         filter: filter.as_ref(),
         storeys: storeys.as_ref(),
+        with_components: false,
     };
 
     // Both kinds, because an FF&E response is not a function of FF&E alone:
@@ -5010,6 +5011,7 @@ mod tests {
             // no position and no direction is a state the contract carries.
             insertion_point: None,
             through_wall_normal: None,
+            sub_components: Vec::new(),
             type_id: "t1".to_string(),
             type_name: "Single".to_string(),
             properties: BTreeMap::new(),

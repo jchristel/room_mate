@@ -194,6 +194,10 @@ pub struct ItemScope<'a> {
     /// The storeys the viewer is showing; `None` reads every storey. See
     /// `entity_scope::StoreyScope`.
     pub storeys: Option<&'a entity_scope::StoreyScope>,
+    /// Return nested components whatever `[ffe] nested_components` says (each still marked `is_component`). The
+    /// policy is a READER's view of the room; a create-RLS task needs the components too, because a person may have
+    /// tagged one (a shower rail nested in its shower) and that tag is a rule the task must be able to apply.
+    pub with_components: bool,
 }
 
 /// The merged FF&E payload, as `/ffe` answers it.
@@ -337,7 +341,7 @@ pub fn assemble_items(state: &AppState, scope: &ItemScope<'_>) -> Result<Option<
             // of what the policy removed rather than of what happened to be in
             // the snapshot -- which is the number that tells a reader whether a
             // homeless-looking model is a data artifact.
-            if is_component && nested == NestedComponents::Exclude {
+            if is_component && nested == NestedComponents::Exclude && !scope.with_components {
                 excluded_components += 1;
                 continue;
             }
@@ -498,6 +502,7 @@ mod tests {
             facing: None,
             loops: vec![],
             super_component_id: parent.map(str::to_string),
+            sub_components: Vec::new(),
             type_id: "t1".to_string(),
             type_name: "Desk 1600x800".to_string(),
             family_name: None,

@@ -69,6 +69,7 @@ from room_m.export_form import level_kwargs
 from room_m import report
 from room_m.post_ffe import post_ffe_stream
 
+from room_m.utils.nesting import read_nesting
 from room_m.utils.items import (
     item_facts,
     items_in_phase,
@@ -100,7 +101,7 @@ def export_model(selected_doc, phase_name, return_value, identify_by="room", lev
     verdict condition in the probe: a producer walking eight categories while
     the export walked nine would report a drop that was its own.
 
-    :return: `{"elements", "levels", "facts", "allowed_ids"}` -- the raw duHast
+    :return: `{"elements", "levels", "facts", "allowed_ids", "nesting"}` -- the raw duHast
         exports, the Revit-read room/space and category per item, and this
         document's phase filter.
     :rtype: dict
@@ -113,11 +114,15 @@ def export_model(selected_doc, phase_name, return_value, identify_by="room", lev
         # being merged into one run-wide map: element ids, like room ids, are
         # unique only within a document.
         #
-        # **No nested filter beside it**, unlike the openings exporters. Whether
-        # a component is an item is a project convention, so it is the server's
-        # `[ffe] nested_components` applied at read time -- where it can change
-        # without a re-push and where the count of what it removed is reported.
+        # **No nested filter beside it by default**, unlike the openings
+        # exporters. Whether a component is an item is a project convention, so
+        # it is the server's `[ffe] nested_components` applied at read time --
+        # where it can change without a re-push and where the count of what it
+        # removed is reported. The export window can still leave components out
+        # of the push (`export_form.apply_nested`).
         facts = item_facts(selected_doc, phase_name, DEFAULT_ITEM_CATEGORIES, identify_by=identify_by)
+        # what is nested in each item, sent on the host whether or not the components are (`utils.nesting`)
+        nesting = read_nesting(selected_doc)
 
         item_data = get_all_item_data(selected_doc, **level_kwargs(level_ids))
         json_formatted_items = build_json_for_file(
@@ -145,6 +150,7 @@ def export_model(selected_doc, phase_name, return_value, identify_by="room", lev
         "levels": json_formatted_levels,
         "facts": facts,
         "allowed_ids": allowed_item_ids,
+        "nesting": nesting,
     }
 
 

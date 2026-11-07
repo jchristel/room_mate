@@ -659,6 +659,7 @@ mod tests {
             // no position and no direction is a state the contract carries.
             insertion_point: None,
             through_wall_normal: None,
+            sub_components: Vec::new(),
             type_id: "t1".to_string(),
             type_name: "Single".to_string(),
             properties,
@@ -823,6 +824,7 @@ mod tests {
             to_room: Some("r2".to_string()),
             insertion_point: Some(crate::contract::Point2D { x: 1.5, y: 0.125 }),
             through_wall_normal: Some(crate::contract::Point2D { x: 0.0, y: 1.0 }),
+            sub_components: Vec::new(),
             type_id: "t1".to_string(),
             type_name: "Single".to_string(),
             properties: BTreeMap::from([(

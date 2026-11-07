@@ -33,6 +33,7 @@ use super::blueprint_geometry::{coarse_outline, dot, edges, sub, Edge, Pt};
 use super::blueprint_resolve::best_shift;
 use super::elevation_facing::{read_sheet, Elevation};
 use super::rls_tags::{TagPlan, TagRequest};
+use super::rls_three_d::ThreeDPlan;
 
 /// The sizes a sheet can be asked for; the plug-in maps each to a title block family.
 pub const SIZES: [&str; 4] = ["a0", "a1", "a2", "a3"];
@@ -116,6 +117,11 @@ pub struct RlsPlan {
     /// outline is unknown; the plug-in then crops round the room as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_crop: Option<PlanCrop>,
+    /// What each new 3D view hides and sees through, in the template's order of 3D viewports
+    /// (`rls_three_d::three_ds`). Empty when the template has none or the room's outline is unknown; the plug-in then
+    /// hides walls by its own rule and sees through nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub three_ds: Vec<ThreeDPlan>,
 }
 
 /// A plan view's crop in this room: a rectangle in the target model's frame, mm, and the offsets of each side from

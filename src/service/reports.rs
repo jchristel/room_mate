@@ -923,6 +923,7 @@ fn read_items(state: &AppState, scope: &ReportScope<'_>) -> Result<Option<Vec<El
         milestone: scope.milestone,
         filter: None,
         storeys: None,
+        with_components: false,
     };
     Ok(items::assemble_items(state, &item_scope)?.map(|result| {
         let names = level_names_by_model(&result.levels_by_model);
@@ -1664,6 +1665,7 @@ mod tests {
             to_room: to_room.map(str::to_string),
             insertion_point: None,
             through_wall_normal: None,
+            sub_components: Vec::new(),
             type_id: "t1".to_string(),
             type_name: "Single".to_string(),
             properties,

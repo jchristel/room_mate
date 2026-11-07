@@ -104,6 +104,29 @@ pub struct Loop {
     pub points: Vec<Point2D>,
 }
 
+/// One shared nested family instance inside a host instance (a door, a window, an FF&E item), as Revit reports it:
+/// `FamilyInstance.SuperComponent`, read by the extractor (`room_m.utils.nesting`).
+///
+/// **On the host, and whether or not the component is pushed as an element of its own.** A door leaf is dropped by
+/// default (it is not a door) and an FF&E component may be, so the parent link on the child alone (`Item::
+/// super_component_id`) cannot say what a host family brings with it. That is the question a blueprint asks when it
+/// swaps a family: which nested families arrive with the new one and which go with the old. Every depth is listed,
+/// flat, each naming its own `parent_id` (the host's id for a direct child), so the tree is rebuilt without a
+/// recursive type on the wire. Only SHARED nested families are instances in the project; a non-shared one exists
+/// only inside the family document and is not seen.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SubComponent {
+    pub id: String,
+    pub parent_id: String,
+    /// `Category.Name` ("Generic Models"), absent when Revit gave none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub category: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_name: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Level {
     pub id: String,

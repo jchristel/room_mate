@@ -165,6 +165,8 @@ class RlsFacts(RevitFacts):
 
 
 MM_PER_FT = geo.MM_PER_FT
+# How transparent (0 to 100) an item along a hidden wall is drawn in a new 3D view: seen, without hiding the room.
+SEE_THROUGH = 70
 
 
 def _ft(mm):
@@ -488,52 +490,120 @@ class RlsWriter(object):
                 lambda v=v: create_view_3d_around_box_without_transaction_wrapper(
                     self.doc, view_type, v["name"], v["forward"], v["up"], low, high, phase),
             ).result[0]
-            self._hide_walls_in_the_way(view, room, low, high, v["forward"], v["name"], notes)
+            self._hide_walls_in_the_way(view, room, low, high, v, notes)
             self._title_on_sheet(view, v.get("title"), v["name"], notes)
             self._viewport(sheet, view, v["viewport"], notes, v["name"], "three_d")
 
-    def _hide_walls_in_the_way(self, view, room, low, high, forward, name, notes):
-        """Hide, in the new 3D view, the room's walls that stand between its camera and the middle of the room
-        (seen in plan: `room_m.view_walls`). The camera is where `create_view_3d_around_box` puts it. A failure
-        here is a note: the view is made and placed either way."""
+    def _hide_walls_in_the_way(self, view, room, low, high, three_d, notes):
+        """Hide, in the new 3D view, the walls on the camera's side of the room and make the items along them
+        transparent (`SEE_THROUGH`). **The server decides which** (`three_d["server"]`, `service::rls_three_d`): the
+        edges of the room's outline whose walls go, and every wall with a face along one within its band is hidden
+        (`view_walls.walls_along`). A task without it (made before, or for a room the server has no outline of)
+        falls back on the plug-in's own rule from Revit's boundary (`view_walls.walls_to_hide`) and sees through
+        nothing. A failure here is a note: the view is made and placed either way."""
+        name = three_d["name"]
+        server = three_d.get("server")
         try:
-            centre = ((low.X + high.X) / 2.0, (low.Y + high.Y) / 2.0)
-            eye = view_walls.eye_xy(centre, forward, low.DistanceTo(high) * 2.0)
-            if eye is None:
-                return
-            boundary = []
-            for loop in room.GetBoundarySegments(SpatialElementBoundaryOptions()) or []:
-                for segment in loop:
-                    wall = self.doc.GetElement(segment.ElementId)
-                    if wall is None or wall.Category is None or get_el_id_int(wall.Category.Id) != int(BuiltInCategory.OST_Walls):
-                        continue
-                    curve = segment.GetCurve()
-                    a, b = curve.GetEndPoint(0), curve.GetEndPoint(1)
-                    boundary.append((segment.ElementId, (a.X, a.Y), (b.X, b.Y)))
-            # the room's own centre in plan is what the camera looks at
-            box = room.get_BoundingBox(None)
-            looked_at = ((box.Min.X + box.Max.X) / 2.0, (box.Min.Y + box.Max.Y) / 2.0)
-            ids = view_walls.blocking(eye, looked_at, [(get_el_id_int(i), p, q) for i, p, q in boundary])
-            if not ids:
-                return
-            by_value = dict((get_el_id_int(i), i) for i, _, _ in boundary)
-            from System.Collections.Generic import List
-            from Autodesk.Revit.DB import ElementId
-
-            hide = List[ElementId]()
-            for value in ids:
-                hide.Add(by_value[value])
-
-            def work():
-                result = Result()
-                view.HideElements(hide)
-                return result
-
-            self._step("RoomMate: hide walls in {}".format(name), work)
-            notes.append("{}: {} wall(s) between the camera and the room hidden".format(name, len(ids)))
+            if server:
+                ids = self._walls_along(server, low, high)
+            else:
+                ids = self._walls_by_boundary(room, low, high, three_d["forward"])
+            if ids:
+                self._hide(view, ids, name)
+                notes.append("{}: {} wall(s) facing the camera or in its way hidden".format(name, len(ids)))
         except Exception as e:
             task_log.exception("hiding walls in {}".format(name))
             notes.append("{}: walls in the way were not hidden ({})".format(name, e))
+        if server:
+            self._see_through(view, server.get("see_through") or [], name, notes)
+
+    def _walls_along(self, server, low, high):
+        """The ids of the straight walls inside the section box with a face along one of the server's edges."""
+        from Autodesk.Revit.DB import BoundingBoxIntersectsFilter, FilteredElementCollector, Line, Outline, Wall
+
+        if not server.get("hide"):
+            return []
+        walls = []
+        by_key = {}
+        found = FilteredElementCollector(self.doc).OfClass(Wall).WherePasses(BoundingBoxIntersectsFilter(Outline(low, high)))
+        for wall in found:
+            curve = getattr(wall.Location, "Curve", None)
+            if not isinstance(curve, Line):
+                continue  # a curved wall has no straight face to compare
+            a, b = curve.GetEndPoint(0), curve.GetEndPoint(1)
+            key = get_el_id_int(wall.Id)
+            by_key[key] = wall.Id
+            walls.append((key, (a.X * MM_PER_FT, a.Y * MM_PER_FT), (b.X * MM_PER_FT, b.Y * MM_PER_FT), wall.Width * MM_PER_FT / 2.0))
+        return [by_key[k] for k in view_walls.walls_along(walls, server["hide"], float(server.get("band_mm") or 0.0))]
+
+    def _walls_by_boundary(self, room, low, high, forward):
+        """The plug-in's own rule, for a task the server sent no edges for: the room's boundary walls crossed by the
+        line from the camera to the middle of the room, or facing the camera."""
+        centre = ((low.X + high.X) / 2.0, (low.Y + high.Y) / 2.0)
+        eye = view_walls.eye_xy(centre, forward, low.DistanceTo(high) * 2.0)
+        if eye is None:
+            return []
+        # every piece of every loop, in order (a piece that is not a wall keeps its place with no key, so the
+        # loop's direction still reads right); the first loop is the room's outer boundary
+        loops = []
+        by_value = {}
+        for loop in room.GetBoundarySegments(SpatialElementBoundaryOptions()) or []:
+            pieces = []
+            for segment in loop:
+                curve = segment.GetCurve()
+                a, b = curve.GetEndPoint(0), curve.GetEndPoint(1)
+                wall = self.doc.GetElement(segment.ElementId)
+                key = None
+                if wall is not None and wall.Category is not None and get_el_id_int(wall.Category.Id) == int(BuiltInCategory.OST_Walls):
+                    key = get_el_id_int(segment.ElementId)
+                    by_value[key] = segment.ElementId
+                pieces.append((key, (a.X, a.Y), (b.X, b.Y)))
+            loops.append(pieces)
+        # the room's own centre in plan is what the camera looks at
+        box = room.get_BoundingBox(None)
+        looked_at = ((box.Min.X + box.Max.X) / 2.0, (box.Min.Y + box.Max.Y) / 2.0)
+        return [by_value[k] for k in view_walls.walls_to_hide(eye, looked_at, loops)]
+
+    def _hide(self, view, element_ids, name):
+        from System.Collections.Generic import List
+        from Autodesk.Revit.DB import ElementId
+
+        hide = List[ElementId]()
+        for element_id in element_ids:
+            hide.Add(element_id)
+
+        def work():
+            result = Result()
+            view.HideElements(hide)
+            return result
+
+        self._step("RoomMate: hide walls in {}".format(name), work)
+
+    def _see_through(self, view, item_ids, name, notes):
+        """Make the items standing along the hidden walls (the server's `see_through`) transparent in `view` only.
+        An id the model no longer has is skipped; a failure is a note."""
+        if not item_ids:
+            return
+        try:
+            from Autodesk.Revit.DB import OverrideGraphicSettings
+
+            elements = [self.doc.GetElement(get_element_id_from_int(int(i))) for i in item_ids]
+            elements = [e for e in elements if e is not None]
+
+            def work():
+                result = Result()
+                for element in elements:
+                    settings = OverrideGraphicSettings()
+                    settings.SetSurfaceTransparency(SEE_THROUGH)
+                    view.SetElementOverrides(element.Id, settings)
+                return result
+
+            if elements:
+                self._step("RoomMate: see through items in {}".format(name), work)
+            notes.append("{}: {} item(s) along the hidden walls made transparent".format(name, len(elements)))
+        except Exception as e:
+            task_log.exception("making items transparent in {}".format(name))
+            notes.append("{}: items along the hidden walls were not made transparent ({})".format(name, e))
 
     def _schedule(self, plan, room, sheet, notes):
         base = self.facts.schedule(plan["schedule_base"])

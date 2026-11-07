@@ -259,6 +259,13 @@ pub struct Item {
     #[serde(default)]
     pub super_component_id: Option<String>,
 
+    /// The shared nested families inside this item, every depth, with their parents (see `SubComponent`): the other
+    /// direction from `super_component_id`, and on the host because a component may not be pushed at all (the export
+    /// window can leave them out). Empty, and left out of the JSON, for an item with none and for a snapshot exported
+    /// before it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sub_components: Vec<super::SubComponent>,
+
     /// The `ElementId` of the item's family type, as a string.
     ///
     /// Carried because `type_properties` below is a *shared* tier — every
@@ -501,6 +508,36 @@ mod tests {
         );
     }
 
+    /// A host lists what is nested in it, every depth with its parent, and an item with none says nothing on the wire,
+    /// so a snapshot exported before the field reads the same as one whose items have no components.
+    #[test]
+    fn test_a_host_lists_its_nested_families_and_none_is_left_out() {
+        let json = serde_json::json!({
+            "id": "3470070", "level_id": "1483", "category": "Plumbing Fixtures",
+            "sub_components": [
+                {"id": "3470075", "parent_id": "3470070", "category": "Specialty Equipment",
+                 "family_name": "Shower_Rail", "type_name": "HYTP-100"},
+                {"id": "3470076", "parent_id": "3470075"}
+            ],
+            "type_id": "t", "type_name": "Shower 900"
+        });
+
+        let item: Item = serde_json::from_value(json).unwrap();
+        assert_eq!(item.sub_components.len(), 2);
+        assert_eq!(item.sub_components[1].parent_id, "3470075", "a grandchild names its own parent");
+        assert_eq!(item.sub_components[1].family_name, None);
+        let back = serde_json::to_value(&item).unwrap();
+        assert_eq!(back["sub_components"][0]["type_name"], "HYTP-100");
+        assert!(back["sub_components"][1].get("category").is_none());
+
+        let plain: Item = serde_json::from_value(serde_json::json!({
+            "id": "1", "level_id": "1", "category": "c", "type_id": "t", "type_name": "n"
+        }))
+        .unwrap();
+        assert!(plain.sub_components.is_empty());
+        assert!(serde_json::to_value(&plain).unwrap().get("sub_components").is_none());
+    }
+
     /// The two tiers resolve with instance-then-type precedence, and a BLANK
     /// instance value does not shadow a real type value -- the same rule an
     /// opening obeys, asserted here so the shared `lookup_property` cannot
@@ -517,6 +554,7 @@ mod tests {
             facing: None,
             loops: vec![],
             super_component_id: None,
+            sub_components: Vec::new(),
             type_id: "t".into(),
             type_name: "Desk".into(),
             family_name: None,

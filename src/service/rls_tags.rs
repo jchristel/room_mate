@@ -56,6 +56,9 @@ pub struct RoomItem {
     pub type_code: Option<String>,
     pub footprint: Vec<Pt>,
     pub facing: Option<Pt>,
+    /// A component of another family instance (a shower rail in its shower). Tagged only when the library has a
+    /// rule for its type code, and never offered as a candidate: see `plan_tags`.
+    pub nested: bool,
     pub properties: Vec<Property>,
     pub type_properties: Vec<Property>,
 }
@@ -393,6 +396,15 @@ pub fn plan_tags(
     rules: &[RuleSummary],
     request: &TagRequest,
 ) -> TagPlan {
+    // A nested component is a part of a family, so it is not one of the room's items unless someone tagged its
+    // type: then the library has a rule for its code, and the task applies it like any other. One nobody tagged (a
+    // handle, a hinge) is left out entirely, never offered as a candidate nor listed as untagged.
+    let kept: Vec<RoomItem> = items
+        .iter()
+        .filter(|i| !i.nested || rules.iter().any(|r| !is_spatial(&r.tag_kind) && has_code(r, i)))
+        .cloned()
+        .collect();
+    let items = &kept[..];
     let elevations: Vec<&ViewPlan> = markers.iter().flat_map(|m| &m.views).collect();
     let dismissed_ids: Vec<&str> = request
         .choices
@@ -509,6 +521,7 @@ mod tests {
                 (c.0 - 400.0, c.1 + 300.0),
             ],
             facing,
+            nested: false,
             properties: vec![Property { name: "Mark".into(), value: format!("M-{id}") }],
             type_properties: vec![],
         }
@@ -582,6 +595,21 @@ mod tests {
         let head = tag.head.unwrap();
         assert!((head[0] - 2000.0).abs() < 1e-6 && (head[1] - 1000.0).abs() < 1e-6, "{head:?}");
         assert!(plan.items_without_tags.is_empty() || plan.items_without_tags[0].in_views == vec![2]);
+    }
+
+    #[test]
+    fn a_nested_item_is_tagged_only_when_the_library_has_a_rule_for_its_type_code() {
+        // House A's WC: a shower rail nested in its shower carries a tag someone placed, so its code has a rule; a
+        // handle nested in a cupboard has none and must not appear at all, not even as a candidate
+        let mut rail = item("rail", "Rail", (2000.0, 500.0), Some((0.0, 1.0)));
+        rail.nested = true;
+        let mut handle = item("handle", "Handle", (1000.0, 500.0), Some((0.0, 1.0)));
+        handle.nested = true;
+        let plan = plan_tags(&sheet(), &[rail, handle], &markers(), &[rule("Rail", 10.0, 0.0)], &TagRequest::default());
+        let ids: Vec<&str> = plan.views.iter().flat_map(|v| v.tagged.iter().map(|t| t.item_id.as_str())).collect();
+        assert_eq!(ids, ["rail"]);
+        assert!(plan.views.iter().all(|v| v.candidates.iter().all(|c| c.item_id != "handle")));
+        assert!(plan.items_without_tags.iter().all(|u| u.item.item_id != "handle"));
     }
 
     fn elevation_rule(family: &str, side: &str, right: f64, up: f64) -> RuleSummary {

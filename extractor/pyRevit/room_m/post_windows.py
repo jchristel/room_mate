@@ -92,7 +92,7 @@ WINDOWS = EntityPush(
     url="/windows",
     url_stream="/windows/stream",
     translate=lambda element, contribution: translate_opening(
-        element, contribution["placements"]
+        element, contribution["placements"], contribution.get("nesting")
     ),
     nested_reason="nested inside another window (glazing, panels, hardware)",
 )

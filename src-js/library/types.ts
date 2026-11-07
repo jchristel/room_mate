@@ -84,6 +84,10 @@ export interface ViewInfo {
   line_end?: Point3 | null;
   /** Plan: the crop box in the model's frame, mm. */
   bounding_box?: PaperBox;
+  /** 3D: the direction the camera looks along (any length), and the section box in the model's frame, mm. */
+  forward_direction?: Point3 | null;
+  section_box_min?: Point3 | null;
+  section_box_max?: Point3 | null;
 }
 
 export interface ViewportInfo {

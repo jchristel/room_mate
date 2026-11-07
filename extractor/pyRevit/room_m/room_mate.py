@@ -1177,13 +1177,14 @@ def export_all_entry(doc, uiapp, output, forms):
                 "Cancelled: nothing was exported.", run_report.CANCELLED))
             return return_value
         # what to start with next time: the project, what was ticked and the levels
-        prefs.save_section("export", export_form.to_save(choice["project"], choice["entities"], choice["levels"]))
+        prefs.save_section("export", export_form.to_save(
+            choice["project"], choice["entities"], choice["levels"], choice["nested"]))
 
         return_value.append_message(export_form.summary(
             choice["entities"], choice["project"]["name"], choice["phase"], selected_docs, choice["levels"]))
         _run_export(
             selected_docs, choice["project"], choice["phase"], choice["entities"],
-            return_value, forms, levels=choice["levels"])
+            return_value, forms, levels=choice["levels"], nested=choice["nested"])
     except Exception as e:
         return_value.update_sep(False, "Export failed with exception: {}".format(e))
         print("Export failed with exception: {}".format(e))
@@ -1289,13 +1290,19 @@ def _level_ids(levels, selected_doc):
     return export_form.scope_for_doc(document_levels(selected_doc), levels)
 
 
-def _run_export(selected_docs, project, phase_name, entities, return_value, forms, levels=None):
+def _run_export(selected_docs, project, phase_name, entities, return_value, forms, levels=None, nested=None):
     """Export `entities` from `selected_docs` and push them to `project` under `phase_name`.
 
     The part of a run that is the same whichever way the choices were made (the buttons that ask in
     turn, or the export window that asks once). `levels` is None to push whole models, or a list of level
     NAMES: each model then pushes a level-scoped push of its own ids of those levels
-    (`utils.phase_filter.in_scope`), and a model that has none of them is left out and said so."""
+    (`utils.phase_filter.in_scope`), and a model that has none of them is left out and said so. `nested` is the
+    entity keys whose shared nested families are pushed (None: `export_form.nested_default`, what the single-entity
+    buttons always did)."""
+    from room_m import export_form
+
+    if nested is None:
+        nested = export_form.nested_default()
     # One envelope for the whole run: one project, one phase, one moment
     # of reading. Built before the loop so every model in the push shares a
     # snapshot id -- which is what makes "these documents were read
@@ -1340,7 +1347,7 @@ def _run_export(selected_docs, project, phase_name, entities, return_value, form
                 else:
                     export_model(
                         selected_doc, phase_name, return_value, entities, buckets,
-                        level_ids=level_ids)
+                        level_ids=level_ids, nested=nested)
             except Exception as e:
                 return_value.update_sep(
                     False, "{}: failed with exception: {}".format(selected_doc.Title, e)
@@ -1370,7 +1377,7 @@ def _run_export(selected_docs, project, phase_name, entities, return_value, form
 
 
 
-def export_model(selected_doc, phase_name, return_value, entities, buckets, level_ids=None):
+def export_model(selected_doc, phase_name, return_value, entities, buckets, level_ids=None, nested=None):
     """Export one model's `entities` into the run's `buckets`, scoped to
     `phase_name`, recording any failure on `return_value`.
 
@@ -1385,12 +1392,17 @@ def export_model(selected_doc, phase_name, return_value, entities, buckets, leve
     the loop below is genuinely a loop rather than a sequence with a rule in it.
 
     `level_ids` (the ids of this model's levels to replace, or None for the whole model) is stamped on
-    the block as its `scope`.
+    the block as its `scope`. `nested` is the entity keys whose shared nested families are pushed
+    (`export_form.apply_nested`; None is the default choice).
 
     Each entity gets its own deep copy of the model's envelope block: a rooms
     push stamps `room_boundary` and `levels` onto its copy and a doors push has
     no key for either, and two entities sharing one nested dict is the exact
     cross-contamination the old per-push deep copy existed to prevent."""
+    from room_m import export_form
+
+    if nested is None:
+        nested = export_form.nested_default()
     block = build_model_block(selected_doc, return_value)
     if level_ids:
         # a level-scoped push: the server replaces this model's elements on these levels and keeps the
@@ -1409,6 +1421,7 @@ def export_model(selected_doc, phase_name, return_value, entities, buckets, leve
             exporter.stamp_envelope(selected_doc, entity_block, return_value)
 
         contribution = exporter.export_model(selected_doc, phase_name, return_value, level_ids=level_ids)
+        contribution = export_form.apply_nested(entity, contribution, entity in nested)
         if contribution is None:
             continue
         buckets[entity].append((entity_block, contribution))

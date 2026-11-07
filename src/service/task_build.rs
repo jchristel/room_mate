@@ -22,6 +22,7 @@ use super::placement;
 use super::rls_plan::{check_size, has_elevations, plan_crop, size_token, transfer, MarkerPlan, RlsPlan, RlsRequest};
 use super::rls_tag_place::room_tag_head;
 use super::rls_tags::{plan_tags, type_code_of, RoomItem};
+use super::rls_three_d::{has_three_d, three_ds};
 use super::room_locator::RoomRef;
 use super::rooms::{assemble_rooms, RoomScope};
 use super::sheet_suggest::{distance, room_summary, Signature};
@@ -365,18 +366,21 @@ pub fn update_from_assignment(
     Ok(new)
 }
 
-/// The FF&E attributed to a room, in the room's own model frame: what an RLS can tag. Nested
-/// components are left out (they are parts of a family, not items of the room).
+/// The FF&E attributed to a room, in the room's own model frame: what an RLS can tag. Nested components come too,
+/// marked `nested`, whatever the project's `[ffe] nested_components` says: `rls_tags::plan_tags` keeps one only when
+/// the library has a rule for its type code, because a person tagged one of those (a shower rail nested in its
+/// shower) and a part nobody tagged (a handle) must never be offered.
 fn room_items(state: &AppState, project: &str, room: &RoomRef, parameter: &str) -> Result<Vec<RoomItem>, ServiceError> {
     let to_model = project_to_model(state, project, &room.model_id)?;
-    let Some(ffe) = assemble_items(state, &ItemScope { project: Some(project), ..Default::default() })? else {
+    let scope = ItemScope { project: Some(project), with_components: true, ..Default::default() };
+    let Some(ffe) = assemble_items(state, &scope)? else {
         return Ok(Vec::new());
     };
     let no_tier = crate::contract::PropertyMap::new();
     Ok(ffe
         .ffe
         .iter()
-        .filter(|it| it.owner_rooms_qualified.contains(room) && it.item.super_component_id.is_none())
+        .filter(|it| it.owner_rooms_qualified.contains(room))
         .map(|it| {
             let type_props = it
                 .type_properties_ref
@@ -397,6 +401,7 @@ fn room_items(state: &AppState, project: &str, room: &RoomRef, parameter: &str) 
                     .map(|l| l.points.iter().map(|p| to_model.point((p.x * FT_TO_MM, p.y * FT_TO_MM))).collect())
                     .unwrap_or_default(),
                 facing: it.item.facing.as_ref().map(|f| to_model.direction((f.x, f.y))),
+                nested: it.item.super_component_id.is_some(),
                 properties,
                 type_properties,
             }
@@ -467,6 +472,44 @@ fn template_and_target(
     Ok((template, model_room_ring(state, project, &SheetRoom::from(room))?))
 }
 
+/// A warning, never a refusal, when the room the sheet was made for (by the figures it stored at push) is far from
+/// this one.
+fn room_size_finding(
+    state: &AppState,
+    project: &str,
+    room: &RoomRef,
+    record: &sheets::SheetRecord,
+    findings: &mut Vec<Value>,
+) -> Result<(), ServiceError> {
+    match (record.room_summary, room_summary(state, project, room)?) {
+        (Some(stored), Some(target)) => {
+            let (_, d) = distance(&Signature::from(target), &Signature::from(stored));
+            if d > RLS_ROOM_WARN_DISTANCE {
+                findings.push(finding(
+                    "room_size_differs",
+                    format!(
+                        "the sheet was made for a room of {:.1} x {:.1} m, {:.1} m2 with {} items; this room is {:.1} x {:.1} m, {:.1} m2 with {} items",
+                        stored.x_mm / 1000.0,
+                        stored.y_mm / 1000.0,
+                        stored.area_m2,
+                        stored.items,
+                        target.x_mm / 1000.0,
+                        target.y_mm / 1000.0,
+                        target.area_m2,
+                        target.items
+                    ),
+                ));
+            }
+        }
+        (None, _) => findings.push(finding(
+            "sheet_room_unknown",
+            "the sheet has no stored summary of its room, so its size was not compared with this room's".to_string(),
+        )),
+        (Some(_), None) => {}
+    }
+    Ok(())
+}
+
 /// A create-RLS task: one library sheet's layout for one room. Nothing is placed. A sheet whose
 /// room is far from the target's, by the figures it stored at push, is a warning and not a refusal.
 pub fn rls_from_sheet(
@@ -498,32 +541,7 @@ pub fn rls_from_sheet(
         return refuse("the room is not in the model");
     };
     let mut findings = Vec::new();
-    match (record.room_summary, room_summary(state, project, room)?) {
-        (Some(stored), Some(target)) => {
-            let (_, d) = distance(&Signature::from(target), &Signature::from(stored));
-            if d > RLS_ROOM_WARN_DISTANCE {
-                findings.push(finding(
-                    "room_size_differs",
-                    format!(
-                        "the sheet was made for a room of {:.1} x {:.1} m, {:.1} m2 with {} items; this room is {:.1} x {:.1} m, {:.1} m2 with {} items",
-                        stored.x_mm / 1000.0,
-                        stored.y_mm / 1000.0,
-                        stored.area_m2,
-                        stored.items,
-                        target.x_mm / 1000.0,
-                        target.y_mm / 1000.0,
-                        target.area_m2,
-                        target.items
-                    ),
-                ));
-            }
-        }
-        (None, _) => findings.push(finding(
-            "sheet_room_unknown",
-            "the sheet has no stored summary of its room, so its size was not compared with this room's".to_string(),
-        )),
-        (Some(_), None) => {}
-    }
+    room_size_finding(state, project, room, &record, &mut findings)?;
     let rings = template_and_target(state, project, room, &record)?;
     let markers = place_elevations(&rings, &record, request, &mut findings);
     let plan_crop = match &rings {
@@ -541,17 +559,25 @@ pub fn rls_from_sheet(
         record.blueprint.as_deref(),
         &mut findings,
     );
-    let tags = match &request.tags {
-        Some(t) => {
-            let items = room_items(state, project, room, &parameter)?;
-            Some(plan_tags(&record.sheet, &items, &markers, &tag_rules, t))
-        }
-        None => None,
+    // The room's FF&E is read once, and only when something asks for it: the tags, or a 3D view to see past.
+    let three_d_room = rings.1.as_ref().filter(|_| has_three_d(&record.sheet));
+    let items = if request.tags.is_some() || three_d_room.is_some() {
+        room_items(state, project, room, &parameter)?
+    } else {
+        Vec::new()
     };
+    let tags = request.tags.as_ref().map(|t| plan_tags(&record.sheet, &items, &markers, &tag_rules, t));
+    let three_ds = three_d_room
+        .map(|ring| three_ds(&record.sheet, ring, plan_crop.as_ref(), &items))
+        .unwrap_or_default();
     let room_tag = room_tag_head(state, project, room, &record, &tag_rules, &mut findings)?;
-    let rls =
-        (sheet_size.is_some() || !markers.is_empty() || tags.is_some() || room_tag.is_some() || plan_crop.is_some())
-            .then_some(RlsPlan { sheet_size, markers, tags, room_tag, plan_crop });
+    let rls = (sheet_size.is_some()
+        || !markers.is_empty()
+        || tags.is_some()
+        || room_tag.is_some()
+        || plan_crop.is_some()
+        || !three_ds.is_empty())
+    .then_some(RlsPlan { sheet_size, markers, tags, room_tag, plan_crop, three_ds });
     Ok(NewTask {
         rls,
         kind: TaskKind::CreateRls,

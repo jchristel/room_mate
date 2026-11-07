@@ -125,6 +125,25 @@ class Xaml(unittest.TestCase):
         for name in wanted + ["tx_model", "tx_status"]:
             self.assertEqual(1, self.names.count(name), name)
 
+    def test_each_kind_of_view_has_its_own_group_with_its_type_and_its_title_inside_the_views_group(self):
+        parent_of = dict((child, parent) for parent in self.root.iter() for child in parent)
+
+        def groups_round(name):
+            node = [e for e in self.root.iter() if e.get(X + "Name") == name][0]
+            out = []
+            while node in parent_of:
+                node = parent_of[node]
+                if node.tag == NS + "GroupBox":
+                    out.append(node)
+            return out
+
+        for kind, type_box in (("plan", "cb_plan_view_type"), ("elevation", "cb_elevation_view_type"),
+                               ("three_d", "cb_three_d_view_type"), ("schedule", "cb_schedule_base")):
+            groups = groups_round(type_box)
+            self.assertEqual(2, len(groups), kind)
+            self.assertIs(groups[0], groups_round("tb_title_" + kind)[0], kind)
+        self.assertEqual(1, len(groups_round("tb_view_name")), "the view name is the Views group's, for every kind")
+
     def test_every_handler_named_in_the_xaml_is_a_method_of_the_window(self):
         with open(os.path.join(ROOM_M, "rls_settings_window.py")) as f:
             source = f.read()

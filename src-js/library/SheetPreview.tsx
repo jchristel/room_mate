@@ -1,5 +1,6 @@
 // A drawing of a sheet: its outline and a labelled box per viewport, coloured by what the viewport is
-// (plan, elevation, 3D, schedule). Geometry is `previewOf`; this only draws it.
+// (plan, elevation, 3D, schedule), with the elevation lines and each 3D view's camera drawn on the plan. Geometry is
+// `previewOf`; this only draws it.
 
 import { KIND_LABEL, previewOf, type PortKind } from "./preview.js";
 import type { SheetRecord } from "./types.js";
@@ -28,6 +29,15 @@ export function SheetPreview({ record }: { record: Pick<SheetRecord, "size_mm" |
             <line x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2} />
             <text x={(l.x1 + l.x2) / 2} y={(l.y1 + l.y2) / 2} fontSize={fontSize} textAnchor="middle" dominantBaseline="central">
               {l.label}
+            </text>
+          </g>
+        ))}
+        {preview.arrows.map((a, i) => (
+          <g key={`camera${i}`} className="camera-arrow">
+            <line x1={a.x1} y1={a.y1} x2={a.x2} y2={a.y2} />
+            <polygon points={a.head.map((h) => `${h.x},${h.y}`).join(" ")} />
+            <text x={a.x1} y={a.y1} fontSize={fontSize} textAnchor="middle" dominantBaseline="central">
+              {a.label}
             </text>
           </g>
         ))}
