@@ -81,7 +81,7 @@ DOORS = EntityPush(
     url="/doors",
     url_stream="/doors/stream",
     translate=lambda element, contribution: translate_opening(
-        element, contribution["placements"]
+        element, contribution["placements"], contribution.get("nesting")
     ),
     nested_reason="nested inside another door (leaves, panels, hardware)",
 )

@@ -331,6 +331,7 @@ def build(task, settings, values):
         "room_tag": settings.get("room_tag") or None,
         "independent_tag": settings.get("independent_tag") or None,
         "tags": _plan_tags(task),
+        "wall_items": (task.get("rls") or {}).get("wall_items"),
         "untagged_items": len(((task.get("rls") or {}).get("tags") or {}).get("items_without_tags") or []),
         "elevation_tags": _elevation_tags(task),
         "room_tag_head": _room_tag_head(task),

@@ -24,8 +24,9 @@ XAML_PATH = os.path.join(os.path.dirname(__file__), "export.xaml")
 def show(forms, docs, projects, phases, levels_by_doc, saved=None, phase_lookup=None):
     """Show the window. `saved` is what `room_m.prefs` kept from the last export (the project, what was ticked and the
     levels), and `phase_lookup(project_id)` the phases the server holds for these models, so the phase can be
-    pre-selected (`export_form.default_phase`). Returns `{"project": {"id", "name"}, "phase", "entities", "levels"}` (`levels` is
-    None for the whole model, else the chosen level names), or None when cancelled."""
+    pre-selected (`export_form.default_phase`). Returns `{"project": {"id", "name"}, "phase", "entities", "levels", "nested"}` (`levels` is
+    None for the whole model, else the chosen level names; `nested` the entity keys whose shared nested families are
+    included), or None when cancelled."""
     names = form.level_names(levels_by_doc)
 
     class ExportWindow(forms.WPFWindow):
@@ -48,6 +49,8 @@ def show(forms, docs, projects, phases, levels_by_doc, saved=None, phase_lookup=
                 self.cb_phase.SelectedIndex = 0
             for name_, _key, _label in form.ENTITIES:
                 getattr(self, name_).IsChecked = name_ in back["entities"]
+            for name_, _key, _on in form.NESTED:
+                getattr(self, name_).IsChecked = name_ in back["nested"]
             for name in names:
                 box = CheckBox()
                 box.Content = name
@@ -108,6 +111,7 @@ def show(forms, docs, projects, phases, levels_by_doc, saved=None, phase_lookup=
                 "phase": self.cb_phase.SelectedItem,
                 "entities": form.entities_ticked(self._ticked()),
                 "levels": None if self.rb_whole.IsChecked else self._chosen_levels(),
+                "nested": form.nested_ticked(self._nested_ticked()),
             }
             self.Close()
 
@@ -142,6 +146,9 @@ def show(forms, docs, projects, phases, levels_by_doc, saved=None, phase_lookup=
         def _ticked(self):
             return set(name for name, _key, _label in form.ENTITIES if getattr(self, name).IsChecked)
 
+        def _nested_ticked(self):
+            return set(name for name, _key, _on in form.NESTED if getattr(self, name).IsChecked)
+
         def _chosen_levels(self):
             return [str(b.Content) for b in self._level_boxes if b.IsChecked]
 
@@ -154,6 +161,10 @@ def show(forms, docs, projects, phases, levels_by_doc, saved=None, phase_lookup=
         def _status(self):
             if not self._ready:
                 return
+            # a nested box means something only for an entity that is being exported
+            entity_box = dict((key, name) for name, key, _label in form.ENTITIES)
+            for name_, key, _on in form.NESTED:
+                getattr(self, name_).IsEnabled = bool(getattr(self, entity_box[key]).IsChecked)
             lines = self._problems()
             self.tx_status.Text = "\n".join(lines)
             self.bt_export.IsEnabled = not lines

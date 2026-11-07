@@ -1310,6 +1310,7 @@ mod tests {
             // no position and no direction is a state the contract carries.
             insertion_point: None,
             through_wall_normal: None,
+            sub_components: Vec::new(),
             type_id: "t1".to_string(),
             type_name: "Single".to_string(),
             properties,

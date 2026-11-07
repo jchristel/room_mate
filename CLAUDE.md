@@ -134,6 +134,15 @@ unchanged. Levels are the per-document ids, which each element's own `LevelId` r
 
 **The windows share their rules** (`match_rule`: filter words, the `{Parameter}` sheet-to-room rule, duplicate names; `prefs`: `%APPDATA%\RoomMate\prefs.json`; `phase_hint`: the phase the server holds, which arrives with the project list as `model_phases`, so a project change makes no request). "Check all matched" checks only what HAS a match. Every entry says one readable line per result and one Finished line (`report`, `_finishing`). **IronPython 2.7 cannot store `print`**; `test_py2_syntax.py` guards what CPython 3 accepts and Revit does not. Each button is described in [`docs/REVIT-BUTTONS.md`](docs/REVIT-BUTTONS.md). **Not run in Revit** except as noted there.
 
+**Nested families: two choices, one fact** (2026-11-07). "Include Shared Nested Families" beside doors, windows and each FF&E row (`export_form.NESTED`,
+`apply_nested`, `is_left_out_nested`) decides whether an instance nested in another is pushed as an element: off by default for doors and windows (the
+old producer-side drop, `nested_opening_ids`: a leaf is not a door), on for FF&E, where the server's `[ffe] nested_components` (FF&E only; no opening
+reads it) then decides at read time. Unticked FF&E is not sent at all, so a create-RLS task cannot tag a nested part. **Whatever is chosen, every door,
+window and FF&E item carries `sub_components`** (`contract::SubComponent`, `room_m/utils/nesting.py`: one pass over the document's `FamilyInstance`s by
+`SuperComponent`, every depth, flat, each with its `parent_id`, category, family and type), because a blueprint that swaps a family must know which
+nested families come with the host even when they were never pushed. Only shared nested families are instances; a non-shared one is invisible to an
+export. Empty is left out of the JSON, so older snapshots read the same. **Not run in Revit.**
+
 **The panel**: the `RoomMate` panel on the duHast tab holds Export, Blueprint, Sheets, Tasks, RLS settings and Server. The older `Export` panel (Rooms + Doors, By category)
 was removed: the Export window covers every entity.
 
@@ -584,7 +593,7 @@ target model's frame, mm. The Tasks button's sheet handler reads it (`room_m/rls
 - `POST /projects/{id}/tasks/rls-preview` is the same read for one room and stores nothing, so a preview is the task. A request
   may override a view's depth (`depths`: `depth_mm`, or `to_wall`).
 - **Tags are a PROTOTYPE** (`service::rls_tags`, `rls.tags` in the task and in the preview). Every item attributed to the room
-  (no nested components) is looked up in the library's tag rules by its type code for the plan viewport type (the rule bound to the
+  (a nested component only when the library has a rule for its type code, below) is looked up in the library's tag rules by its type code for the plan viewport type (the rule bound to the
   blueprint item it stands for first, else the generic one) and tagged in the plan at the rule's
   offset (paper mm x the view scale, turned with the item). What no rule tags is **offered, per view** (`candidates`) and overall
   (`items_without_tags`, with the views that show it and why no rule did); a person answers per item in `tags.choices`: `tag` it in a
@@ -596,7 +605,7 @@ plan rules keep theirs. The server (`rls_tags`) finds the rule for the way each 
 the plug-in adds it to the item's own point along the NEW view's `RightDirection`/`UpDirection` (`apply_geometry.elevation_head_ft`, `rls_write._elevation_tags`), because the item's height is
 Revit's to read. **Measured from the item's bounding-box CENTRE, not its insertion point** (2026-11-07): the extractor sends each tagged item's `centre` (`sheet_tags.attach_centres`, `tag_codes.centre_reader`), an elevation sample from it is `from_centre`, and so is a rule and the task's tag, which the plug-in adds to the middle of the item's box (`apply_geometry.elevation_reference_ft`). A family that lifts itself by a parameter keeps one insertion point at the level for every height: House A's WC has three towel rails at 900, 1200 and 1500 mm on one point, and the pooled rule stacked all three tags. Old samples are from the point and cannot be converted, so `reduce` uses only the centred samples when there are any; a rule stays from the point until its sheets are pushed again. A plan sample keeps the point (its offsets turn with the facing). The rule's leader (elbow and end, the same offsets) and its orientation (`Horizontal`/`Vertical`, which is how an elevation tag turns; an arbitrary angle is not settable) are applied too. An item an elevation shows and no rule covers stays a candidate, and `items_without_tags` says which: no elevation tag for the
 type code, or one for an item seen the other way. A chosen tag there is still placed along the line only. The tag export carries z (read in duHast `to_data_tag`: `TagHeadPosition` and the element's `Location.Point`, both 3D in mm), for **floor plan and elevation views only**
-(`view_ports_to_data` calls `get_tags_in_view` for those two; a section or 3D view's tags are not exported). **Not run in Revit.** Computing it reads the room's FF&E (seconds on a large real project), so a request
+(`view_ports_to_data` calls `get_tags_in_view` for those two; a section or 3D view's tags are not exported). **Not run in Revit.** **A nested component is tagged only when the library has a rule for its type code** (2026-11-07, `rls_tags::plan_tags`, `RoomItem::nested`): the task reads the room's items with `ItemScope::with_components`, whatever `[ffe] nested_components` says, because a person may tag a part (House A's WC: the shower rail `HYTP-100` nested in the shower), and that tag is the evidence the part is worth tagging; a part nobody tagged (a handle) is left out entirely, never a candidate nor listed untagged. Tagging a nested element from the plug-in is **not run in Revit**. Computing it reads the room's FF&E (seconds on a large real project), so a request
   without `with_tags` skips it. The tasks page does not show it yet; the plug-in does not read it.
 
 ## The RLS creation script: settings, task, duHast
@@ -632,8 +641,12 @@ checked before anything is made, then one transaction group per task (`duHast...
 - **A new 3D view hides the room's own walls that stand between its camera and the middle of the room** (`room_m/view_walls.py`, `rls_write._hide_walls_in_the_way`).
   The camera is where duHast's `view_3d_create` puts it (back along the view direction from the section box's centre); a wall is in the way when the line from it to the
   room's bounding-box centre, **in plan**, crosses one of the room's boundary pieces whose element is a wall (`Room.GetBoundarySegments`). Heights are ignored on purpose (a wall the
-  line of sight passes over goes too), a view looking straight down hides nothing, and a failure is a note: the view is made either way. The walls are hidden with
-  `View.HideElements`, in that view only. **Not run in Revit.**
+  line of sight passes over goes too). **Every wall of the room's outer loop that faces the camera goes too** (`view_walls.walls_to_hide`, 2026-11-07): from a corner
+  the line crosses one wall and the other still stands across the view, so a wall whose outside the camera is on (by about 3 degrees) is hidden; a column's walls only when crossed, a view looking straight down hides nothing, and a failure is a note: the view is made either way. The walls are hidden with
+  `View.HideElements`, in that view only. **What stands along a hidden wall is made transparent** (2026-11-08): the task carries `rls.wall_items`
+  (`rls_plan::wall_items`, for a template with a 3D viewport: the room's FF&E hosted by a wall or within `WALL_BAND_MM`, 600 mm, of its outline, with
+  footprint and host wall), because the server holds the FF&E and the plug-in holds the walls; the plug-in keeps those hosted by, or within the band of,
+  a wall it hides (`view_walls.items_to_see_through`) and sets their surface transparency to `SEE_THROUGH` (70) in that view. **Not run in Revit.**
 - **The annotation crop is exported and applied** (plan and elevation views): `annotation_crop_active` and `annotation_crop_offsets` (`left`/`right`/`top`/`bottom` from the
   view crop, **mm on paper**, because Revit keeps them in view units so they hold at any scale) ride each view of the sheet export (duHast `view_ports_to_data._get_annotation_crop`, via
   the parameter `VIEWER_ANNOTATION_CROP_ACTIVE` and `ViewCropRegionShapeManager`). A new plan or elevation view gets the same after its own crop is final

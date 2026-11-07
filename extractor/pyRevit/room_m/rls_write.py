@@ -165,6 +165,8 @@ class RlsFacts(RevitFacts):
 
 
 MM_PER_FT = geo.MM_PER_FT
+# How transparent (0 to 100) an item along a hidden wall is drawn in a new 3D view: seen, without hiding the room.
+SEE_THROUGH = 70
 
 
 def _ft(mm):
@@ -488,35 +490,43 @@ class RlsWriter(object):
                 lambda v=v: create_view_3d_around_box_without_transaction_wrapper(
                     self.doc, view_type, v["name"], v["forward"], v["up"], low, high, phase),
             ).result[0]
-            self._hide_walls_in_the_way(view, room, low, high, v["forward"], v["name"], notes)
+            self._hide_walls_in_the_way(view, room, low, high, v["forward"], v["name"], notes, plan.get("wall_items"))
             self._title_on_sheet(view, v.get("title"), v["name"], notes)
             self._viewport(sheet, view, v["viewport"], notes, v["name"], "three_d")
 
-    def _hide_walls_in_the_way(self, view, room, low, high, forward, name, notes):
-        """Hide, in the new 3D view, the room's walls that stand between its camera and the middle of the room
-        (seen in plan: `room_m.view_walls`). The camera is where `create_view_3d_around_box` puts it. A failure
-        here is a note: the view is made and placed either way."""
+    def _hide_walls_in_the_way(self, view, room, low, high, forward, name, notes, wall_items=None):
+        """Hide, in the new 3D view, the room's walls that stand between its camera and the middle of the room,
+        and the outer walls that face the camera (seen in plan: `room_m.view_walls.walls_to_hide`), and make the
+        items the task lists along those walls transparent (`view_walls.items_to_see_through`, `SEE_THROUGH`).
+        The camera is where `create_view_3d_around_box` puts it. A failure here is a note: the view is made and
+        placed either way."""
         try:
             centre = ((low.X + high.X) / 2.0, (low.Y + high.Y) / 2.0)
             eye = view_walls.eye_xy(centre, forward, low.DistanceTo(high) * 2.0)
             if eye is None:
                 return
-            boundary = []
+            # every piece of every loop, in order (a piece that is not a wall keeps its place with no key, so the
+            # loop's direction still reads right); the first loop is the room's outer boundary
+            loops = []
+            by_value = {}
             for loop in room.GetBoundarySegments(SpatialElementBoundaryOptions()) or []:
+                pieces = []
                 for segment in loop:
-                    wall = self.doc.GetElement(segment.ElementId)
-                    if wall is None or wall.Category is None or get_el_id_int(wall.Category.Id) != int(BuiltInCategory.OST_Walls):
-                        continue
                     curve = segment.GetCurve()
                     a, b = curve.GetEndPoint(0), curve.GetEndPoint(1)
-                    boundary.append((segment.ElementId, (a.X, a.Y), (b.X, b.Y)))
+                    wall = self.doc.GetElement(segment.ElementId)
+                    key = None
+                    if wall is not None and wall.Category is not None and get_el_id_int(wall.Category.Id) == int(BuiltInCategory.OST_Walls):
+                        key = get_el_id_int(segment.ElementId)
+                        by_value[key] = segment.ElementId
+                    pieces.append((key, (a.X, a.Y), (b.X, b.Y)))
+                loops.append(pieces)
             # the room's own centre in plan is what the camera looks at
             box = room.get_BoundingBox(None)
             looked_at = ((box.Min.X + box.Max.X) / 2.0, (box.Min.Y + box.Max.Y) / 2.0)
-            ids = view_walls.blocking(eye, looked_at, [(get_el_id_int(i), p, q) for i, p, q in boundary])
+            ids = view_walls.walls_to_hide(eye, looked_at, loops)
             if not ids:
                 return
-            by_value = dict((get_el_id_int(i), i) for i, _, _ in boundary)
             from System.Collections.Generic import List
             from Autodesk.Revit.DB import ElementId
 
@@ -530,10 +540,39 @@ class RlsWriter(object):
                 return result
 
             self._step("RoomMate: hide walls in {}".format(name), work)
-            notes.append("{}: {} wall(s) between the camera and the room hidden".format(name, len(ids)))
+            notes.append("{}: {} wall(s) facing the camera or in its way hidden".format(name, len(ids)))
+            pieces = [(key, (x0 * MM_PER_FT, y0 * MM_PER_FT), (x1 * MM_PER_FT, y1 * MM_PER_FT))
+                      for loop in loops for key, (x0, y0), (x1, y1) in loop]
+            self._see_through(view, view_walls.items_to_see_through(wall_items, ids, pieces), name, notes)
         except Exception as e:
             task_log.exception("hiding walls in {}".format(name))
             notes.append("{}: walls in the way were not hidden ({})".format(name, e))
+
+    def _see_through(self, view, item_ids, name, notes):
+        """Make the items standing along the hidden walls transparent in `view` only. An id the model no longer
+        has is skipped; a failure is a note."""
+        if not item_ids:
+            return
+        try:
+            from Autodesk.Revit.DB import OverrideGraphicSettings
+
+            elements = [self.doc.GetElement(get_element_id_from_int(int(i))) for i in item_ids]
+            elements = [e for e in elements if e is not None]
+
+            def work():
+                result = Result()
+                for element in elements:
+                    settings = OverrideGraphicSettings()
+                    settings.SetSurfaceTransparency(SEE_THROUGH)
+                    view.SetElementOverrides(element.Id, settings)
+                return result
+
+            if elements:
+                self._step("RoomMate: see through items in {}".format(name), work)
+            notes.append("{}: {} item(s) along the hidden walls made transparent".format(name, len(elements)))
+        except Exception as e:
+            task_log.exception("making items transparent in {}".format(name))
+            notes.append("{}: items along the hidden walls were not made transparent ({})".format(name, e))
 
     def _schedule(self, plan, room, sheet, notes):
         base = self.facts.schedule(plan["schedule_base"])

@@ -52,6 +52,7 @@ import json
 from collections import namedtuple
 
 
+from room_m.export_form import is_left_out_nested
 from room_m.post_common import (
     build_identity_envelope,
     duhast_object_to_plain,
@@ -164,9 +165,12 @@ def build_envelope(spec, run_envelope, model_blocks):
     return build_identity_envelope(run_envelope, model_blocks, spec.entity, spec.schema_version)
 
 
-def translate_opening(opening, placements):
+def translate_opening(opening, placements, nesting=None):
     """Map one duHast object onto the `Opening` shape, or return None when it
     carries no id (nothing downstream could key on it).
+
+    `nesting` is `utils.nesting.read_nesting`'s map (host id -> its nested families); an opening it does not name
+    has none.
 
     `placements` is `{id: {"from_room", "to_room", "insertion_point",
     "normal"}}`, built by `room_m.utils.openings.opening_placements` from the
@@ -218,6 +222,8 @@ def translate_opening(opening, placements):
         # that is simply missing cannot tell them apart.
         "insertion_point": placement.get("insertion_point"),
         "through_wall_normal": placement.get("normal"),
+        # what is nested in this opening, every depth (`utils.nesting`); empty for none
+        "sub_components": (nesting or {}).get(opening_id, []),
         "type_id": str(type_props.get("id", "unknown")),
         "type_name": type_props.get("name", "Unknown Type"),
         "properties": properties_to_map(instance),
@@ -240,7 +246,7 @@ def translate(spec, run_envelope, entries):
         nested_ids = contribution.get("nested_ids") or set()
         for raw in source.get(spec.list_key, []):
             element = spec.translate(raw, contribution)
-            if element is None or element["id"] in nested_ids:
+            if element is None or is_left_out_nested(element, contribution, nested_ids):
                 continue
             if in_selected_phase(element, contribution["allowed_ids"]):
                 out.append(element)
@@ -287,7 +293,7 @@ def post_stream(spec, run_envelope, entries, url=None):
                 # Before the phase test, because a nested component is not an
                 # opening in any phase -- counting it as out-of-phase would
                 # misreport why the export shrank.
-                if element["id"] in nested_ids:
+                if is_left_out_nested(element, contribution, nested_ids):
                     count["nested"] += 1
                     continue
                 if not in_selected_phase(element, contribution["allowed_ids"]):

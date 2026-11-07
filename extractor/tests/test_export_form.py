@@ -138,6 +138,16 @@ class Xaml(unittest.TestCase):
         for name in ("cb_project", "cb_phase", "rb_whole", "rb_levels", "sp_levels", "tx_status", "tx_models", "bt_export"):
             self.assertEqual(1, self.names.count(name), name)
 
+    def test_each_nested_box_sits_beside_its_entity_and_says_the_same_words(self):
+        entity_box = dict((key, name) for name, key, _label in form.ENTITIES)
+        parent_of = dict((child, parent) for parent in self.root.iter() for child in parent)
+        for name, key, _on in form.NESTED:
+            box = [e for e in self.root.iter() if e.get(X + "Name") == name]
+            self.assertEqual(1, len(box), name)
+            row = parent_of[box[0]]
+            self.assertIn(entity_box[key], [e.get(X + "Name") for e in row], name)
+            self.assertEqual(form.NESTED_LABEL, box[0].get("Content"), name)
+
     def test_every_handler_in_the_xaml_is_a_method_of_the_window(self):
         with open(os.path.join(ROOM_M, "export_window.py")) as f:
             source = f.read()

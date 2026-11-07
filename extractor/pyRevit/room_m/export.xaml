@@ -38,10 +38,22 @@
                             <Button DockPanel.Dock="Right" Content="Check all" Padding="8,1" Click="on_entities_all" ToolTip="Checks everything except FF&amp;E by space, which is the alternative to FF&amp;E by room"/>
                         </DockPanel>
                         <CheckBox x:Name="cb_rooms" Content="Rooms" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>
-                        <CheckBox x:Name="cb_doors" Content="Doors" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>
-                        <CheckBox x:Name="cb_windows" Content="Windows" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>
-                        <CheckBox x:Name="cb_ffe" Content="FF&amp;E (identified by room)" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>
-                        <CheckBox x:Name="cb_ffe_by_space" Content="FF&amp;E (identified by space: services models)" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>
+                        <DockPanel Margin="0,2,0,2" LastChildFill="False">
+                            <CheckBox DockPanel.Dock="Left" x:Name="cb_doors" Content="Doors" Checked="on_change" Unchecked="on_change"/>
+                            <CheckBox DockPanel.Dock="Right" x:Name="cb_nested_doors" Content="Include Shared Nested Families" FontSize="11" Checked="on_change" Unchecked="on_change" ToolTip="Off: a door nested in another door (a leaf, a panel) is not pushed. The nesting is sent on its host either way."/>
+                        </DockPanel>
+                        <DockPanel Margin="0,2,0,2" LastChildFill="False">
+                            <CheckBox DockPanel.Dock="Left" x:Name="cb_windows" Content="Windows" Checked="on_change" Unchecked="on_change"/>
+                            <CheckBox DockPanel.Dock="Right" x:Name="cb_nested_windows" Content="Include Shared Nested Families" FontSize="11" Checked="on_change" Unchecked="on_change" ToolTip="Off: a window nested in another window (glazing, a panel) is not pushed. The nesting is sent on its host either way."/>
+                        </DockPanel>
+                        <DockPanel Margin="0,2,0,2" LastChildFill="False">
+                            <CheckBox DockPanel.Dock="Left" x:Name="cb_ffe" Content="FF&amp;E (identified by room)" Checked="on_change" Unchecked="on_change"/>
+                            <CheckBox DockPanel.Dock="Right" x:Name="cb_nested_ffe" Content="Include Shared Nested Families" FontSize="11" Checked="on_change" Unchecked="on_change" ToolTip="On: nested items are pushed and the server's [ffe] nested_components decides what reads show; a create-RLS task tags one the library has a rule for. Off: they are not pushed at all."/>
+                        </DockPanel>
+                        <DockPanel Margin="0,2,0,2" LastChildFill="False">
+                            <CheckBox DockPanel.Dock="Left" x:Name="cb_ffe_by_space" Content="FF&amp;E (identified by space: services models)" Checked="on_change" Unchecked="on_change"/>
+                            <CheckBox DockPanel.Dock="Right" x:Name="cb_nested_ffe_by_space" Content="Include Shared Nested Families" FontSize="11" Checked="on_change" Unchecked="on_change" ToolTip="On: nested items are pushed and the server's [ffe] nested_components decides what reads show. Off: they are not pushed at all."/>
+                        </DockPanel>
                         <CheckBox x:Name="cb_spaces" Content="Spaces" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>
                         <CheckBox x:Name="cb_ceilings" Content="Ceilings" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>
                         <CheckBox x:Name="cb_floors" Content="Floors" Margin="0,2,0,2" Checked="on_change" Unchecked="on_change"/>

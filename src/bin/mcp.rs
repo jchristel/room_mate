@@ -1403,6 +1403,7 @@ impl RoommateMcp {
             // Every storey: a storey scope is how the viewer narrows its polls to
             // what it is drawing, and a tool caller is drawing nothing.
             storeys: None,
+            with_components: false,
         };
         match items::assemble_items(&self.state, &scope).map_err(to_mcp_error)? {
             None => Ok(CallToolResult::success(vec![ContentBlock::text(

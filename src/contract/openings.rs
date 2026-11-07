@@ -23,7 +23,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use super::{Loop, Point2D, PropertyMap, PropertyTiers};
+use super::{Loop, Point2D, PropertyMap, PropertyTiers, SubComponent};
 
 /// One door instance, as extracted from Revit.
 ///
@@ -226,6 +226,12 @@ pub struct Opening {
     /// other reader.
     #[serde(default)]
     pub through_wall_normal: Option<Point2D>,
+
+    /// The shared nested families inside this door, every depth, with their parents (see `SubComponent`). Sent
+    /// whether or not the push keeps a nested door as an element of its own; empty, and left out of the JSON, for a
+    /// door with none and for a snapshot exported before it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sub_components: Vec<SubComponent>,
 
     /// The `ElementId` of the door's family type, as a string.
     ///

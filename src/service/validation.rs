@@ -2674,6 +2674,7 @@ mod tests {
             // no position and no direction is a state the contract carries.
             insertion_point: None,
             through_wall_normal: None,
+            sub_components: Vec::new(),
             type_id: "t1".to_string(),
             type_name: "Single".to_string(),
             properties: BTreeMap::new(),
@@ -2777,6 +2778,7 @@ mod tests {
             facing: None,
             loops: vec![],
             super_component_id: parent.map(str::to_string),
+            sub_components: Vec::new(),
             type_id: "t1".to_string(),
             type_name: "Desk 1600x800".to_string(),
             family_name: None,

@@ -747,6 +747,7 @@ mod tests {
             to_room: Some(to.to_string()),
             insertion_point: None,
             through_wall_normal: None,
+            sub_components: Vec::new(),
             type_id: "t1".to_string(),
             type_name: "Single".to_string(),
             properties: Default::default(),

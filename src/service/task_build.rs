@@ -19,7 +19,10 @@ use super::blueprint_resolve::{resolve_in_room_with, EdgeMap};
 use super::elevation_facing::model_room_ring;
 use super::items::{assemble_items, ItemScope};
 use super::placement;
-use super::rls_plan::{check_size, has_elevations, plan_crop, size_token, transfer, MarkerPlan, RlsPlan, RlsRequest};
+use super::rls_plan::{
+    check_size, has_elevations, has_three_d, plan_crop, size_token, transfer, wall_items, MarkerPlan, RlsPlan,
+    RlsRequest,
+};
 use super::rls_tag_place::room_tag_head;
 use super::rls_tags::{plan_tags, type_code_of, RoomItem};
 use super::room_locator::RoomRef;
@@ -365,18 +368,21 @@ pub fn update_from_assignment(
     Ok(new)
 }
 
-/// The FF&E attributed to a room, in the room's own model frame: what an RLS can tag. Nested
-/// components are left out (they are parts of a family, not items of the room).
+/// The FF&E attributed to a room, in the room's own model frame: what an RLS can tag. Nested components come too,
+/// marked `nested`, whatever the project's `[ffe] nested_components` says: `rls_tags::plan_tags` keeps one only when
+/// the library has a rule for its type code, because a person tagged one of those (a shower rail nested in its
+/// shower) and a part nobody tagged (a handle) must never be offered.
 fn room_items(state: &AppState, project: &str, room: &RoomRef, parameter: &str) -> Result<Vec<RoomItem>, ServiceError> {
     let to_model = project_to_model(state, project, &room.model_id)?;
-    let Some(ffe) = assemble_items(state, &ItemScope { project: Some(project), ..Default::default() })? else {
+    let scope = ItemScope { project: Some(project), with_components: true, ..Default::default() };
+    let Some(ffe) = assemble_items(state, &scope)? else {
         return Ok(Vec::new());
     };
     let no_tier = crate::contract::PropertyMap::new();
     Ok(ffe
         .ffe
         .iter()
-        .filter(|it| it.owner_rooms_qualified.contains(room) && it.item.super_component_id.is_none())
+        .filter(|it| it.owner_rooms_qualified.contains(room))
         .map(|it| {
             let type_props = it
                 .type_properties_ref
@@ -397,6 +403,13 @@ fn room_items(state: &AppState, project: &str, room: &RoomRef, parameter: &str) 
                     .map(|l| l.points.iter().map(|p| to_model.point((p.x * FT_TO_MM, p.y * FT_TO_MM))).collect())
                     .unwrap_or_default(),
                 facing: it.item.facing.as_ref().map(|f| to_model.direction((f.x, f.y))),
+                nested: it.item.super_component_id.is_some(),
+                host_wall: it
+                    .item
+                    .host
+                    .as_ref()
+                    .filter(|h| h.kind.as_deref().is_some_and(|k| k.eq_ignore_ascii_case("Walls")))
+                    .map(|h| h.id.clone()),
                 properties,
                 type_properties,
             }
@@ -541,17 +554,23 @@ pub fn rls_from_sheet(
         record.blueprint.as_deref(),
         &mut findings,
     );
-    let tags = match &request.tags {
-        Some(t) => {
-            let items = room_items(state, project, room, &parameter)?;
-            Some(plan_tags(&record.sheet, &items, &markers, &tag_rules, t))
-        }
-        None => None,
+    // The room's FF&E is read once, and only when something asks for it: the tags, or a 3D view to see past.
+    let three_d_room = rings.1.as_ref().filter(|_| has_three_d(&record.sheet));
+    let items = if request.tags.is_some() || three_d_room.is_some() {
+        room_items(state, project, room, &parameter)?
+    } else {
+        Vec::new()
     };
+    let tags = request.tags.as_ref().map(|t| plan_tags(&record.sheet, &items, &markers, &tag_rules, t));
+    let wall_items = three_d_room.map(|ring| wall_items(&items, ring));
     let room_tag = room_tag_head(state, project, room, &record, &tag_rules, &mut findings)?;
-    let rls =
-        (sheet_size.is_some() || !markers.is_empty() || tags.is_some() || room_tag.is_some() || plan_crop.is_some())
-            .then_some(RlsPlan { sheet_size, markers, tags, room_tag, plan_crop });
+    let rls = (sheet_size.is_some()
+        || !markers.is_empty()
+        || tags.is_some()
+        || room_tag.is_some()
+        || plan_crop.is_some()
+        || wall_items.is_some())
+    .then_some(RlsPlan { sheet_size, markers, tags, room_tag, plan_crop, wall_items });
     Ok(NewTask {
         rls,
         kind: TaskKind::CreateRls,
