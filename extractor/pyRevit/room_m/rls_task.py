@@ -173,6 +173,7 @@ def _three_ds(template, base):
             skipped.append(n)
             continue
         views.append({
+            "index": n,
             "name": "{} 3D".format(base) if len(ports) == 1 else "{} 3D {}".format(base, n),
             "forward": forward,
             "up": up,
@@ -305,8 +306,11 @@ def build(task, settings, values):
     three_ds, three_d_skipped = _three_ds(template, base)
     for n, e in enumerate(elevations, 1):
         e["title"] = titles("elevation", n)
+    # what the server says each 3D view hides and sees through, by its place among the template's 3D viewports
+    server_three_ds = dict((t.get("index"), t) for t in (task.get("rls") or {}).get("three_ds") or [])
     for n, v in enumerate(three_ds, 1):
         v["title"] = titles("three_d", n)
+        v["server"] = server_three_ds.get(v["index"])
     plan = {
         "number": number,
         "name": rendered["sheet_name"],
@@ -331,7 +335,6 @@ def build(task, settings, values):
         "room_tag": settings.get("room_tag") or None,
         "independent_tag": settings.get("independent_tag") or None,
         "tags": _plan_tags(task),
-        "wall_items": (task.get("rls") or {}).get("wall_items"),
         "untagged_items": len(((task.get("rls") or {}).get("tags") or {}).get("items_without_tags") or []),
         "elevation_tags": _elevation_tags(task),
         "room_tag_head": _room_tag_head(task),

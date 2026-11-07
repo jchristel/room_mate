@@ -225,6 +225,7 @@ MODULES = {
     "rls_plan": ["src/service/rls_plan.rs"],
     "rls_tags": ["src/service/rls_tags.rs"],
     "rls_place": ["src/service/rls_tag_place.rs"],
+    "rls_3d": ["src/service/rls_three_d.rs"],
     "room_tag": ["src/service/room_tag_place.rs"],
     "task_build": ["src/service/task_build.rs"],
     "svc_placement": ["src/service/placement.rs"],

@@ -32,7 +32,8 @@ use serde_json::Value;
 use super::blueprint_geometry::{coarse_outline, dot, edges, sub, Edge, Pt};
 use super::blueprint_resolve::best_shift;
 use super::elevation_facing::{read_sheet, Elevation};
-use super::rls_tags::{RoomItem, TagPlan, TagRequest};
+use super::rls_tags::{TagPlan, TagRequest};
+use super::rls_three_d::ThreeDPlan;
 
 /// The sizes a sheet can be asked for; the plug-in maps each to a title block family.
 pub const SIZES: [&str; 4] = ["a0", "a1", "a2", "a3"];
@@ -116,77 +117,11 @@ pub struct RlsPlan {
     /// outline is unknown; the plug-in then crops round the room as before.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plan_crop: Option<PlanCrop>,
-    /// The room's items along its boundary, for a new 3D view to make transparent beside the walls it hides
-    /// ([`wall_items`]). Absent when the template has no 3D viewport or the room's outline is unknown.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub wall_items: Option<WallItems>,
-}
-
-/// How far from the room's boundary an item counts as standing along a wall: a wardrobe, a bench or a basin is
-/// well inside it, a bed in the middle of the room is not.
-pub const WALL_BAND_MM: f64 = 600.0;
-
-/// The items a new 3D view makes transparent where it hides the wall they stand against. **Which walls go is the
-/// plug-in's** (`room_m.view_walls.walls_to_hide`, from Revit's own boundary segments, which name the wall: the
-/// server's outline names none), so this is the room's items near ANY of its walls, each with its footprint and its
-/// host wall; the plug-in keeps those hosted on a hidden wall or within `band_mm` of one. The band rides the task so
-/// both halves read one number.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct WallItems {
-    pub band_mm: f64,
-    pub items: Vec<WallItem>,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct WallItem {
-    pub id: String,
-    /// The item's footprint in the target model's frame, mm.
-    pub footprint: Vec<[f64; 2]>,
-    /// The wall the item is hosted by, when it is (a basin, a towel rail): transparent with that wall whatever
-    /// its footprint says.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub host_wall: Option<String>,
-}
-
-/// Whether a sheet shows any 3D viewport (duHast names the type "three d").
-pub fn has_three_d(sheet: &Value) -> bool {
-    sheet.get("view_ports").and_then(Value::as_array).is_some_and(|ports| {
-        ports.iter().any(|p| {
-            p.get("vp_type")
-                .and_then(Value::as_str)
-                .is_some_and(|t| t.eq_ignore_ascii_case("three d"))
-        })
-    })
-}
-
-/// The distance from `p` to the segment `a`-`b`.
-fn to_segment(p: Pt, a: Pt, b: Pt) -> f64 {
-    let ab = sub(b, a);
-    let len2 = dot(ab, ab);
-    let t = if len2 > 0.0 { (dot(sub(p, a), ab) / len2).clamp(0.0, 1.0) } else { 0.0 };
-    let foot = (a.0 + ab.0 * t, a.1 + ab.1 * t);
-    ((p.0 - foot.0).powi(2) + (p.1 - foot.1).powi(2)).sqrt()
-}
-
-/// The room's items along its boundary: hosted by a wall, or with a footprint corner within [`WALL_BAND_MM`] of an
-/// edge of `room` (both in the target model's frame, mm). An item with no footprint and no host has no place to
-/// judge and is left out. Nested components come too: whether a part takes its host's override is Revit's to say.
-pub fn wall_items(items: &[RoomItem], room: &[Pt]) -> WallItems {
-    let near = |footprint: &[Pt]| {
-        footprint
-            .iter()
-            .any(|&p| (0..room.len()).any(|i| to_segment(p, room[i], room[(i + 1) % room.len()]) <= WALL_BAND_MM))
-    };
-    let items = items
-        .iter()
-        .filter(|it| it.host_wall.is_some() || (!room.is_empty() && near(&it.footprint)))
-        .map(|it| WallItem {
-            id: it.id.clone(),
-            footprint: it.footprint.iter().map(|p| [p.0, p.1]).collect(),
-            host_wall: it.host_wall.clone(),
-        })
-        .collect();
-    WallItems { band_mm: WALL_BAND_MM, items }
+    /// What each new 3D view hides and sees through, in the template's order of 3D viewports
+    /// (`rls_three_d::three_ds`). Empty when the template has none or the room's outline is unknown; the plug-in then
+    /// hides walls by its own rule and sees through nothing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub three_ds: Vec<ThreeDPlan>,
 }
 
 /// A plan view's crop in this room: a rectangle in the target model's frame, mm, and the offsets of each side from
@@ -484,46 +419,6 @@ mod tests {
 
     fn rect(w: f64, h: f64) -> Vec<Pt> {
         vec![(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]
-    }
-
-    fn room_item(id: &str, footprint: Vec<Pt>, host_wall: Option<&str>) -> RoomItem {
-        RoomItem {
-            id: id.into(),
-            family: "F".into(),
-            type_name: "T".into(),
-            category: "Furniture".into(),
-            type_code: None,
-            footprint,
-            facing: None,
-            nested: false,
-            host_wall: host_wall.map(str::to_string),
-            properties: vec![],
-            type_properties: vec![],
-        }
-    }
-
-    /// A 4 x 3 m room: a wardrobe against the south wall, a bed in the middle, a towel rail hosted by a wall with no
-    /// footprint, and an item that has neither.
-    #[test]
-    fn the_items_along_the_walls_are_the_ones_near_the_boundary_or_hosted_by_a_wall() {
-        let items = vec![
-            room_item("wardrobe", vec![(500.0, 50.0), (1700.0, 50.0), (1700.0, 650.0), (500.0, 650.0)], None),
-            room_item("bed", vec![(1200.0, 900.0), (2800.0, 900.0), (2800.0, 2100.0), (1200.0, 2100.0)], None),
-            room_item("rail", vec![], Some("77")),
-            room_item("ghost", vec![], None),
-        ];
-        let found = wall_items(&items, &rect(4000.0, 3000.0));
-        assert_eq!(WALL_BAND_MM, found.band_mm);
-        let ids: Vec<&str> = found.items.iter().map(|i| i.id.as_str()).collect();
-        assert_eq!(vec!["wardrobe", "rail"], ids);
-        assert_eq!(Some("77".to_string()), found.items[1].host_wall);
-        assert_eq!([500.0, 50.0], found.items[0].footprint[0]);
-    }
-
-    #[test]
-    fn only_a_sheet_with_a_3d_viewport_asks_for_them() {
-        assert!(has_three_d(&json!({"view_ports": [{"vp_type": "Three D"}]})));
-        assert!(!has_three_d(&plan_sheet([0.0, 0.0], [1.0, 1.0])));
     }
 
     /// A sheet with one plan viewport cropped to `(min, max)`, as duHast exports it.

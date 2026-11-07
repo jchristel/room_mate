@@ -643,10 +643,14 @@ checked before anything is made, then one transaction group per task (`duHast...
   room's bounding-box centre, **in plan**, crosses one of the room's boundary pieces whose element is a wall (`Room.GetBoundarySegments`). Heights are ignored on purpose (a wall the
   line of sight passes over goes too). **Every wall of the room's outer loop that faces the camera goes too** (`view_walls.walls_to_hide`, 2026-11-07): from a corner
   the line crosses one wall and the other still stands across the view, so a wall whose outside the camera is on (by about 3 degrees) is hidden; a column's walls only when crossed, a view looking straight down hides nothing, and a failure is a note: the view is made either way. The walls are hidden with
-  `View.HideElements`, in that view only. **What stands along a hidden wall is made transparent** (2026-11-08): the task carries `rls.wall_items`
-  (`rls_plan::wall_items`, for a template with a 3D viewport: the room's FF&E hosted by a wall or within `WALL_BAND_MM`, 600 mm, of its outline, with
-  footprint and host wall), because the server holds the FF&E and the plug-in holds the walls; the plug-in keeps those hosted by, or within the band of,
-  a wall it hides (`view_walls.items_to_see_through`) and sets their surface transparency to `SEE_THROUGH` (70) in that view. **Not run in Revit.**
+  `View.HideElements`, in that view only. **The server decides which walls go and what is seen through** (2026-11-08, `service::rls_three_d`, `rls.three_ds` by the
+  template's 3D viewport order): it works out the camera as the plug-in makes it (the template's direction, back from the plan crop's centre)
+  and runs the same rule on the room's outline, so a task names EDGES, never wall ids (the server's outline names none); the plug-in hides every
+  straight wall in the section box with a FACE within `HIDE_BAND_MM` (200) of an edge and parallel to it (`view_walls.walls_along`: the face, because
+  a thick wall's centre line is past the band; parallel with an overlap, so the side wall meeting it at the corner stays), and sets the items
+  within 600 mm of a hidden edge (`see_through`) to 70% surface transparency (`SEE_THROUGH`) in that view. A task without `three_ds` falls back on
+  the plug-in's own rule from Revit's boundary and sees through nothing. Only the outer loop is judged on the server, so a column's walls stay.
+  The library preview draws each 3D view's camera on the plan as an arrow (`cameraArrows`). **Not run in Revit.**
 - **The annotation crop is exported and applied** (plan and elevation views): `annotation_crop_active` and `annotation_crop_offsets` (`left`/`right`/`top`/`bottom` from the
   view crop, **mm on paper**, because Revit keeps them in view units so they hold at any scale) ride each view of the sheet export (duHast `view_ports_to_data._get_annotation_crop`, via
   the parameter `VIEWER_ANNOTATION_CROP_ACTIVE` and `ViewCropRegionShapeManager`). A new plan or elevation view gets the same after its own crop is final

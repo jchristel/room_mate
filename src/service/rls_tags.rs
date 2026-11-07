@@ -59,9 +59,6 @@ pub struct RoomItem {
     /// A component of another family instance (a shower rail in its shower). Tagged only when the library has a
     /// rule for its type code, and never offered as a candidate: see `plan_tags`.
     pub nested: bool,
-    /// The wall the item is hosted by, when it is: a new 3D view makes it transparent with that wall
-    /// (`rls_plan::wall_items`).
-    pub host_wall: Option<String>,
     pub properties: Vec<Property>,
     pub type_properties: Vec<Property>,
 }
@@ -525,7 +522,6 @@ mod tests {
             ],
             facing,
             nested: false,
-            host_wall: None,
             properties: vec![Property { name: "Mark".into(), value: format!("M-{id}") }],
             type_properties: vec![],
         }

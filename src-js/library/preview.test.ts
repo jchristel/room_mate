@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { kindOf, previewOf } from "./preview.js";
+import { cameraArrows, kindOf, previewOf } from "./preview.js";
 
 const port = (vp_type: string, [x0, y0, x1, y1]: number[], scale = 50) => ({
   vp_type,
@@ -61,5 +61,37 @@ describe("sheet preview", () => {
   it("draws no lines when the plan has no crop or no elevation has a line", () => {
     const plan = { ...port("floor plan", [0, 0, 100, 100]), view: { view_scale: 50 } };
     expect(previewOf({ size_mm: { width_mm: 400, height_mm: 300 }, sheet: { view_ports: [plan] } })!.lines).toEqual([]);
+  });
+
+  it("draws each 3D view's camera on the plan: an arrow along its direction ending at its section box's middle", () => {
+    const plan = {
+      ...port("floor plan", [0, 0, 100, 100]),
+      centre_point: { x: 50, y: 50 },
+      view: { view_scale: 50, bounding_box: { min_x: 0, min_y: 0, max_x: 5000, max_y: 5000 } },
+    };
+    const three = {
+      ...port("three d", [200, 0, 300, 100], 0),
+      view: {
+        view_scale: 0,
+        forward_direction: { x: 0, y: 203.2, z: -101.6 },
+        section_box_min: { x: 0, y: 0, z: -245 },
+        section_box_max: { x: 5000, y: 2000, z: 3000 },
+      },
+    };
+    const [a] = cameraArrows([plan, three]);
+    // the box's middle (2500, 1000) is (50, 20) on paper; half its diagonal (2693 mm) back is 53.9 mm south
+    expect(a!.head[0]).toEqual({ x: 50, y: 20 });
+    expect(a!.x1).toBeCloseTo(50);
+    expect(a!.y1).toBeCloseTo(20 - Math.hypot(5000, 2000) / 2 / 50);
+    expect(a!.label).toBe("3D");
+    const p = previewOf({ size_mm: { width_mm: 400, height_mm: 300 }, sheet: { view_ports: [plan, three] } })!;
+    expect(p.arrows[0]!.head[0]).toEqual({ x: 50, y: 280 });
+  });
+
+  it("draws no camera for a 3D view looking straight down or without a section box", () => {
+    const plan = { ...port("floor plan", [0, 0, 100, 100]), centre_point: { x: 50, y: 50 }, view: { view_scale: 50, bounding_box: { min_x: 0, min_y: 0, max_x: 5000, max_y: 5000 } } };
+    const down = { ...port("three d", [0, 0, 1, 1]), view: { forward_direction: { x: 0, y: 0, z: -1 }, section_box_min: { x: 0, y: 0, z: 0 }, section_box_max: { x: 1, y: 1, z: 1 } } };
+    const bare = { ...port("three d", [0, 0, 1, 1]), view: { forward_direction: { x: 1, y: 0, z: 0 } } };
+    expect(cameraArrows([plan, down, bare])).toEqual([]);
   });
 });

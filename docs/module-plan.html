@@ -646,7 +646,7 @@
     p_generated: [189, 1586, 1317, 0],
     p_graph: [506, 1101, 264, 224],
     p_index: [9408, 17260, 3281, 3027],
-    p_library: [925, 1293, 96, 126],
+    p_library: [989, 1409, 113, 155],
     p_reports: [2062, 3124, 365, 409],
     p_settings: [2956, 3658, 409, 78],
     p_tasks: [805, 1032, 55, 58],
@@ -663,10 +663,11 @@
     probes: [5189, 8614, 2199, 0],
     reference: [85, 310, 93, 112],
     reports_api: [127, 314, 50, 119],
-    rls_create: [1187, 1650, 230, 0],
+    rls_3d: [137, 289, 44, 89],
+    rls_create: [1212, 1684, 235, 0],
     rls_place: [54, 70, 11, 0],
-    rls_plan: [338, 733, 96, 263],
-    rls_tags: [392, 831, 85, 324],
+    rls_plan: [293, 628, 82, 223],
+    rls_tags: [391, 827, 83, 323],
     room_mate: [745, 1428, 466, 0],
     room_tag: [58, 148, 25, 58],
     run_report: [221, 361, 58, 0],
@@ -692,7 +693,7 @@
     svc_items: [256, 732, 187, 253],
     svc_locator: [107, 450, 160, 165],
     svc_mile: [34, 150, 21, 86],
-    svc_mod: [72, 293, 71, 139],
+    svc_mod: [73, 294, 71, 139],
     svc_openings: [318, 1889, 265, 1262],
     svc_placement: [98, 434, 109, 211],
     svc_proj: [102, 396, 60, 216],
@@ -712,7 +713,7 @@
     tag_rule_binding: [126, 159, 26, 0],
     tag_rules: [804, 1825, 175, 772],
     tag_rules_api: [119, 525, 22, 370],
-    task_build: [555, 671, 55, 29],
+    task_build: [559, 678, 57, 29],
     tasks: [487, 799, 89, 178],
     tasks_api: [277, 347, 32, 16],
     tasks_ui: [234, 358, 52, 0],
@@ -1469,7 +1470,12 @@
     {
       id: "rls_plan", name: "service/rls_plan.rs", path: "src/service/rls_plan.rs", zone: "service", lang: "Rust",
       blurb: "What a create-RLS task says beyond copy this sheet: where each elevation marker and its views go in THIS room. <strong>Transfer is by the walls</strong>, by the cyclic shift that fits the two coarse outlines; a different edge count places nothing and says so.",
-      deps: ["bp_geom", "bp_resolve", "elev_facing", "rls_tags"]
+      deps: ["bp_geom", "bp_resolve", "elev_facing", "rls_tags", "rls_3d"]
+    },
+    {
+      id: "rls_3d", name: "service/rls_three_d.rs", path: "src/service/rls_three_d.rs", zone: "service", lang: "Rust",
+      blurb: "What each new 3D view of an RLS hides and sees through: the camera worked out as the plug-in makes it, the room's <strong>edges</strong> crossed by the line of sight or facing the camera (never wall ids: the outline names none), and the items within 600 mm of them.",
+      deps: ["bp_geom", "rls_plan", "rls_tags"]
     },
     {
       id: "rls_tags", name: "service/rls_tags.rs", path: "src/service/rls_tags.rs", zone: "service", lang: "Rust",
@@ -1489,7 +1495,7 @@
     {
       id: "task_build", name: "service/task_build.rs", path: "src/service/task_build.rs", zone: "service", lang: "Rust",
       blurb: "Making a task: the resolver's answer and the sheets frozen as what a Revit session is told. Placements leave in the target model's own frame, undone from the project frame in this one place.",
-      deps: ["assignments", "blueprints", "bp_capture", "bp_model", "bp_resolve", "elev_facing", "rls_place", "rls_plan", "rls_tags", "shared", "sheet_suggest", "sheets", "state", "svc_items", "svc_locator", "svc_placement", "svc_rooms", "tag_rules", "tasks"]
+      deps: ["assignments", "blueprints", "bp_capture", "bp_model", "bp_resolve", "elev_facing", "rls_place", "rls_plan", "rls_tags", "rls_3d", "shared", "sheet_suggest", "sheets", "state", "svc_items", "svc_locator", "svc_placement", "svc_rooms", "tag_rules", "tasks"]
     },
     {
       id: "svc_placement", name: "service/placement.rs", path: "src/service/placement.rs", zone: "service", lang: "Rust",

@@ -91,23 +91,27 @@ class WallsToHide(unittest.TestCase):
         self.assertEqual([], vw.walls_to_hide(None, CENTRE, [ROOM]))
 
 
-class SeeThrough(unittest.TestCase):
-    """The task's items along the walls (`rls.wall_items`), kept where the wall beside them is hidden. Millimetres."""
+class WallsAlong(unittest.TestCase):
+    """The server's hidden edges (`rls.three_ds[n].hide`, mm) turned into the walls with a face along them."""
 
-    PIECES = [(1, (0, 0), (4000, 0)), (2, (4000, 0), (4000, 3000)), (3, (4000, 3000), (0, 3000)), (4, (0, 3000), (0, 0))]
-    LISTED = {"band_mm": 600.0, "items": [
-        {"id": "wardrobe", "footprint": [[500, 50], [1700, 50], [1700, 650], [500, 650]]},
-        {"id": "desk", "footprint": [[3500, 1000], [3950, 1000], [3950, 2000], [3500, 2000]]},
-        {"id": "rail", "footprint": [], "host_wall": "4"},
-    ]}
+    SOUTH = [[0, 0], [4000, 0]]
+    WALLS = [
+        ("south", (-100, -100), (4100, -100), 100.0),   # 200 thick, inner face on the edge
+        ("thick", (0, -240), (4000, -240), 225.0),      # 450 thick: its centre is past the band, its face is not
+        ("west", (-100, -100), (-100, 3100), 100.0),    # the side wall: meets the south edge end on
+        ("lining", (500, 30), (1500, 30), 25.0),        # a lining in front of the south wall
+        ("far", (0, -900), (4000, -900), 100.0),        # the next room's wall beyond
+    ]
 
-    def test_an_item_goes_with_the_wall_it_stands_against_or_is_hosted_by(self):
-        self.assertEqual(["wardrobe", "rail"], vw.items_to_see_through(self.LISTED, [1, 4], self.PIECES))
-        self.assertEqual(["desk"], vw.items_to_see_through(self.LISTED, [2], self.PIECES))
+    def test_the_walls_with_a_face_along_an_edge_go_and_the_side_wall_stays(self):
+        self.assertEqual(["south", "thick", "lining"], vw.walls_along(self.WALLS, [self.SOUTH], 200.0))
 
-    def test_nothing_hidden_or_nothing_listed_sees_through_nothing(self):
-        self.assertEqual([], vw.items_to_see_through(self.LISTED, [], self.PIECES))
-        self.assertEqual([], vw.items_to_see_through(None, [1], self.PIECES))
+    def test_no_edges_hide_nothing(self):
+        self.assertEqual([], vw.walls_along(self.WALLS, [], 200.0))
+
+    def test_the_faces_lie_either_side_of_the_location_line(self):
+        faces = vw.faces_of((0, 0), (10, 0), 2.0)
+        self.assertEqual([((0, 2.0), (10, 2.0)), ((0, -2.0), (10, -2.0))], [tuple(map(tuple, f)) for f in faces])
 
 
 if __name__ == "__main__":

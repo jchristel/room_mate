@@ -15,9 +15,10 @@ the camera, the camera being on its outside (`faces`): seen from a corner both w
 square on only the near wall does, and a wall the camera looks along stays. A hole's walls (a column) are hidden
 only when the line crosses them.
 
-**What stands along a hidden wall is seen through, not hidden** (`items_to_see_through`): the task carries the
-room's items along its walls (`rls.wall_items`, worked out on the server from the FF&E it holds), and the plug-in
-keeps those hosted by, or within the task's band of, a wall it hides.
+**The server decides it now** (2026-11-08, `service::rls_three_d`): a task carries, per 3D view, the edges of the
+room's outline whose walls go and the items to see through, and the plug-in hides every wall with a face along an
+edge (`walls_along`). `walls_to_hide` is what a task made before that (or for a room the server has no outline of)
+still uses.
 """
 
 EPSILON = 1.0e-9
@@ -119,33 +120,53 @@ def walls_to_hide(eye, centre, loops):
     return found
 
 
-def _to_segment(p, a, b):
+
+# A wall's face is along an edge when it runs within about 10 degrees of it and shares at least this much of it:
+# the wall of the side next to a hidden one meets it at the corner, end on, and must stay.
+PARALLEL_SIN = 0.17
+OVERLAP_MIN_MM = 100.0
+
+
+def _along(face, edge, band):
+    (a, b), (p, q) = face, edge
+    ex, ey = q[0] - p[0], q[1] - p[1]
+    length = (ex * ex + ey * ey) ** 0.5
+    fx, fy = b[0] - a[0], b[1] - a[1]
+    flen = (fx * fx + fy * fy) ** 0.5
+    if length < EPSILON or flen < EPSILON:
+        return False
+    tx, ty = ex / length, ey / length
+    if abs(tx * fy - ty * fx) / flen > PARALLEL_SIN:
+        return False
+    # how far the face is off the edge's line, and how much of the edge it covers
+    off = [abs(tx * (pt[1] - p[1]) - ty * (pt[0] - p[0])) for pt in (a, b)]
+    if sum(off) / 2.0 > band:
+        return False
+    t0 = (a[0] - p[0]) * tx + (a[1] - p[1]) * ty
+    t1 = (b[0] - p[0]) * tx + (b[1] - p[1]) * ty
+    overlap = min(length, max(t0, t1)) - max(0.0, min(t0, t1))
+    return overlap >= OVERLAP_MIN_MM
+
+
+def faces_of(a, b, half_width):
+    """The two faces of a straight wall whose location line runs `a`-`b`, `half_width` either side."""
     dx, dy = b[0] - a[0], b[1] - a[1]
-    length2 = dx * dx + dy * dy
-    t = 0.0 if length2 < EPSILON else max(0.0, min(1.0, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / length2))
-    fx, fy = a[0] + dx * t, a[1] + dy * t
-    return ((p[0] - fx) ** 2 + (p[1] - fy) ** 2) ** 0.5
-
-
-def items_to_see_through(wall_items, hidden, pieces):
-    """The ids, in the task's order, of the items to make transparent beside the walls being hidden.
-
-    `wall_items` is the task's `rls.wall_items` (`{"band_mm", "items": [{"id", "footprint", "host_wall"}]}`, the
-    server's list of the room's items along any of its walls, footprints in mm); `hidden` the keys
-    `walls_to_hide` returned and `pieces` every `(key, (x0, y0), (x1, y1))` of the room's boundary, in MM. An item
-    goes when it is hosted by a hidden wall or a corner of its footprint is within the band of a hidden piece:
-    which walls are hidden is decided here, from Revit's boundary, and the server only says what stands along them."""
-    if not wall_items or not hidden:
+    length = (dx * dx + dy * dy) ** 0.5
+    if length < EPSILON:
         return []
-    band = float(wall_items.get("band_mm") or 0.0)
-    gone = set(str(k) for k in hidden)
-    near = [(a, b) for key, a, b in pieces if key is not None and str(key) in gone]
+    nx, ny = -dy / length * half_width, dx / length * half_width
+    return [((a[0] + nx, a[1] + ny), (b[0] + nx, b[1] + ny)), ((a[0] - nx, a[1] - ny), (b[0] - nx, b[1] - ny))]
+
+
+def walls_along(walls, edges, band):
+    """The keys, in order, of the walls with a face along one of the server's hidden `edges` (the task's
+    `rls.three_ds[n].hide`: `[[x0, y0], [x1, y1]]` in mm), within `band` mm of it. `walls` is a list of
+    `(key, (x0, y0), (x1, y1), half_width)`, the straight walls' location lines, in mm. A wall that only meets an
+    edge at its end (the side wall at the corner) is not along it."""
     out = []
-    for item in wall_items.get("items") or []:
-        host = item.get("host_wall")
-        if host is not None and str(host) in gone:
-            out.append(item["id"])
+    for key, a, b, half_width in walls:
+        if key in out:
             continue
-        if any(_to_segment(p, a, b) <= band for p in item.get("footprint") or [] for a, b in near):
-            out.append(item["id"])
+        if any(_along(face, (tuple(e[0]), tuple(e[1])), band) for face in faces_of(a, b, half_width) for e in edges):
+            out.append(key)
     return out
