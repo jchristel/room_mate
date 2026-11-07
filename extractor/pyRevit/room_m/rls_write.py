@@ -93,7 +93,7 @@ from room_m import rls_settings
 from room_m import task_log
 from room_m.apply_facts import RevitFacts
 
-# How far beyond the room a plan view's crop reaches when the template viewport carried none.
+# How far beyond the room a plan view's crop reaches when the task carries no crop and the template viewport none.
 CROP_MARGIN_MM = 600.0
 # How far a 3D view's section box stands off the room on every side.
 SECTION_MARGIN_MM = 600.0
@@ -262,12 +262,18 @@ class RlsWriter(object):
             raise RuntimeError("plan view {}: {}".format(plan["plan_name"], outcome.message.strip()))
         view = outcome.result[0]
 
-        box = room.get_BoundingBox(None)
-        room_w = (box.Max.X - box.Min.X) * geo.MM_PER_FT + 2 * CROP_MARGIN_MM
-        room_h = (box.Max.Y - box.Min.Y) * geo.MM_PER_FT + 2 * CROP_MARGIN_MM
         vp = plan["plan_viewport"]
-        size = (geo.crop_size_mm(vp, room_w, room_h) if vp else None) or (room_w, room_h)
-        centre = XYZ((box.Max.X + box.Min.X) / 2.0, (box.Max.Y + box.Min.Y) / 2.0, self._level_z)
+        placed = plan.get("plan_crop")
+        if placed:
+            # The server kept the template crop's offset from its room's box on every side (rls_plan::plan_crop).
+            size = placed["size"]
+            centre = XYZ(_ft(placed["centre"][0]), _ft(placed["centre"][1]), self._level_z)
+        else:
+            box = room.get_BoundingBox(None)
+            room_w = (box.Max.X - box.Min.X) * geo.MM_PER_FT + 2 * CROP_MARGIN_MM
+            room_h = (box.Max.Y - box.Min.Y) * geo.MM_PER_FT + 2 * CROP_MARGIN_MM
+            size = (geo.crop_size_mm(vp, room_w, room_h) if vp else None) or (room_w, room_h)
+            centre = XYZ((box.Max.X + box.Min.X) / 2.0, (box.Max.Y + box.Min.Y) / 2.0, self._level_z)
 
         def crop():
             view.Scale = int(plan["plan_scale"])
@@ -420,7 +426,8 @@ class RlsWriter(object):
 
     def _three_ds(self, plan, room, level, phase, sheet, notes):
         """A new 3D view for each 3D viewport of the template: the template's direction, looking at THIS
-        room, cut to the room plus a margin. The template view itself is never placed."""
+        room, cut in plan to the plan view's crop (the server's `plan_crop`, so the two views frame the same
+        footprint), else to the room plus a margin. The template view itself is never placed."""
         if not plan["three_ds"]:
             return
         view_type = self.facts._view_type(ViewFamily.ThreeDimensional, plan["three_d_view_type"])
@@ -431,6 +438,10 @@ class RlsWriter(object):
         margin = _ft(SECTION_MARGIN_MM)
         low = XYZ(box.Min.X - margin, box.Min.Y - margin, min(box.Min.Z, self._level_z) - margin)
         high = XYZ(box.Max.X + margin, box.Max.Y + margin, box.Max.Z + margin)
+        footprint = plan.get("plan_crop")
+        if footprint:
+            low = XYZ(_ft(footprint["min"][0]), _ft(footprint["min"][1]), low.Z)
+            high = XYZ(_ft(footprint["max"][0]), _ft(footprint["max"][1]), high.Z)
         for v in plan["three_ds"]:
             # the template's section box height, above THIS room's level, where the template carried one
             heights = section_box.above_floor_ft(v["viewport"], geo.mm_to_ft)

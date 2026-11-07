@@ -628,7 +628,7 @@ checked before anything is made, then one transaction group per task (`duHast...
   the model's own frame, the extent of its corners with the box transform applied). When the extractor reads a sheet it turns the box's z range into heights ABOVE THE LEVEL of the
   room the sheet was made for (`section_z_above_floor_mm`, on the 3D view: the first ticked room on the Sheets button, the blueprint's room on the Blueprint button), the level's z being
   the room's own (`utils.rooms.level_z_ft`), never `Level.Elevation`. A new 3D view's box then runs those heights above THIS room's level; its x and y stay the room's bounding box plus
-  `SECTION_MARGIN_MM`. A sheet with no room, or exported before, gets the room's box plus the margin all round, as before. **Not run in Revit.**
+  `SECTION_MARGIN_MM` (x and y are the plan crop's when the task carries `plan_crop`). A sheet with no room, or exported before, gets the room's box plus the margin all round, as before. **Not run in Revit.**
 - **A new 3D view hides the room's own walls that stand between its camera and the middle of the room** (`room_m/view_walls.py`, `rls_write._hide_walls_in_the_way`).
   The camera is where duHast's `view_3d_create` puts it (back along the view direction from the section box's centre); a wall is in the way when the line from it to the
   room's bounding-box centre, **in plan**, crosses one of the room's boundary pieces whose element is a wall (`Room.GetBoundarySegments`). Heights are ignored on purpose (a wall the
@@ -663,6 +663,11 @@ checked before anything is made, then one transaction group per task (`duHast...
 - **View names are the view-name template plus ` PLAN` / ` ELEV m-n` (marker, then view on it, both from 1) / ` SCHEDULE`**; the schedule's FIRST filter is set to the room number.
   The plan view type is assumed to carry its view template; none is applied. Free-text sheet content, a number of sheets other than one per
   task, FF&E placement, elevation tags and the rectangle round a chosen item are **not done**.
+- **A plan view's crop keeps the template crop's offset from its room's bounding box on each side** (`rls_plan::plan_crop`, `rls.plan_crop`,
+  2026-11-07): left, right, bottom, top, in mm, from the template room's box to this room's, so the room a sheet was made from gets its own crop back
+  exactly (centring a crop of the template's size, never smaller than the room plus 600 mm, made it larger than the original). The first floor plan
+  viewport is read, the one `rls_task` makes the plan from. Both boxes are axis-aligned in their model's frame, which is the crop's own frame only
+  while the crop is not rotated (duHast exports its Min and Max, not its transform). A task without it crops round the room as before. **A new 3D view's section box takes the same footprint** in plan (its heights still follow the template's, below), so the plan and the 3D frame the same piece of the model.
 - **An elevation is cropped to the template view's height** (`height_mm`, from the view's crop box, measured up from where the new crop's bottom already is), so a tall neighbouring room does not make it tall; a new 3D view has Crop View on.
 - **What Revit does with an elevation marker, measured (2026-11-01, all of it matters to `rls_write` and duHast).** The marker has NO point (`Location` is the
   bare class, a bounding box exists only in a plan view). Each view has a **pointer** (a dependent element of `OST_Viewers`, shown as "Views"; the one with the

@@ -14,11 +14,12 @@
 use serde_json::{json, Value};
 
 use super::blueprint_capture::{properties_of, FT_TO_MM};
+use super::blueprint_geometry::Pt;
 use super::blueprint_resolve::{resolve_in_room_with, EdgeMap};
 use super::elevation_facing::model_room_ring;
 use super::items::{assemble_items, ItemScope};
 use super::placement;
-use super::rls_plan::{check_size, has_elevations, size_token, transfer, MarkerPlan, RlsPlan, RlsRequest};
+use super::rls_plan::{check_size, has_elevations, plan_crop, size_token, transfer, MarkerPlan, RlsPlan, RlsRequest};
 use super::rls_tag_place::room_tag_head;
 use super::rls_tags::{plan_tags, type_code_of, RoomItem};
 use super::room_locator::RoomRef;
@@ -416,24 +417,20 @@ fn sheet_for_rules(record: &sheets::SheetRecord) -> BlueprintSheet {
 
 /// Where the template's elevation markers and views go in this room (`service::rls_plan`), with a
 /// finding for whatever could not be placed.
+/// The template room's outline and this room's, either absent when the room is not on the server.
+type Rings = (Option<Vec<Pt>>, Option<Vec<Pt>>);
+
 fn place_elevations(
-    state: &AppState,
-    project: &str,
-    room: &RoomRef,
+    rings: &Rings,
     record: &sheets::SheetRecord,
     request: &RlsRequest,
     findings: &mut Vec<Value>,
-) -> Result<Vec<MarkerPlan>, ServiceError> {
+) -> Vec<MarkerPlan> {
     let mut markers = Vec::new();
     if has_elevations(&record.sheet) {
-        let target = SheetRoom::from(room);
-        let template = match &record.room {
-            Some(r) => model_room_ring(state, project, r)?,
-            None => None,
-        };
-        match (template, model_room_ring(state, project, &target)?) {
+        match rings {
             (Some(t), Some(g)) => {
-                let (placed, notes) = transfer(&record.sheet, &t, &g, request);
+                let (placed, notes) = transfer(&record.sheet, t, g, request);
                 markers = placed;
                 findings.extend(notes.into_iter().map(|n| finding("elevation_not_placed", n)));
             }
@@ -452,7 +449,22 @@ fn place_elevations(
             ));
         }
     }
-    Ok(markers)
+    markers
+}
+
+/// The template room's outline and this room's, each in its own model's frame (the sheet's numbers are), read once
+/// for the elevations and the plan crop.
+fn template_and_target(
+    state: &AppState,
+    project: &str,
+    room: &RoomRef,
+    record: &sheets::SheetRecord,
+) -> Result<Rings, ServiceError> {
+    let template = match &record.room {
+        Some(r) => model_room_ring(state, project, r)?,
+        None => None,
+    };
+    Ok((template, model_room_ring(state, project, &SheetRoom::from(room))?))
 }
 
 /// A create-RLS task: one library sheet's layout for one room. Nothing is placed. A sheet whose
@@ -512,7 +524,12 @@ pub fn rls_from_sheet(
         )),
         (Some(_), None) => {}
     }
-    let markers = place_elevations(state, project, room, &record, request, &mut findings)?;
+    let rings = template_and_target(state, project, room, &record)?;
+    let markers = place_elevations(&rings, &record, request, &mut findings);
+    let plan_crop = match &rings {
+        (Some(t), Some(g)) => plan_crop(&record.sheet, t, g),
+        _ => None,
+    };
     // No items are placed: the rules for every element are carried, for the plug-in to apply to
     // whatever it finds in the room.
     let parameter = type_code_parameter(state, project);
@@ -532,8 +549,9 @@ pub fn rls_from_sheet(
         None => None,
     };
     let room_tag = room_tag_head(state, project, room, &record, &tag_rules, &mut findings)?;
-    let rls = (sheet_size.is_some() || !markers.is_empty() || tags.is_some() || room_tag.is_some())
-        .then_some(RlsPlan { sheet_size, markers, tags, room_tag });
+    let rls =
+        (sheet_size.is_some() || !markers.is_empty() || tags.is_some() || room_tag.is_some() || plan_crop.is_some())
+            .then_some(RlsPlan { sheet_size, markers, tags, room_tag, plan_crop });
     Ok(NewTask {
         rls,
         kind: TaskKind::CreateRls,

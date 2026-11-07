@@ -216,6 +216,23 @@ def _room_tag_head(task):
     return None
 
 
+def _plan_crop(task):
+    """The plan view's crop the server worked out for this room (the template crop's offset from its room's box,
+    side by side): `{"centre": [x, y], "size": [w, h], "min": [x, y], "max": [x, y]}` in the model's frame, mm; None
+    when the task carries none and the writer is to crop round the room as before. The 3D views take the same
+    footprint (min and max) for their section box."""
+    crop = (task.get("rls") or {}).get("plan_crop") or {}
+    lo, hi = crop.get("min"), crop.get("max")
+    try:
+        lo, hi = [float(v) for v in lo], [float(v) for v in hi]
+    except (TypeError, ValueError):
+        return None
+    if len(lo) != 2 or len(hi) != 2 or hi[0] <= lo[0] or hi[1] <= lo[1]:
+        return None
+    return {"centre": [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0], "size": [hi[0] - lo[0], hi[1] - lo[1]],
+            "min": lo, "max": hi}
+
+
 def build(task, settings, values):
     """`(plan, aborts)`: what to make for `task`, and what stops it. The plan is plain data (names,
     sizes, template viewports, markers, tags), so the writer only has to do it."""
@@ -275,6 +292,7 @@ def build(task, settings, values):
         "untagged_items": len(((task.get("rls") or {}).get("tags") or {}).get("items_without_tags") or []),
         "elevation_tags": _elevation_tags(task),
         "room_tag_head": _room_tag_head(task),
+        "plan_crop": _plan_crop(task),
     }
     # the detail number each viewport gets, in the order the writer makes them (`detail_numbers`)
     plan["detail_numbers"] = detail_numbers.assign(

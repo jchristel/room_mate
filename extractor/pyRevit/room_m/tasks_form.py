@@ -97,3 +97,23 @@ def refresh_note(before_ids, after_ids):
     if gone:
         line += ", {} no longer queued".format(gone)
     return line + "."
+
+
+def to_save(project, text, kind_key, level):
+    """The section `prefs` keeps after a run: the project id and the filters (text, kind, level). Never the checked
+    tasks: the queue is different next time."""
+    return {"project": (project or {}).get("id"), "filter": text or "", "kind": kind_key or KIND_ALL,
+            "level": level or ALL_LEVELS}
+
+
+def remembered(saved, projects):
+    """`(project index or None, filter text, kind index, level)` from the saved section. A project that no longer
+    exists is dropped and an unknown kind is "all"; the level is checked against the levels once the tasks are read."""
+    saved = saved or {}
+    index = None
+    for i, project in enumerate(projects):
+        if project.get("id") == saved.get("project"):
+            index = i
+    kinds = [key for key, _label in KIND_FILTERS]
+    kind = kinds.index(saved.get("kind")) if saved.get("kind") in kinds else 0
+    return index, str(saved.get("filter") or ""), kind, str(saved.get("level") or ALL_LEVELS)

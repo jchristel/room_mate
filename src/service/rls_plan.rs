@@ -112,6 +112,82 @@ pub struct RlsPlan {
     /// The room tag's place from its rule's boundary recipe.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub room_tag: Option<RoomTagPlan>,
+    /// Where the new plan view's crop goes ([`plan_crop`]). Absent when the template's crop or either room's
+    /// outline is unknown; the plug-in then crops round the room as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plan_crop: Option<PlanCrop>,
+}
+
+/// A plan view's crop in this room: a rectangle in the target model's frame, mm, and the offsets of each side from
+/// the room's bounding box that it was made from (positive = outside the room).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PlanCrop {
+    pub min: [f64; 2],
+    pub max: [f64; 2],
+    pub offsets_mm: CropOffsets,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct CropOffsets {
+    pub left: f64,
+    pub right: f64,
+    pub bottom: f64,
+    pub top: f64,
+}
+
+fn num(v: &Value, key: &str) -> Option<f64> {
+    v.get(key).and_then(Value::as_f64)
+}
+
+fn bounds(ring: &[Pt]) -> Option<([f64; 2], [f64; 2])> {
+    let first = ring.first()?;
+    let mut lo = [first.0, first.1];
+    let mut hi = lo;
+    for p in ring {
+        lo = [lo[0].min(p.0), lo[1].min(p.1)];
+        hi = [hi[0].max(p.0), hi[1].max(p.1)];
+    }
+    (hi[0] > lo[0] && hi[1] > lo[1]).then_some((lo, hi))
+}
+
+/// The template plan view's crop box, `(min, max)` in its model's frame, mm, as duHast exported it (`min_x`..`max_y`,
+/// or `min`/`max` points).
+fn template_crop(sheet: &Value) -> Option<([f64; 2], [f64; 2])> {
+    let port = sheet.get("view_ports")?.as_array()?.iter().find(|p| {
+        p.get("vp_type")
+            .and_then(Value::as_str)
+            .is_some_and(|t| t.eq_ignore_ascii_case("floor plan"))
+    })?;
+    let b = port.get("view")?.get("bounding_box")?;
+    let corner = |key: &str| Some([num(b.get(key)?, "x")?, num(b.get(key)?, "y")?]);
+    let (lo, hi) = match (num(b, "min_x"), num(b, "min_y"), num(b, "max_x"), num(b, "max_y")) {
+        (Some(a), Some(c), Some(d), Some(e)) => ([a, c], [d, e]),
+        _ => (corner("min")?, corner("max")?),
+    };
+    let (lo, hi) = ([lo[0].min(hi[0]), lo[1].min(hi[1])], [lo[0].max(hi[0]), lo[1].max(hi[1])]);
+    (hi[0] > lo[0] && hi[1] > lo[1]).then_some((lo, hi))
+}
+
+/// Where the new plan view's crop goes: **the template crop's offset from its room's bounding box, side by side,
+/// kept in this room.** The template's crop is a person's framing of THEIR room (a margin for dimensions on one
+/// side, a side cut tight); centring a crop of the template's size, or the room plus a fixed margin, on another
+/// room loses it, and on the room the sheet was made from it made a bigger view than the original. Both boxes are
+/// axis-aligned in their own model's frame, which is the crop box's frame for a plan whose crop is not rotated
+/// (duHast exports the crop's Min and Max, not its transform). The fixed-mm offsets are paper-independent, so the
+/// view keeps the template's scale and a larger room gets a larger crop by exactly its own growth.
+pub fn plan_crop(sheet: &Value, template: &[Pt], target: &[Pt]) -> Option<PlanCrop> {
+    let (clo, chi) = template_crop(sheet)?;
+    let (tlo, thi) = bounds(template)?;
+    let (glo, ghi) = bounds(target)?;
+    let offsets = CropOffsets {
+        left: tlo[0] - clo[0],
+        right: chi[0] - thi[0],
+        bottom: tlo[1] - clo[1],
+        top: chi[1] - thi[1],
+    };
+    let min = [glo[0] - offsets.left, glo[1] - offsets.bottom];
+    let max = [ghi[0] + offsets.right, ghi[1] + offsets.top];
+    (max[0] > min[0] && max[1] > min[1]).then_some(PlanCrop { min, max, offsets_mm: offsets })
 }
 
 /// `a1` for ` A1 `, or why it is not a size.
@@ -337,6 +413,47 @@ mod tests {
 
     fn rect(w: f64, h: f64) -> Vec<Pt> {
         vec![(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]
+    }
+
+    /// A sheet with one plan viewport cropped to `(min, max)`, as duHast exports it.
+    fn plan_sheet(min: [f64; 2], max: [f64; 2]) -> Value {
+        json!({"view_ports": [
+            {"vp_type": "elevation", "view": {"bounding_box": {"min_x": -9e9, "min_y": -9e9, "max_x": 9e9, "max_y": 9e9}}},
+            {"vp_type": "floor plan", "view": {"bounding_box": {"min_x": min[0], "min_y": min[1], "max_x": max[0], "max_y": max[1]}}},
+        ]})
+    }
+
+    #[test]
+    fn the_same_room_gets_the_template_crop_back_exactly() {
+        // WC 00.03 as exported: the crop 15 mm outside the room on the left, 301 on the right, 8 mm INSIDE it at the
+        // bottom and 40 outside at the top.
+        let room = vec![
+            (15038.3, 6343.5),
+            (18350.3, 6343.5),
+            (18350.3, 9111.5),
+            (15038.3, 9111.5),
+        ];
+        let sheet = plan_sheet([15022.9, 6351.3], [18651.3, 9151.2]);
+        let c = plan_crop(&sheet, &room, &room).unwrap();
+        assert!((c.min[0] - 15022.9).abs() < 1e-6 && (c.min[1] - 6351.3).abs() < 1e-6, "{c:?}");
+        assert!((c.max[0] - 18651.3).abs() < 1e-6 && (c.max[1] - 9151.2).abs() < 1e-6, "{c:?}");
+        assert!(c.offsets_mm.bottom < 0.0, "a crop inside the room stays inside it");
+    }
+
+    #[test]
+    fn another_room_keeps_each_side_s_offset_from_its_own_box() {
+        let sheet = plan_sheet([-100.0, -200.0], [4300.0, 3400.0]); // left 100, bottom 200, right 300, top 400
+        let target: Vec<Pt> = rect(6000.0, 2000.0).iter().map(|&(x, y)| (x + 10_000.0, y + 500.0)).collect();
+        let c = plan_crop(&sheet, &rect(4000.0, 3000.0), &target).unwrap();
+        assert_eq!(c.min, [9_900.0, 300.0]);
+        assert_eq!(c.max, [16_300.0, 2_900.0]);
+    }
+
+    #[test]
+    fn no_crop_or_no_plan_viewport_gives_none() {
+        assert!(plan_crop(&json!({"view_ports": []}), &rect(1.0, 1.0), &rect(1.0, 1.0)).is_none());
+        let bare = json!({"view_ports": [{"vp_type": "floor plan", "view": {}}]});
+        assert!(plan_crop(&bare, &rect(1.0, 1.0), &rect(1.0, 1.0)).is_none());
     }
 
     /// A sheet whose one marker sits at the middle of a 4 m x 3 m room with its four views

@@ -1023,7 +1023,7 @@ def _choose_tasks(doc, forms):
             return False, "Could not list the tasks ({}): {}".format(status if status is not None else "no response", text)
         return True, tasks_form.rows(summaries, level_of)
 
-    return tasks_window.show(forms, doc.Title, payload, load)
+    return tasks_window.show(forms, doc.Title, payload, load, saved=prefs.section("tasks"))
 
 
 @_finishing("tasks")
@@ -1068,6 +1068,8 @@ def tasks_entry(doc, uiapp, output, forms):
             return_value.append_message("Tasks cancelled")
             return return_value
         project = choice["project"]
+        from room_m import tasks_form
+        prefs.save_section("tasks", tasks_form.to_save(project, choice["filter"], choice["kind"], choice["level"]))
         task_log.info("model '{}', project '{}', {} task(s) chosen".format(
             selected_doc.Title, project["id"], len(choice["task_ids"])))
 

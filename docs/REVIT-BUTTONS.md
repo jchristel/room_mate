@@ -26,7 +26,7 @@ Sends the sheets you choose to the server's sheet library. A filter, "Check all 
 
 ### <img src="../extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/Tasks.pushbutton/Icon.png" alt="" width="40" align="absmiddle"> Tasks
 
-Carries out the room tasks the server holds for the open model. The window lists the queued tasks, filterable by room, kind and level, and Refresh asks the server again without losing what you checked. The checked tasks are claimed and all checked before anything is written; populate and update tasks place the items, and create-RLS tasks make the sheets, views, schedule and tags, each task in one transaction group. Every step is written to `RoomMate.log`, and placing items has not yet been run in Revit.
+Carries out the room tasks the server holds for the open model. The window lists the queued tasks, filterable by room, kind and level; Refresh asks the server again without losing what you checked, and the project and filters are remembered. The checked tasks are claimed and all checked before anything is written; populate and update tasks place the items, and create-RLS tasks make the sheets, views, schedule and tags, each task in one transaction group. Every step is written to `RoomMate.log`, and placing items has not yet been run in Revit.
 
 ### <img src="../extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/RlsSettings.pushbutton/Icon.png" alt="" width="40" align="absmiddle"> RLS settings
 
@@ -47,7 +47,7 @@ Chooses which RoomMate server this computer and this model push to. Type an addr
   matched with any room parameter, and a side that cannot be filled (a blank or missing parameter) never
   matches. The window names a placeholder that no sheet or room has.
 - **The server** is shown in the blue header of every window that pushes or reads from it.
-- **Remembered choices** are kept in `%APPDATA%\RoomMate\prefs.json` (the Export, Sheets and Blueprint
+- **Remembered choices** are kept in `%APPDATA%\RoomMate\prefs.json` (the Export, Sheets, Blueprint and Tasks
   windows). A missing or unreadable file only means the window starts blank.
 
 ## What you read when a run finishes

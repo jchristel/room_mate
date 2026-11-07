@@ -21,9 +21,11 @@ from room_m import tasks_form as form
 XAML_PATH = os.path.join(os.path.dirname(__file__), "tasks.xaml")
 
 
-def show(forms, model_title, projects, load):
-    """Show the window. `load(project)` answers `(ok, rows_or_message)` for a project (`tasks_form.rows`).
-    Returns `{"project": {"id", "name"}, "task_ids": [...]}` for the ticked tasks, or None when cancelled."""
+def show(forms, model_title, projects, load, saved=None):
+    """Show the window. `load(project)` answers `(ok, rows_or_message)` for a project (`tasks_form.rows`); `saved`
+    is what `room_m.prefs` kept from the last run (project, filter text, kind, level).
+    Returns `{"project": {"id", "name"}, "task_ids": [...], "filter", "kind", "level"}` for the checked tasks, or
+    None when cancelled."""
 
     class TasksWindow(forms.WPFWindow):
         def __init__(self):
@@ -34,6 +36,7 @@ def show(forms, model_title, projects, load):
             self._rows = []
             self._boxes = []
             self._message = ""
+            self._saved_level = None
             self.tx_model.Text = "Model: {}".format(model_title)
             self.tx_server.Text = server_config.short()
             self.cb_project.ItemsSource = [p["name"] for p in self._projects]
@@ -41,8 +44,13 @@ def show(forms, model_title, projects, load):
             self.cb_kind.SelectedIndex = 0
             self.cb_level.ItemsSource = [form.ALL_LEVELS]
             self.cb_level.SelectedIndex = 0
+            index, text, kind, self._saved_level = form.remembered(saved, self._projects)
+            self.tb_filter.Text = text
+            self.cb_kind.SelectedIndex = kind
             self._ready = True
-            if len(self._projects) == 1:
+            if index is not None:
+                self.cb_project.SelectedIndex = index
+            elif len(self._projects) == 1:
                 self.cb_project.SelectedIndex = 0
             self._status()
 
@@ -77,7 +85,9 @@ def show(forms, model_title, projects, load):
             if form.problems(len(self._ticked_ids())):
                 self._status()
                 return
-            self.result = {"project": self._projects[self.cb_project.SelectedIndex], "task_ids": self._ticked_ids()}
+            text, kind_key, level = self._filters()
+            self.result = {"project": self._projects[self.cb_project.SelectedIndex], "task_ids": self._ticked_ids(),
+                           "filter": text, "kind": kind_key, "level": level}
             self.Close()
 
         # -- helpers --------------------------------------------------------------------------
@@ -112,7 +122,10 @@ def show(forms, model_title, projects, load):
             self._ready = False
             choices = form.level_choices(self._rows)
             self.cb_level.ItemsSource = choices
-            self.cb_level.SelectedIndex = choices.index(level) if refresh and level in choices else 0
+            # a refresh keeps the level shown; the first load takes the one remembered from the last run
+            keep = level if refresh else self._saved_level
+            self._saved_level = None
+            self.cb_level.SelectedIndex = choices.index(keep) if keep in choices else 0
             self._ready = True
             self._apply_filter()
 
