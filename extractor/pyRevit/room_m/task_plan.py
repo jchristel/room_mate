@@ -110,6 +110,17 @@ def has_warnings(verdicts):
     return any(v["warnings"] and not v["aborts"] for v in verdicts)
 
 
+class Info(str):
+    """A writer's note that says what was done ("sheet RLS-01 made", "12 tag(s) placed"), not what went wrong. It is
+    reported like any note, but does not make a task "completed with warnings": every sheet made said so, so every task
+    was reported with warnings and a real one could not be told from a clean run. A plain `str` note is a warning."""
+
+
+def info(text):
+    """`text` as an `Info` note."""
+    return Info(text)
+
+
 def _messages(findings):
     return [f["message"] for f in findings]
 
@@ -143,12 +154,14 @@ def runnable(verdicts, proceed):
 
 def result_report(verdict, error=None, notes=None):
     """The report for a task that was run. `error` is what went wrong (the task is failed);
-    otherwise a task that had warnings, or that wrote with `notes`, is completed with warnings."""
+    otherwise a task that had warnings, or that wrote a note that is not an `Info`, is completed with warnings.
+    Every note is sent, the `Info` ones too, as plain text."""
     task_id = verdict["task"].get("id")
     if error:
         return {"task_id": task_id, "status": "failed", "messages": [str(error)]}
-    messages = _messages(verdict["warnings"]) + list(notes or [])
-    status = "completed_with_warnings" if messages else "completed"
+    warnings = _messages(verdict["warnings"]) + [n for n in notes or [] if not isinstance(n, Info)]
+    status = "completed_with_warnings" if warnings else "completed"
+    messages = _messages(verdict["warnings"]) + [str(n) for n in notes or []]
     return {"task_id": task_id, "status": status, "messages": messages}
 
 

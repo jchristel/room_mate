@@ -625,7 +625,7 @@ checked before anything is made, then one transaction group per task (`duHast...
   supply the title block per size, the view types, the base schedule, the tags, the sheet number and name templates and a view name template per kind of view
   (`{Room Parameter}` tokens, filled from the room). Abort (nothing written, reported): sheet exists, a view name is taken, no title block
   for the size, a view type or the base schedule not in the model, a template the room cannot fill, room/phase missing, settings
-  incomplete. Warn (written, "completed with warnings"): no room tag, no independent tag, elevations the server could not place.
+  incomplete. Warn (written, "completed with warnings"): no room tag, no independent tag, elevations the server could not place. A writer's note of what was DONE ("sheet made", "N tag(s) placed", walls hidden, items made transparent) is a `task_plan.Info`: sent, but no warning (2026-11-08; before, every sheet made said so and every task reported warnings). Any other note is one: a tag or an elevation not placed, a crop box off.
 - **The phase is the room's own, never typed.** A `create_rls` task carries `ROOM_OWN_PHASE` as its phase (a label); the planner aborts if the room has
   none (`PHASE_MISSING`) and `rls_write` makes every view in `get_room_phase(doc, room)`. The request's `phase` is accepted and ignored.
 - **A viewport's size and centre EXCLUDE its title** (Revit: `GetBoxOutline`/`GetBoxCenter` leave the label out; `GetLabelOutline` is separate and read-only). So the exported

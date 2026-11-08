@@ -91,6 +91,7 @@ from room_m.utils.rooms import level_z_ft
 from room_m import detail_numbers
 from room_m import rls_settings
 from room_m import task_log
+from room_m.task_plan import info
 from room_m.apply_facts import RevitFacts
 
 # How far beyond the room a plan view's crop reaches when the task carries no crop and the template viewport none.
@@ -236,7 +237,7 @@ class RlsWriter(object):
             self._number_details(plan)
             task_log.step("tags")
             self._tags(task, plan, room, plan_view, level, notes)
-            notes.append("sheet {} made".format(plan["number"]))
+            notes.append(info("sheet {} made".format(plan["number"])))
         except Exception as e:
             task_log.exception("sheet {} failed".format(plan.get("number")))
             result.update_sep(False, str(e))
@@ -510,7 +511,7 @@ class RlsWriter(object):
                 ids = self._walls_by_boundary(room, low, high, three_d["forward"])
             if ids:
                 self._hide(view, ids, name)
-                notes.append("{}: {} wall(s) facing the camera or in its way hidden".format(name, len(ids)))
+                notes.append(info("{}: {} wall(s) facing the camera or in its way hidden".format(name, len(ids))))
         except Exception as e:
             task_log.exception("hiding walls in {}".format(name))
             notes.append("{}: walls in the way were not hidden ({})".format(name, e))
@@ -600,7 +601,7 @@ class RlsWriter(object):
 
             if elements:
                 self._step("RoomMate: see through items in {}".format(name), work)
-            notes.append("{}: {} item(s) along the hidden walls made transparent".format(name, len(elements)))
+            notes.append(info("{}: {} item(s) along the hidden walls made transparent".format(name, len(elements))))
         except Exception as e:
             task_log.exception("making items transparent in {}".format(name))
             notes.append("{}: items along the hidden walls were not made transparent ({})".format(name, e))
@@ -718,7 +719,7 @@ class RlsWriter(object):
             notes.append("no item was tagged: the server found no tag rule for {} item(s) in this room (a rule bound to a "
                          "blueprint applies only to a room the blueprint is assigned to)".format(plan["untagged_items"]))
         task_log.info("tags: {} placed, {} not placed".format(made, len(problems)))
-        notes.append("{} tag(s) placed".format(made))
+        notes.append(info("{} tag(s) placed".format(made)))
         for p in problems[:5]:
             notes.append(p)
         if len(problems) > 5:
