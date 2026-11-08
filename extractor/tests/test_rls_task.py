@@ -79,6 +79,9 @@ class Facts(object):
     def views_in_use(self, names):
         return self.get("views", [])
 
+    def line_detail_exists(self, name):
+        return self.get("line_detail", True)
+
 
 def verdict(t=None, settings=None, facts=None):
     return rt.plan_tasks([t or task()], settings or SETTINGS, facts or Facts())[0]
@@ -246,6 +249,20 @@ def with_three_d(forward, up, t=None):
     vp["view"] = {"forward_direction": forward, "up_direction": up}
     t["sheets"][0]["sheet"]["view_ports"].append(vp)
     return t
+
+
+class ElevationGrid(unittest.TestCase):
+    def test_the_plan_carries_the_grid_family_and_none_when_not_set(self):
+        self.assertIsNone(verdict()["plan"]["elevation_grid"])
+        v = verdict(settings=dict(SETTINGS, elevation_grid="Grid_ANN : Setout"))
+        self.assertEqual("Grid_ANN : Setout", v["plan"]["elevation_grid"])
+        self.assertEqual(([], []), (v["aborts"], v["warnings"]))
+
+    def test_a_grid_family_the_model_lacks_only_warns(self):
+        v = verdict(settings=dict(SETTINGS, elevation_grid="Gone : X"), facts=Facts(line_detail=False))
+        self.assertEqual([], v["aborts"])
+        self.assertEqual([rt.NO_ELEVATION_GRID], codes(v["warnings"]))
+        self.assertIn("'Gone : X'", v["warnings"][0]["message"])
 
 
 class ViewNames(unittest.TestCase):

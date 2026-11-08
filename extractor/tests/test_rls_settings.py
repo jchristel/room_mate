@@ -114,6 +114,12 @@ class Validate(unittest.TestCase):
         errors, _ = rs.validate(self.settings(three_d_view_type="Old"), self.OPTIONS)
         self.assertEqual(["3D view type 'Old' is not in this model"], errors)
 
+    def test_a_2d_grid_family_the_model_lacks_only_warns(self):
+        options = dict(self.OPTIONS, line_detail_families=["Grid_ANN : Setout"])
+        self.assertEqual(([], []), rs.validate(self.settings(elevation_grid="Grid_ANN : Setout"), options))
+        self.assertEqual(([], ["2D grid family 'Old : X' is not in this model"]),
+                         rs.validate(self.settings(elevation_grid="Old : X"), options))
+
     def test_a_chosen_viewport_type_the_model_lacks_is_an_error(self):
         errors, _ = rs.validate(self.settings(viewport_type="Old"), self.OPTIONS)
         self.assertEqual(["viewport type 'Old' is not in this model"], errors)
