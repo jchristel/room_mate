@@ -35,7 +35,10 @@ COMBOS = [
 TEXTS = [
     ("tb_sheet_number", "sheet_number"),
     ("tb_sheet_name", "sheet_name"),
-    ("tb_view_name", "view_name"),
+    ("tb_view_name_plan", "view_name_plan"),
+    ("tb_view_name_elevation", "view_name_elevation"),
+    ("tb_view_name_three_d", "view_name_three_d"),
+    ("tb_view_name_schedule", "view_name_schedule"),
     ("tb_title_plan", "title_on_sheet_plan"),
     ("tb_title_elevation", "title_on_sheet_elevation"),
     ("tb_title_three_d", "title_on_sheet_three_d"),
@@ -50,7 +53,16 @@ TITLE_TEXTS = [
     ("tb_title_three_d", "title_on_sheet_three_d", "three_d"),
     ("tb_title_schedule", "title_on_sheet_schedule", "schedule"),
 ]
-_TITLE_BOXES = set(name for name, _key, _kind in TITLE_TEXTS)
+# The view name logic, one per kind of view (`rls_settings.VIEW_NAMES`), in that kind's group of the window. It takes
+# `{Seq_Counter}` too, which is how the elevations of one sheet get different names.
+VIEW_NAME_TEXTS = [
+    ("tb_view_name_plan", "view_name_plan", "plan"),
+    ("tb_view_name_elevation", "view_name_elevation", "elevation"),
+    ("tb_view_name_three_d", "view_name_three_d", "three_d"),
+    ("tb_view_name_schedule", "view_name_schedule", "schedule"),
+]
+# the boxes whose templates may name `{Seq_Counter}`; the sheet number and name may not (one sheet per task)
+_SEQ_BOXES = set(name for name, _key, _kind in TITLE_TEXTS + VIEW_NAME_TEXTS)
 
 
 # (control name, settings key, label): how the viewports of each kind are numbered on the sheet
@@ -117,9 +129,14 @@ def token_labels(parameters):
 
 
 def tokens_for(name, parameters):
-    """The names a text box's token combo offers: the room parameters, and `Seq_Counter` first for a Title on Sheet
-    box (the only templates it means anything in)."""
-    return ([SEQ_COUNTER] if name in _TITLE_BOXES else []) + list(parameters or [])
+    """The names a text box's token combo offers: the room parameters, and `Seq_Counter` first for a view name or
+    Title on Sheet box (the only templates it means anything in)."""
+    return ([SEQ_COUNTER] if name in _SEQ_BOXES else []) + list(parameters or [])
+
+
+def has_seq_counter(template):
+    """True when `template` names `{Seq_Counter}` (any case, as a template is filled)."""
+    return any(t.strip().lower() == SEQ_COUNTER.lower() for t in TOKEN.findall(template or ""))
 
 
 def add_token(text, parameters, index):
@@ -171,6 +188,9 @@ def to_settings(existing, combo_values, texts, numberings=None):
     for name, key in TEXTS:
         if name in texts:
             settings[key] = texts[name].strip()
+    # the old single view name is shown per kind (`rls_settings.with_view_names`); saved per kind, it has done its job
+    if any(name in texts for name, _key, _kind in VIEW_NAME_TEXTS):
+        settings.pop("view_name", None)
     for name, key in NUMBERINGS:
         if name in (numberings or {}):
             settings[key] = numberings[name]

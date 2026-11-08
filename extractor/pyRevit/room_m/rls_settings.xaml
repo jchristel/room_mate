@@ -37,11 +37,6 @@
                 <GroupBox Padding="8" Margin="0,4,0,4">
                     <GroupBox.Header><TextBlock Text="Views" FontWeight="SemiBold"/></GroupBox.Header>
                     <StackPanel>
-                        <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions>
-                            <TextBlock Text="View name (every kind)" VerticalAlignment="Center"/>
-                            <TextBox Grid.Column="1" x:Name="tb_view_name" TextChanged="on_change"/>
-                            <ComboBox Grid.Column="2" x:Name="tk_view_name" SelectionChanged="on_token_view_name" Margin="6,0,0,0"/></Grid>
-                        <TextBlock Text="Fixed text and {Room Parameter} in braces. Each view adds its kind: PLAN, ELEV m-n (marker, then view), 3D, SCHEDULE." Opacity="0.6" Margin="160,2,0,0" TextWrapping="Wrap"/>
                         <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                             <TextBlock Text="Viewport type" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_viewport_type" SelectionChanged="on_change"/></Grid>
                         <TextBlock Text="The type of every plan, elevation and 3D viewport on the sheet (title style). Not set: Revit's default." Opacity="0.6" Margin="160,2,0,0" TextWrapping="Wrap"/>
@@ -49,6 +44,10 @@
                         <StackPanel>
                             <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                 <TextBlock Text="Plan view type" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_plan_view_type" SelectionChanged="on_change"/></Grid>
+                            <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions>
+                                <TextBlock Text="View name" VerticalAlignment="Center"/>
+                                <TextBox Grid.Column="1" x:Name="tb_view_name_plan" TextChanged="on_change"/>
+                                <ComboBox Grid.Column="2" x:Name="tk_view_name_plan" SelectionChanged="on_token_view_name_plan" Margin="6,0,0,0"/></Grid>
                             <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions>
                                 <TextBlock Text="Title on sheet" VerticalAlignment="Center"/>
                                 <TextBox Grid.Column="1" x:Name="tb_title_plan" TextChanged="on_change"/>
@@ -60,6 +59,10 @@
                             <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                 <TextBlock Text="Elevation view type" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_elevation_view_type" SelectionChanged="on_change"/></Grid>
                             <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions>
+                                <TextBlock Text="View name" VerticalAlignment="Center"/>
+                                <TextBox Grid.Column="1" x:Name="tb_view_name_elevation" TextChanged="on_change"/>
+                                <ComboBox Grid.Column="2" x:Name="tk_view_name_elevation" SelectionChanged="on_token_view_name_elevation" Margin="6,0,0,0"/></Grid>
+                            <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions>
                                 <TextBlock Text="Title on sheet" VerticalAlignment="Center"/>
                                 <TextBox Grid.Column="1" x:Name="tb_title_elevation" TextChanged="on_change"/>
                                 <ComboBox Grid.Column="2" x:Name="tk_title_elevation" SelectionChanged="on_token_title_elevation" Margin="6,0,0,0"/></Grid>
@@ -69,6 +72,10 @@
                         <StackPanel>
                             <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
                                 <TextBlock Text="3D view type" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_three_d_view_type" SelectionChanged="on_change"/></Grid>
+                            <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions>
+                                <TextBlock Text="View name" VerticalAlignment="Center"/>
+                                <TextBox Grid.Column="1" x:Name="tb_view_name_three_d" TextChanged="on_change"/>
+                                <ComboBox Grid.Column="2" x:Name="tk_view_name_three_d" SelectionChanged="on_token_view_name_three_d" Margin="6,0,0,0"/></Grid>
                             <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions>
                                 <TextBlock Text="Title on sheet" VerticalAlignment="Center"/>
                                 <TextBox Grid.Column="1" x:Name="tb_title_three_d" TextChanged="on_change"/>
@@ -81,12 +88,16 @@
                                 <TextBlock Text="Schedule base" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_schedule_base" SelectionChanged="on_change"/></Grid>
                             <TextBlock Text="Any schedule whose first filter is on the room number." Opacity="0.6" Margin="160,2,0,0" TextWrapping="Wrap"/>
                             <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions>
+                                <TextBlock Text="View name" VerticalAlignment="Center"/>
+                                <TextBox Grid.Column="1" x:Name="tb_view_name_schedule" TextChanged="on_change"/>
+                                <ComboBox Grid.Column="2" x:Name="tk_view_name_schedule" SelectionChanged="on_token_view_name_schedule" Margin="6,0,0,0"/></Grid>
+                            <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions>
                                 <TextBlock Text="Title on sheet" VerticalAlignment="Center"/>
                                 <TextBox Grid.Column="1" x:Name="tb_title_schedule" TextChanged="on_change"/>
                                 <ComboBox Grid.Column="2" x:Name="tk_title_schedule" SelectionChanged="on_token_title_schedule" Margin="6,0,0,0"/></Grid>
                         </StackPanel>
                     </GroupBox>
-                        <TextBlock Text="Title on sheet: fixed text, {Room Parameter} and {Seq_Counter}: 1, 2, 3 ... per viewport of the same kind on the sheet, for example ELEVATION {Seq_Counter} - {Name}. Empty: Revit's own title." Opacity="0.6" Margin="0,6,0,0" TextWrapping="Wrap"/>
+                        <TextBlock Text="View name and title on sheet: fixed text, {Room Parameter} and {Seq_Counter}: 1, 2, 3 ... per view of the same kind on the sheet, for example {Number} ELEV {Seq_Counter} or ELEVATION {Seq_Counter} - {Name}. The elevation view name needs {Seq_Counter}. The 3D view name is needed only when the template has a 3D view. An empty title on sheet: Revit's own title." Opacity="0.6" Margin="0,6,0,0" TextWrapping="Wrap"/>
                     </StackPanel>
                 </GroupBox>
                 <!-- detail numbers -->

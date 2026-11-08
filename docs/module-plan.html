@@ -664,7 +664,7 @@
     reference: [85, 310, 93, 112],
     reports_api: [127, 314, 50, 119],
     rls_3d: [137, 289, 44, 89],
-    rls_create: [1212, 1684, 235, 0],
+    rls_create: [1284, 1788, 254, 0],
     rls_geom: [164, 291, 71, 0],
     rls_place: [54, 70, 11, 0],
     rls_plan: [293, 628, 82, 223],
@@ -1300,7 +1300,7 @@
     },
     {
       id: "rls_create", name: "rls_task.py + rls_write.py", path: "extractor/pyRevit/room_m/rls_task.py", zone: "run", lang: "IronPython",
-      blurb: "RLS create. The settings window (title block per size, view types, schedule base, tags, name templates, kept in the model), the planner that checks every task before anything is written (pure, CPython-tested), and the writer that makes the sheet, plan and elevation views, <strong>a new 3D view per 3D viewport of the template</strong> (its section box on the plan crop's footprint, the walls the server names hidden and the items along them 70% transparent), the schedule and the tags through duHast. <strong>RoomMate decides, Revit applies</strong>: the phase is the room's own, and the room tag goes where the server put it. <strong>The elevation line is placed by moving the view's pointer</strong> (the crop box transform is ignored by Revit), and the marker by its pointers. Each view gets its Title on Sheet from a template per kind; the plan keeps the template crop's offsets from its room. Run in Revit end to end (2026-11-01), the 3D wall hiding, transparency, plan crop offsets and titles since 2026-11-08.",
+      blurb: "RLS create. The settings window (title block per size, view types, schedule base, tags, sheet name templates and a view name template per kind of view, kept in the model), the planner that checks every task before anything is written (pure, CPython-tested), and the writer that makes the sheet, plan and elevation views, <strong>a new 3D view per 3D viewport of the template</strong> (its section box on the plan crop's footprint, the walls the server names hidden and the items along them 70% transparent), the schedule and the tags through duHast. <strong>RoomMate decides, Revit applies</strong>: the phase is the room's own, and the room tag goes where the server put it. <strong>The elevation line is placed by moving the view's pointer</strong> (the crop box transform is ignored by Revit), and the marker by its pointers. Each view gets its Title on Sheet from a template per kind; the plan keeps the template crop's offsets from its room. Run in Revit end to end (2026-11-01), the 3D wall hiding, transparency, plan crop offsets and titles since 2026-11-08.",
       deps: ["apply_tasks", "u_tidy", "rls_geom"]
     },
     {

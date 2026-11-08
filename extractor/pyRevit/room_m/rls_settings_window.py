@@ -15,6 +15,7 @@ The window was tried in Revit and opens and saves.
 
 import os
 
+from room_m import rls_settings
 from room_m import rls_settings_form as form
 
 XAML_PATH = os.path.join(os.path.dirname(__file__), "rls_settings.xaml")
@@ -28,7 +29,8 @@ def show(forms, model_name, settings, options):
             forms.WPFWindow.__init__(self, XAML_PATH)
             self.settings = None
             self._ready = False
-            self._existing = dict(settings or {})
+            # a model saved with the old single view name shows it per kind, and saving keeps it that way
+            self._existing = rls_settings.with_view_names(settings)
             self._values = {}
             self._options = dict(options or {})
             self._errors = list((options or {}).get("errors") or [])
@@ -62,8 +64,17 @@ def show(forms, model_name, settings, options):
         def on_token_sheet_name(self, sender, args):
             self._insert(sender, self.tb_sheet_name)
 
-        def on_token_view_name(self, sender, args):
-            self._insert(sender, self.tb_view_name)
+        def on_token_view_name_plan(self, sender, args):
+            self._insert(sender, self.tb_view_name_plan)
+
+        def on_token_view_name_elevation(self, sender, args):
+            self._insert(sender, self.tb_view_name_elevation)
+
+        def on_token_view_name_three_d(self, sender, args):
+            self._insert(sender, self.tb_view_name_three_d)
+
+        def on_token_view_name_schedule(self, sender, args):
+            self._insert(sender, self.tb_view_name_schedule)
 
         def on_token_title_plan(self, sender, args):
             self._insert(sender, self.tb_title_plan)

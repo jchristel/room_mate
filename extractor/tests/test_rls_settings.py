@@ -22,7 +22,7 @@ class Missing(unittest.TestCase):
         todo = rs.missing({})
         self.assertIn("a title block for at least one sheet size", todo)
         self.assertIn("schedule base", todo)
-        self.assertEqual(1 + 6, len(todo))
+        self.assertEqual(1 + 8, len(todo), "a title block, 3 types, 2 sheet templates, 3 view names (3D only when asked)")
 
     def test_one_title_block_is_enough(self):
         only_a3 = dict(COMPLETE, sheet_sizes={"a3": "tb"})
@@ -36,6 +36,28 @@ class Missing(unittest.TestCase):
 
     def test_a_blank_template_is_missing(self):
         self.assertEqual(["sheet name logic"], rs.missing(dict(COMPLETE, sheet_name="  ")))
+
+    def test_each_kind_has_its_own_view_name_and_the_3d_one_is_not_demanded(self):
+        per_kind = dict(COMPLETE, view_name_plan="{Number} PLAN", view_name_elevation="{Number} E{Seq_Counter}",
+                        view_name_schedule="{Number} SCH")
+        del per_kind["view_name"]
+        self.assertEqual([], rs.missing(per_kind))
+        self.assertEqual(["schedule view name logic"], rs.missing(dict(per_kind, view_name_schedule=" ")))
+
+
+class ViewNames(unittest.TestCase):
+    def test_the_old_single_view_name_reads_per_kind_with_the_old_endings(self):
+        s = rs.with_view_names({"view_name": " {Number} ", "view_name_plan": "P {Number}"})
+        self.assertEqual("P {Number}", s["view_name_plan"], "a kind's own logic wins")
+        self.assertEqual("{Number} ELEV {Seq_Counter}", s["view_name_elevation"])
+        self.assertEqual("{Number} 3D", s["view_name_three_d"])
+        self.assertEqual("{Number} SCHEDULE", s["view_name_schedule"])
+
+    def test_without_the_old_name_nothing_is_added_and_the_input_is_not_changed(self):
+        stored = {"view_name_plan": "P"}
+        self.assertEqual(stored, rs.with_view_names(stored))
+        rs.with_view_names({"view_name": "x"})
+        self.assertEqual({"view_name_plan": "P"}, stored)
 
 
 
@@ -125,6 +147,16 @@ class Validate(unittest.TestCase):
         self.assertEqual(([], []), rs.validate(ok, self.OPTIONS))
         errors, _w = rs.validate(self.settings(title_on_sheet_three_d="{Seq_Counter} {Wing}"), self.OPTIONS)
         self.assertEqual(["3D title on sheet: not a room parameter: {Wing}"], errors)
-        # a Seq_Counter in the view name is not allowed: it means nothing there
-        errors, _w = rs.validate(self.settings(view_name="{Number} {Seq_Counter}"), self.OPTIONS)
+        # a Seq_Counter in the sheet name is not allowed: it means nothing there
+        errors, _w = rs.validate(self.settings(sheet_name="{Name} {Seq_Counter}"), self.OPTIONS)
         self.assertEqual(1, len(errors))
+
+    def test_a_view_name_may_use_seq_counter_and_the_elevation_one_must(self):
+        ok = self.settings(view_name_plan="{Number} P", view_name_elevation="{Number} E{Seq_Counter}",
+                           view_name_three_d="{Number} 3D {Seq_Counter}", view_name_schedule="{Number} S")
+        self.assertEqual(([], []), rs.validate(ok, self.OPTIONS))
+        errors, _w = rs.validate(dict(ok, view_name_elevation="{Number} ELEV"), self.OPTIONS)
+        self.assertEqual(1, len(errors))
+        self.assertIn("{Seq_Counter}", errors[0])
+        errors, _w = rs.validate(dict(ok, view_name_plan="{Wing} P"), self.OPTIONS)
+        self.assertEqual(["plan view name logic: not a room parameter: {Wing}"], errors)

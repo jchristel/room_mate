@@ -54,6 +54,7 @@ push, the project, the phase, whole model or chosen levels), **Blueprint**, **Sh
 | Tasks → 3D views see into the room | **Run in Revit** (2026-11-08): the walls between the camera and the room are hidden (edges named by the server, walls found by a face within 200 mm) and the items along them are 70% transparent. |
 | Tasks → plan crop | **Run in Revit** (2026-11-08): the plan keeps the template crop's offsets from its room on every side, and a 3D view's section box takes the same footprint. |
 | Tasks → Title on Sheet | **Run in Revit** (2026-11-08): a template per kind of view. |
+| RLS settings → a view name per kind of view | Built; **not run in Revit**. Plan, elevation, 3D and schedule each have their own view name template (`{Seq_Counter}` allowed, and required for elevations); a model set up with the single old view name reads it per kind until saved. |
 | Tasks → placing items | Built; **not run in Revit**. |
 | Tags on items, FF&E tags in elevations | Prototype. Plan and elevation tags follow rules learned by type code (an elevation's by whether the item is seen front on or from the side, measured from the item's box centre). A nested part is tagged only when a rule exists for its type code, and that **works in Revit** (2026-11-08). |
 | Shared nested families on export | Built. A choice per entity in the Export window, and every door, window and FF&E item lists the nested families it holds. **Run in Revit for FF&E** (2026-11-08); doors and windows not checked. |
