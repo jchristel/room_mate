@@ -18,11 +18,37 @@ from room_m.textutil import non_blank_text
 PROJECT_KEY = "rls"
 SIZES = ("a0", "a1", "a2", "a3")
 
+# The view name logic, one per kind of view (kind, settings key, what to call it, whether every sheet needs it).
+# Each takes fixed text, {Room Parameter} and {Seq_Counter} (the view's place among the views of its kind, from 1).
+# The 3D one is needed only by a template with a 3D viewport, so the planner asks for it, as for the 3D view type.
+VIEW_NAMES = (
+    ("plan", "view_name_plan", "plan view name logic", True),
+    ("elevation", "view_name_elevation", "elevation view name logic", True),
+    ("three_d", "view_name_three_d", "3D view name logic", False),
+    ("schedule", "view_name_schedule", "schedule view name logic", True),
+)
+# Before 2026-11-08 one `view_name` served every kind and each view added its kind to it. A model saved then reads as
+# that name plus the old ending, per kind, until the window saves it again.
+LEGACY_VIEW_NAME = "view_name"
+_LEGACY_ENDINGS = {"plan": " PLAN", "elevation": " ELEV {Seq_Counter}", "three_d": " 3D", "schedule": " SCHEDULE"}
+
+
+def with_view_names(settings):
+    """`settings` (a copy) with each kind's view name logic filled from the old single `view_name` where it has
+    none of its own. The window shows these, and a model whose settings were saved before reads the same."""
+    s = dict(settings or {})
+    base = non_blank_text(s.get(LEGACY_VIEW_NAME))
+    if base is not None:
+        for kind, key, _label, _needed in VIEW_NAMES:
+            if non_blank_text(s.get(key)) is None:
+                s[key] = base.strip() + _LEGACY_ENDINGS[kind]
+    return s
+
 
 def missing(settings):
     """What stops the settings being used, in words; empty when complete. The same question the
     window asks (`rls_settings_form.problems`): the tags are left out because without them a task only warns."""
-    s = settings or {}
+    s = with_view_names(settings)
     sizes = s.get("sheet_sizes") if isinstance(s.get("sheet_sizes"), dict) else {}
     out = []
     # (the 3D view type and the viewport type are not here: a task with a 3D view needs the first, the second is optional)
@@ -35,8 +61,7 @@ def missing(settings):
         ("schedule_base", "schedule base"),
         ("sheet_number", "sheet number logic"),
         ("sheet_name", "sheet name logic"),
-        ("view_name", "view name logic"),
-    ):
+    ) + tuple((key, label) for _kind, key, label, needed in VIEW_NAMES if needed):
         value = s.get(key)
         if non_blank_text(value) is None:
             out.append(label)
@@ -58,7 +83,7 @@ _CHECKED = [
     (("room_tag",), "room_tags", "room tag", False),
     (("independent_tag",), "independent_tags", "independent tag", False),
 ]
-_TEMPLATES = (("sheet_number", "sheet number logic"), ("sheet_name", "sheet name logic"), ("view_name", "view name logic"))
+_TEMPLATES = (("sheet_number", "sheet number logic"), ("sheet_name", "sheet name logic"))
 
 
 def validate(settings, options):
@@ -72,7 +97,7 @@ def validate(settings, options):
     settings window opens and changes, and before the Tasks button claims anything."""
     from room_m import detail_numbers, rls_settings_form
 
-    s = settings or {}
+    s = with_view_names(settings)
     errors, warnings = [], []
     for path, list_key, label, blocking in _CHECKED:
         node = s
@@ -86,6 +111,15 @@ def validate(settings, options):
         bad = rls_settings_form.unknown_tokens(s.get(key), (options or {}).get("room_parameters"))
         if bad:
             errors.append("{}: not a room parameter: {}".format(label, " ".join("{" + t + "}" for t in bad)))
+    for _kind, key, label, _needed in VIEW_NAMES:
+        bad = rls_settings_form.unknown_tokens(
+            s.get(key), (options or {}).get("room_parameters"), (rls_settings_form.SEQ_COUNTER,))
+        if bad:
+            errors.append("{}: not a room parameter: {}".format(label, " ".join("{" + t + "}" for t in bad)))
+    # a sheet has several elevations, and two views cannot share a name
+    elevation = non_blank_text(s.get("view_name_elevation"))
+    if elevation is not None and not rls_settings_form.has_seq_counter(elevation):
+        errors.append("elevation view name logic needs {Seq_Counter}: every elevation on a sheet needs its own name")
     for _name, key, kind in rls_settings_form.TITLE_TEXTS:
         bad = rls_settings_form.unknown_tokens(
             s.get(key), (options or {}).get("room_parameters"), (rls_settings_form.SEQ_COUNTER,))

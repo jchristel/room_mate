@@ -35,9 +35,10 @@ class Choices(unittest.TestCase):
 
 
 class Tokens(unittest.TestCase):
-    def test_only_the_title_on_sheet_boxes_offer_seq_counter_first(self):
+    def test_only_the_view_name_and_title_on_sheet_boxes_offer_seq_counter_first(self):
         self.assertEqual(["Seq_Counter", "Number"], form.tokens_for("tb_title_elevation", ["Number"]))
-        self.assertEqual(["Number"], form.tokens_for("tb_view_name", ["Number"]))
+        self.assertEqual(["Seq_Counter", "Number"], form.tokens_for("tb_view_name_elevation", ["Number"]))
+        self.assertEqual(["Number"], form.tokens_for("tb_sheet_name", ["Number"]))
         self.assertEqual("E {Seq_Counter}", form.add_token("E ", form.tokens_for("tb_title_plan", ["Number"]), 1))
 
     def test_seq_counter_is_known_only_where_it_is_allowed(self):
@@ -66,13 +67,19 @@ class ToSettings(unittest.TestCase):
     def test_the_form_values_are_set_and_unknown_keys_survive(self):
         existing = {"future": {"x": 1}, "sheet_sizes": {"a0": "old", "a9": "keep"}}
         combos = dict((name, "v-" + name) for name, _o, _p in form.COMBOS)
-        texts = {"tb_sheet_number": " RLS-{Number} ", "tb_sheet_name": "{Name}", "tb_view_name": "{Number}"}
+        texts = {"tb_sheet_number": " RLS-{Number} ", "tb_sheet_name": "{Name}", "tb_view_name_plan": "{Number}"}
         s = form.to_settings(existing, combos, texts)
         self.assertEqual("v-cb_a0", s["sheet_sizes"]["a0"])
         self.assertEqual("keep", s["sheet_sizes"]["a9"])
         self.assertEqual({"x": 1}, s["future"])
         self.assertEqual("RLS-{Number}", s["sheet_number"], "trimmed")
         self.assertEqual("v-cb_schedule_base", s["schedule_base"])
+
+    def test_saving_the_view_names_per_kind_drops_the_old_single_one(self):
+        s = form.to_settings({"view_name": "{Number}"}, {}, {"tb_view_name_plan": "{Number} PLAN"})
+        self.assertEqual("{Number} PLAN", s["view_name_plan"])
+        self.assertNotIn("view_name", s)
+        self.assertEqual("{Number}", form.to_settings({"view_name": "{Number}"}, {}, {"tb_sheet_name": "x"})["view_name"])
 
     def test_the_input_is_not_changed(self):
         existing = {"sheet_sizes": {"a0": "old"}}
@@ -105,6 +112,7 @@ class Problems(unittest.TestCase):
     def test_a_complete_form_has_nothing_to_say(self):
         combos = dict((name, "x") for name, _o, _p in form.COMBOS)
         texts = dict((name, "{Number}") for name, _k in form.TEXTS)
+        texts["tb_view_name_elevation"] = "{Number} ELEV {Seq_Counter}"
         self.assertEqual([], form.problems(form.to_settings({}, combos, texts), self.PARAMS))
 
 
@@ -142,7 +150,8 @@ class Xaml(unittest.TestCase):
             groups = groups_round(type_box)
             self.assertEqual(2, len(groups), kind)
             self.assertIs(groups[0], groups_round("tb_title_" + kind)[0], kind)
-        self.assertEqual(1, len(groups_round("tb_view_name")), "the view name is the Views group's, for every kind")
+            self.assertIs(groups[0], groups_round("tb_view_name_" + kind)[0], kind)
+        self.assertEqual(1, len(groups_round("cb_viewport_type")), "the viewport type is the Views group's, for every kind")
 
     def test_every_handler_named_in_the_xaml_is_a_method_of_the_window(self):
         with open(os.path.join(ROOM_M, "rls_settings_window.py")) as f:

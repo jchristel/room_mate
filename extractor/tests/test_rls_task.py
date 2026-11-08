@@ -114,7 +114,8 @@ class Plan(unittest.TestCase):
 
     def test_elevations_are_named_marker_by_marker_in_index_order_and_find_their_template_viewport(self):
         p = verdict()["plan"]
-        self.assertEqual(["01.09 STUDY ELEV 1-1", "01.09 STUDY ELEV 1-2"], [e["name"] for e in p["elevations"]])
+        self.assertEqual(["01.09 STUDY ELEV 1", "01.09 STUDY ELEV 2"], [e["name"] for e in p["elevations"]],
+                         "the old single view name, read per kind")
         self.assertEqual([1, 2], [e["view_id"] for e in p["elevations"]], "index 0 first")
         self.assertEqual(100, p["elevations"][0]["viewport"]["centre_point"]["x"])
         self.assertEqual(50, p["elevations"][0]["scale"])
@@ -245,6 +246,36 @@ def with_three_d(forward, up, t=None):
     vp["view"] = {"forward_direction": forward, "up_direction": up}
     t["sheets"][0]["sheet"]["view_ports"].append(vp)
     return t
+
+
+class ViewNames(unittest.TestCase):
+    PER_KIND = dict(SETTINGS, view_name_plan="P-{Number}", view_name_elevation="E-{Number}-{Seq_Counter}",
+                    view_name_three_d="3D-{Number}", view_name_schedule="S-{Number}")
+
+    def test_each_kind_takes_its_own_view_name_logic(self):
+        s = dict(self.PER_KIND)
+        del s["view_name"]
+        v = verdict(with_three_d(ThreeD.D, ThreeD.U), settings=s)
+        self.assertEqual([], v["aborts"], v["aborts"])
+        p = v["plan"]
+        self.assertEqual("P-01.09", p["plan_name"])
+        self.assertEqual(["E-01.09-1", "E-01.09-2"], [e["name"] for e in p["elevations"]])
+        self.assertEqual(["3D-01.09"], [d["name"] for d in p["three_ds"]])
+        self.assertEqual("S-01.09", p["schedule_name"])
+
+    def test_a_template_with_a_3d_view_needs_the_3d_view_name(self):
+        s = dict(self.PER_KIND, view_name_three_d="")
+        del s["view_name"]
+        v = verdict(with_three_d(ThreeD.D, ThreeD.U), settings=s)
+        self.assertEqual([rt.TEMPLATE_UNRESOLVED], codes(v["aborts"]))
+        self.assertIn("3D view name logic", v["aborts"][0]["message"])
+        self.assertEqual([], verdict(settings=s)["aborts"], "no 3D view on the template: no 3D name asked for")
+
+    def test_two_views_given_one_name_abort(self):
+        s = dict(self.PER_KIND, view_name_elevation="E-{Number}")
+        v = verdict(settings=s)
+        self.assertEqual([rt.VIEW_EXISTS], codes(v["aborts"]))
+        self.assertIn("'E-01.09'", v["aborts"][0]["message"])
 
 
 class ThreeD(unittest.TestCase):

@@ -133,6 +133,17 @@ class Reporting(unittest.TestCase):
         failed = tp.result_report(v, error="Revit refused")
         self.assertEqual(("failed", ["Revit refused"]), (failed["status"], failed["messages"]))
 
+    def test_a_note_of_what_was_done_is_sent_but_is_no_warning(self):
+        (v,) = tp.plan_tasks([populate()], Facts())
+        done = [tp.info("sheet RLS-01 made"), tp.info("33 tag(s) placed")]
+        report = tp.result_report(v, notes=done)
+        self.assertEqual("completed", report["status"])
+        self.assertEqual(["sheet RLS-01 made", "33 tag(s) placed"], report["messages"])
+        self.assertTrue(all(type(m) is str for m in report["messages"]), "sent as plain text")
+        mixed = tp.result_report(v, notes=done + ["tag on item 7 not placed"])
+        self.assertEqual("completed_with_warnings", mixed["status"])
+        self.assertEqual(3, len(mixed["messages"]))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -127,7 +127,7 @@ class TaskWriter(object):
         gone = self._in_transaction("RoomMate: clear room", work)
         # What was read about the room's content now names deleted elements.
         self.facts.refresh()
-        notes.append("removed {} existing item(s) from the room before placing".format(gone))
+        notes.append(task_plan.info("removed {} existing item(s) from the room before placing".format(gone)))
 
     def _place_items(self, task, level, phase, notes):
         items = task.get("items") or []
@@ -145,7 +145,9 @@ class TaskWriter(object):
 
         self._in_transaction("RoomMate: place items", work)
         self._capped(notes, "items not placed", problems)
-        notes.append("placed {} of {} item(s)".format(len(placed), len(items)))
+        # a shortfall is a warning; its reasons are the notes above
+        placed_note = "placed {} of {} item(s)".format(len(placed), len(items))
+        notes.append(task_plan.info(placed_note) if len(placed) == len(items) else placed_note)
         self._in_transaction("RoomMate: regenerate", self.doc.Regenerate)
         # The room's content now includes what was placed; the next read must see it.
         self.facts.refresh()

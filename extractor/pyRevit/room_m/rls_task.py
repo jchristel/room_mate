@@ -119,15 +119,15 @@ def _first_of_type(sheet, vp_type):
     return None
 
 
-def _elevations(task, template, base):
-    """The elevation views to make, in the order they are named: marker by marker, by index. A name ends
-    `ELEV <marker>-<view>`, both counted from 1, so two markers in a room never collide."""
+def _elevations(task, template, names):
+    """The elevation views to make, in the order they are named: marker by marker, by index. Each is named by the
+    elevation view name logic with `{Seq_Counter}` its place in that order, from 1 (the Title on Sheet's count too)."""
     out = []
-    for m, marker in enumerate((task.get("rls") or {}).get("markers") or [], 1):
-        for n, view in enumerate(sorted(marker.get("views") or [], key=lambda v: v.get("marker_index", 0)), 1):
+    for marker in (task.get("rls") or {}).get("markers") or []:
+        for view in sorted(marker.get("views") or [], key=lambda v: v.get("marker_index", 0)):
             vp = _template_viewport(template, view.get("view_id"))
             out.append({
-                "name": "{} ELEV {}-{}".format(base, m, n),
+                "name": names("elevation", len(out) + 1),
                 "marker_id": marker.get("marker_id"),
                 "marker_location": marker.get("location"),
                 "marker_index": view.get("marker_index", 0),
@@ -157,7 +157,7 @@ def _direction(point):
     return v if (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]) > 0 else None
 
 
-def _three_ds(template, base):
+def _three_ds(template, names):
     """The 3D views to make, one per 3D viewport of the template: the direction it looks along and its
     up, copied from the template's view. **Its eye is not read**: a 3D view looks at a box from as far
     back along the direction as it takes, so the camera sits at the same pitch above THIS room whatever
@@ -174,7 +174,7 @@ def _three_ds(template, base):
             continue
         views.append({
             "index": n,
-            "name": "{} 3D".format(base) if len(ports) == 1 else "{} 3D {}".format(base, n),
+            "name": names("three_d", n),
             "forward": forward,
             "up": up,
             "viewport": vp,
@@ -224,6 +224,40 @@ TITLE_KINDS = (
     ("three_d", "title_on_sheet_three_d", "3D"),
     ("schedule", "title_on_sheet_schedule", "schedule"),
 )
+
+
+def _name_renderer(settings, values, aborts):
+    """`names(kind, n)`: the name of the `n`th view of `kind` (from 1), from that kind's view name logic
+    (`rls_settings.VIEW_NAMES`; a model saved with the old single view name reads it per kind). `{Seq_Counter}` is `n`.
+    A room parameter the room lacks, a logic that gives an empty name, or none for a kind the template has, aborts the
+    task once per kind; the name is then empty, and nothing is made."""
+    s = rls_settings.with_view_names(settings)
+    templates = dict((kind, (s.get(key) or "").strip()) for kind, key, _label, _needed in rls_settings.VIEW_NAMES)
+    labels = dict((kind, label) for kind, _key, label, _needed in rls_settings.VIEW_NAMES)
+    reported = set()
+
+    def report(kind, message):
+        if kind not in reported:
+            reported.add(kind)
+            aborts.append(finding(TEMPLATE_UNRESOLVED, message))
+
+    def names(kind, n):
+        template = templates.get(kind)
+        if not template:
+            report(kind, "the settings have no {}".format(labels[kind]))
+            return ""
+        filled = dict(values or {})
+        filled[SEQ_COUNTER] = n
+        text, missing = render(template, filled)
+        if missing:
+            report(kind, "the {} uses {} which the room does not have".format(
+                labels[kind], ", ".join("{" + m + "}" for m in missing)))
+        text = text.strip()
+        if not text:
+            report(kind, "the {} gives an empty name for this room".format(labels[kind]))
+        return text
+
+    return names
 
 
 def _title_renderer(settings, values, aborts):
@@ -284,7 +318,7 @@ def build(task, settings, values):
             aborts.append(finding(NO_TITLE_BLOCK, "the settings map no title block to size {}".format(size.upper())))
 
     rendered = {}
-    for key, label in (("sheet_number", "sheet number"), ("sheet_name", "sheet name"), ("view_name", "view name")):
+    for key, label in (("sheet_number", "sheet number"), ("sheet_name", "sheet name")):
         text, missing = render(settings.get(key), values)
         if missing:
             aborts.append(finding(
@@ -295,15 +329,13 @@ def build(task, settings, values):
     number = clean_number(rendered["sheet_number"])
     if not number:
         aborts.append(finding(TEMPLATE_UNRESOLVED, "the sheet number logic gives an empty number for this room"))
-    base = rendered["view_name"]
-    if not base:
-        aborts.append(finding(TEMPLATE_UNRESOLVED, "the view name logic gives an empty name for this room"))
+    names = _name_renderer(settings, values, aborts)
 
     plan_vp = _first_of_type(template, geo.PLAN)
     titles = _title_renderer(settings, values, aborts)
     schedule_vp = _first_of_type(template, "schedule")
-    elevations = _elevations(task, template, base)
-    three_ds, three_d_skipped = _three_ds(template, base)
+    elevations = _elevations(task, template, names)
+    three_ds, three_d_skipped = _three_ds(template, names)
     for n, e in enumerate(elevations, 1):
         e["title"] = titles("elevation", n)
     # what the server says each 3D view hides and sees through, by its place among the template's 3D viewports
@@ -316,15 +348,14 @@ def build(task, settings, values):
         "name": rendered["sheet_name"],
         "size": size,
         "title_block": title_block,
-        "base": base,
-        "plan_name": "{} PLAN".format(base),
+        "plan_name": names("plan", 1),
         "plan_title": titles("plan", 1),
         "plan_viewport": plan_vp,
         "plan_scale": (geo.viewport_scale(plan_vp) if plan_vp else None) or DEFAULT_SCALE,
         "elevations": elevations,
         "three_ds": three_ds,
         "three_d_skipped": three_d_skipped,
-        "schedule_name": "{} SCHEDULE".format(base),
+        "schedule_name": names("schedule", 1),
         "schedule_title": titles("schedule", 1),
         "schedule_viewport": schedule_vp,
         "plan_view_type": settings.get("plan_view_type"),
@@ -402,6 +433,14 @@ def check(task, settings, facts, taken):
     if in_use:
         aborts.append(finding(VIEW_EXISTS, "{}: a view named {} already exists".format(
             label, ", ".join("'{}'".format(n) for n in sorted(set(in_use))))))
+    # the view name logic of two kinds, or one without {Seq_Counter}, can give two views of this sheet one name
+    seen, twice = set(), set()
+    for n in names:
+        key = n.strip().lower()
+        (twice if key in seen else seen).add(key)
+    if twice:
+        aborts.append(finding(VIEW_EXISTS, "{}: the view name logic gives more than one view the name {}".format(
+            label, ", ".join("'{}'".format(n) for n in sorted(set(n for n in names if n.strip().lower() in twice))))))
 
     if plan["room_tag"] is None or not facts.tag_type_exists("room", plan["room_tag"]):
         warnings.append(finding(NO_ROOM_TAG, "{}: no room tag is defined (or it is not in the model): the room is not tagged".format(label)))
