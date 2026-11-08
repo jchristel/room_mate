@@ -1,5 +1,7 @@
 # RoomMate
 
+[![Latest release](https://img.shields.io/github/v/release/jchristel/room_mate)](https://github.com/jchristel/room_mate/releases/latest)
+
 A web-based 2D data repository built around **rooms**. Revit pushes rooms, doors,
 windows, ceilings, floors, FF&E and spaces to a server; the server joins them to
 reference data (dRofus is the usual one), checks them against each other, and
@@ -174,6 +176,9 @@ repository root, because it serves `./static`. `static/` holds committed builds,
 node is needed.
 
 ### Install it
+
+Download it from the [latest release](https://github.com/jchristel/room_mate/releases/latest):
+`RoomMate-Setup-<version>.exe` for Windows, and a servers-only `.tar.gz` for Mac and Linux.
 
 [`installer/`](installer) builds one `RoomMate-Setup-<version>.exe` for Windows: the
 server, both MCP servers, the viewer, the Revit buttons and a per-user data folder. No
