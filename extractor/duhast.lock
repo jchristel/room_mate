@@ -3,5 +3,6 @@
   "repo": "https://github.com/jchristel/SampleCodeRevitBatchProcessor.git",
   "branch": "net8DuHast",
   "commit": "b5767658e070a9a24f0085e65c5474419d4d0a08",
+  "release": "v1.0.5+net8",
   "path": "src/duHast"
 }
