@@ -29,6 +29,7 @@ COMBOS = [
     ("cb_schedule_base", "schedules", ("schedule_base",)),
     ("cb_room_tag", "room_tags", ("room_tag",)),
     ("cb_independent_tag", "independent_tags", ("independent_tag",)),
+    ("cb_elevation_grid", "line_detail_families", ("elevation_grid",)),
 ]
 
 # (text box name, settings key); each has a combo of room parameters named like it with `tk_` for its prefix

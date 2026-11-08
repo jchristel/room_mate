@@ -151,6 +151,7 @@ class Xaml(unittest.TestCase):
             self.assertEqual(2, len(groups), kind)
             self.assertIs(groups[0], groups_round("tb_title_" + kind)[0], kind)
             self.assertIs(groups[0], groups_round("tb_view_name_" + kind)[0], kind)
+        self.assertIs(groups_round("cb_elevation_view_type")[0], groups_round("cb_elevation_grid")[0], "the 2D grid is the elevation's")
         self.assertEqual(1, len(groups_round("cb_viewport_type")), "the viewport type is the Views group's, for every kind")
 
     def test_every_handler_named_in_the_xaml_is_a_method_of_the_window(self):

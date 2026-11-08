@@ -82,6 +82,8 @@ _CHECKED = [
     # without a tag a task only warns, so a stale tag does too
     (("room_tag",), "room_tags", "room tag", False),
     (("independent_tag",), "independent_tags", "independent tag", False),
+    # without the 2D grid family the elevations are made without one, so a stale one only warns too
+    (("elevation_grid",), "line_detail_families", "2D grid family", False),
 ]
 _TEMPLATES = (("sheet_number", "sheet number logic"), ("sheet_name", "sheet name logic"))
 
@@ -142,6 +144,34 @@ def _names(elements, label):
         if name:
             seen.add(name)
     return sorted(seen)
+
+
+def is_line_based_detail(symbol):
+    """True when `symbol` is a type of a line based detail family (`FamilyPlacementType.CurveBasedDetail`), the only kind
+    duHast's `place_a_line_based_detail_family_instance_in_view` places. Revit call (made here so the pure half of this
+    module imports without it)."""
+    from Autodesk.Revit.DB import FamilyPlacementType
+
+    try:
+        return symbol.Family.FamilyPlacementType == FamilyPlacementType.CurveBasedDetail
+    except Exception:
+        return False
+
+
+def line_detail_family_names(doc):
+    """The "Family : Type" names of the model's line based detail families (detail components drawn along a line),
+    the choices for the elevation's 2D grid. Sorted, each once."""
+    from Autodesk.Revit.DB import BuiltInCategory
+    from duHast.Revit.Family.family_symbol_lookup import get_family_symbols_by_category, get_symbol_full_name
+
+    names = set()
+    for symbol in get_family_symbols_by_category(doc, BuiltInCategory.OST_DetailComponents):
+        try:
+            if is_line_based_detail(symbol):
+                names.add(get_symbol_full_name(symbol))
+        except Exception:
+            continue  # a type whose name cannot be read is not offered
+    return sorted(names)
 
 
 def first_filter_is_room_number(schedule):
@@ -228,6 +258,7 @@ def collect_options(doc):
         ("schedules", lambda: _names(room_number_schedules(), name_of)),
         ("room_tags", lambda: get_symbol_full_names_by_category(doc, BuiltInCategory.OST_RoomTags)),
         ("independent_tags", lambda: get_symbol_full_names_by_category(doc, BuiltInCategory.OST_MultiCategoryTags)),
+        ("line_detail_families", lambda: line_detail_family_names(doc)),
         ("room_parameters", lambda: get_room_parameter_names(doc)),
     ):
         try:

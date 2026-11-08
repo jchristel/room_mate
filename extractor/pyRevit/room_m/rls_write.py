@@ -158,6 +158,14 @@ class RlsFacts(RevitFacts):
     def tag_type_exists(self, kind, name):
         return bool(name) and self.tag_symbol(kind, name) is not None
 
+    def line_detail_symbol(self, name):
+        """The type of a line based detail family named "Family : Type", or None (also for a detail family of another kind)."""
+        symbol = get_family_symbol_by_full_name(self.doc, BuiltInCategory.OST_DetailComponents, name) if name else None
+        return symbol if symbol is not None and rls_settings.is_line_based_detail(symbol) else None
+
+    def line_detail_exists(self, name):
+        return self.line_detail_symbol(name) is not None
+
     def sheet_exists(self, number):
         return number in get_sheet_num_to_elem_dict(self.doc)
 
@@ -172,6 +180,15 @@ SEE_THROUGH = 70
 
 def _ft(mm):
     return geo.mm_to_ft(mm)
+
+
+def _bottom_edge(view):
+    """`(start, end)`: the bottom edge of `view`'s crop box in the model, left to right as the view is looked at. The
+    crop box's own x runs along the view's right and its y up, so its bottom left corner is (Min.X, Min.Y) and the edge
+    is the crop's width; its z is the near plane, and duHast projects onto the view's plane in any case."""
+    crop = view.CropBox
+    t = crop.Transform
+    return t.OfPoint(XYZ(crop.Min.X, crop.Min.Y, crop.Max.Z)), t.OfPoint(XYZ(crop.Max.X, crop.Min.Y, crop.Max.Z))
 
 
 def _reference_point(element, tag):
@@ -237,6 +254,8 @@ class RlsWriter(object):
             self._number_details(plan)
             task_log.step("tags")
             self._tags(task, plan, room, plan_view, level, notes)
+            task_log.step("2D grids")
+            self._elevation_grids(plan, notes)
             notes.append(info("sheet {} made".format(plan["number"])))
         except Exception as e:
             task_log.exception("sheet {} failed".format(plan.get("number")))
@@ -446,6 +465,46 @@ class RlsWriter(object):
                 notes.append("{} does not face the way the plan says (the marker's other views are at fixed quarter turns)".format(e["name"]))
             self._title_on_sheet(view, e.get("title"), e["name"], notes)
             self._viewport(sheet, view, e["viewport"], notes, e["name"], "elevation")
+
+    def _elevation_grids(self, plan, notes):
+        """The 2D grid (`elevation_grid`, a line based detail family) along the bottom of every new elevation: from the
+        crop's bottom left corner to its bottom right, so it is as long as the elevation is wide. **The last step of the
+        sheet**, after every tag, so the crop is final; and it never stops the sheet: anything that goes wrong, in all the
+        elevations or in one, is a note and the sheet is made without that grid. duHast places it
+        (`place_a_line_based_detail_family_instance_in_view`, newer than duHast's last release: an older one is a note)."""
+        name = plan.get("elevation_grid")
+        if not name or not plan["elevations"]:
+            return
+        try:
+            try:
+                from duHast.Revit.Family.family_instance_create import place_a_line_based_detail_family_instance_in_view
+            except ImportError:
+                notes.append("no 2D grid placed: the duHast loaded cannot place a line based detail family (it is older than the one this needs)")
+                return
+            symbol = self.facts.line_detail_symbol(name)
+            if symbol is None:
+                notes.append("no 2D grid placed: the model has no line based detail family '{}'".format(name))
+                return
+            placed = 0
+            for e in plan["elevations"]:
+                view = self._elevation_views.get(e["view_id"])
+                if view is None:
+                    continue
+                try:
+                    start, end = _bottom_edge(view)
+                    task_log.step("RoomMate: 2D grid in {}".format(e["name"]))
+                    outcome = place_a_line_based_detail_family_instance_in_view(self.doc, start, end, symbol, view)
+                    if outcome.status:
+                        placed += 1
+                    else:
+                        notes.append("{}: 2D grid not placed ({})".format(e["name"], outcome.message.strip()))
+                except Exception as ex:
+                    task_log.exception("2D grid in {}".format(e["name"]))
+                    notes.append("{}: 2D grid not placed ({})".format(e["name"], ex))
+            notes.append(info("{} 2D grid(s) placed".format(placed)))
+        except Exception as ex:
+            task_log.exception("2D grids")
+            notes.append("no 2D grid placed ({})".format(ex))
 
     def _check_vertical_extent(self, view, e, bottom, notes):
         """Say so when the crop box is not where it was asked to be: its bottom the room's floor, its top the

@@ -66,6 +66,9 @@
                                 <TextBlock Text="Title on sheet" VerticalAlignment="Center"/>
                                 <TextBox Grid.Column="1" x:Name="tb_title_elevation" TextChanged="on_change"/>
                                 <ComboBox Grid.Column="2" x:Name="tk_title_elevation" SelectionChanged="on_token_title_elevation" Margin="6,0,0,0"/></Grid>
+                            <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+                                <TextBlock Text="Place 2D grid" VerticalAlignment="Center"/><ComboBox Grid.Column="1" x:Name="cb_elevation_grid" SelectionChanged="on_change"/></Grid>
+                            <TextBlock Text="A line based detail family drawn along the bottom of each elevation, from its bottom left corner and as long as the elevation is wide. Not set: no grid." Opacity="0.6" Margin="160,2,0,0" TextWrapping="Wrap"/>
                         </StackPanel>
                     </GroupBox>
                     <GroupBox Header="3D" Padding="6" Margin="0,6,0,0">

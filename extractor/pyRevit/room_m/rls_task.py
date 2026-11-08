@@ -30,6 +30,7 @@ defined, elevations the server could not place.
   tag_type_exists(kind, name) -> bool       (kind "room" or "independent")
   sheet_exists(number) -> bool
   views_in_use(names) -> [names that are the name of a view already]
+  line_detail_exists(name) -> bool          ("Family : Type" of a line based detail family)
 """
 
 import re
@@ -57,6 +58,7 @@ UNKNOWN_KIND = "unknown_kind"
 NO_ROOM_TAG = "no_room_tag"
 NO_INDEPENDENT_TAG = "no_independent_tag"
 ELEVATION_NOT_PLACED = "elevation_not_placed"
+NO_ELEVATION_GRID = "no_elevation_grid"
 
 _BAD_NUMBER_CHARS = re.compile(r"[\\/:*?\"<>|{}\[\];~`]")
 DEFAULT_SCALE = 50
@@ -365,6 +367,8 @@ def build(task, settings, values):
         "schedule_base": settings.get("schedule_base"),
         "room_tag": settings.get("room_tag") or None,
         "independent_tag": settings.get("independent_tag") or None,
+        # a line based detail family drawn along the bottom of every elevation, last of all (`rls_write._elevation_grids`)
+        "elevation_grid": settings.get("elevation_grid") or None,
         "tags": _plan_tags(task),
         "untagged_items": len(((task.get("rls") or {}).get("tags") or {}).get("items_without_tags") or []),
         "elevation_tags": _elevation_tags(task),
@@ -446,6 +450,9 @@ def check(task, settings, facts, taken):
         warnings.append(finding(NO_ROOM_TAG, "{}: no room tag is defined (or it is not in the model): the room is not tagged".format(label)))
     if plan["independent_tag"] is None or not facts.tag_type_exists("independent", plan["independent_tag"]):
         warnings.append(finding(NO_INDEPENDENT_TAG, "{}: no independent tag is defined (or it is not in the model): no item is tagged".format(label)))
+    if plan["elevation_grid"] and plan["elevations"] and not facts.line_detail_exists(plan["elevation_grid"]):
+        warnings.append(finding(NO_ELEVATION_GRID, "{}: the model has no line based detail family '{}': the elevations get no 2D grid".format(
+            label, plan["elevation_grid"])))
     for n in plan["three_d_skipped"]:
         warnings.append(finding(THREE_D_NO_DIRECTION, "{}: the template's 3D view {} has no direction to copy: no 3D view is made for it".format(label, n)))
     for f in task.get("findings") or []:
