@@ -127,7 +127,7 @@ refuse an empty push (a level with no doors is a legitimate clear; `is_scoped`).
 `_run_export`. **The level choice also narrows what Revit reads**: each exporter hands `level_ids` to duHast's `get_all_*_data` (`duHast.Revit.Common.level_filter`),
 which converts only elements on those levels, before the slow per-element conversion; the count guards in the spaces and surfaces exporters compare
 against the same filtered set. An UNSCOPED push passes duHast no new argument (`export_form.level_kwargs`), so an older duHast still works for
-every push that does not choose levels; a scoped one needs the duHast with the filter, which the lock has carried since it was bumped to `b5767658` (2026-11-08).
+every push that does not choose levels; a scoped one needs the duHast with the filter, which the lock has carried since it was bumped to `b5767658`, duHast release `v1.0.5+net8` (2026-11-08).
 FF&E is filtered on the level the modeller assigned before conversion and on the geometric fallback level after it, so the level an item reports is
 unchanged. Levels are the per-document ids, which each element's own `LevelId` reports (a room's level, a door's host level, a ceiling's host level).
 **Not run in Revit.**
@@ -702,7 +702,7 @@ checked before anything is made, then one transaction group per task (`duHast...
 - **The Revit calls live in duHast** (PR in the duHast repo): `Family/family_symbol_lookup`, `Views/views_names`, `viewports_create`,
   `schedules_create`, `elevation_marker`, `Annotation/independent_tags_create`, `Rooms/room_tags_create` and `Common/transaction.in_transaction_group`,
   plus fixes to `sheets_create` (unicode text, activate the title block), `plan_view_create` and `elevation_view_create` (optional phase, the crop went to
-  the plan view). **`extractor/duhast.lock` is at `b5767658`** (net8DuHast, 2026-11-08, newer than duHast's last release), which has all of these and `Family/family_instance_create.place_a_line_based_detail_family_instance_in_view` for the 2D grid; `-DuHastPath` is for a duHast newer still.
+  the plan view). **`extractor/duhast.lock` is at `b5767658`**, duHast release `v1.0.5+net8` (2026-11-08), which has all of these and `Family/family_instance_create.place_a_line_based_detail_family_instance_in_view` for the 2D grid; `-DuHastPath` is for a duHast newer still.
 
 ## Tag rules: where a tag goes, learned from tags in Revit views
 
