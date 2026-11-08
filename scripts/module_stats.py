@@ -76,6 +76,8 @@ MODULES = {
     "u_rooms": ["extractor/pyRevit/room_m/utils/rooms.py"],
     "u_openings": ["extractor/pyRevit/room_m/utils/openings.py"],
     "u_items": ["extractor/pyRevit/room_m/utils/items.py"],
+    "u_nesting": ["extractor/pyRevit/room_m/utils/nesting.py"],
+    "rls_geom": ["extractor/pyRevit/room_m/view_walls.py", "extractor/pyRevit/room_m/section_box.py", "extractor/pyRevit/room_m/detail_numbers.py"],
     "u_spaces": ["extractor/pyRevit/room_m/utils/spaces.py"],
     "u_refs": ["extractor/pyRevit/room_m/utils/room_refs.py"],
     "u_generic": ["extractor/pyRevit/room_m/utils/generic.py"],
