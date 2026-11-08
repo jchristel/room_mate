@@ -80,7 +80,8 @@ Review the sheet data pushed from Revit.
 **Highlights**
 
 - **Every sheet at a glance**: paper size, a drawn preview (viewports, elevation lines,
-  markers, schedule rows), rooms covered, and the blueprint it is bound to.
+  markers, schedule rows, and each 3D view's camera as an arrow on the plan), rooms
+  covered, and the blueprint it is bound to.
 - **Renumbered pushes wait for you**: accept or reject.
 
 **Also**
@@ -114,11 +115,11 @@ installer as an optional component. A section per button, with what it does in f
 
 | | Button | What it does |
 |---|---|---|
-| <img src="extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/ExportAll.pushbutton/Icon.png" alt="" width="32"> | **Export** | One window: check the entities, choose the project and phase (preselected from the server) and the whole model or chosen levels. Pushes the seven entities to the server; remembers your choices. In daily use. |
+| <img src="extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/ExportAll.pushbutton/Icon.png" alt="" width="32"> | **Export** | One window: check the entities, choose the project and phase (preselected from the server) and the whole model or chosen levels. Pushes the seven entities to the server, with or without shared nested families; remembers your choices. In daily use. |
 | <img src="extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/Blueprint.pushbutton/Icon.png" alt="" width="32"> | **Blueprint** | Sends rooms and their room layout sheets to the server as blueprints. Sheets can be matched to rooms by a rule written with `{Parameter}` placeholders; duplicate blueprint names are flagged. |
 | <img src="extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/Sheets.pushbutton/Icon.png" alt="" width="32"> | **Sheets** | Sends chosen sheets to the library, with a filter, check-all-matched and the same room-matching rule. |
-| <img src="extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/Tasks.pushbutton/Icon.png" alt="" width="32"> | **Tasks** | Lists the open model's queued tasks (with Refresh), claims the checked ones, checks them all, then **creates the room layout sheets** (plan, elevations, 3D view, schedule, tags). Run in Revit end to end. Placing items is built but not yet run in Revit. |
-| <img src="extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/RlsSettings.pushbutton/Icon.png" alt="" width="32"> | **RLS settings** | Per-model settings for how sheets are made (title blocks, view types, name templates), stored in the model. |
+| <img src="extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/Tasks.pushbutton/Icon.png" alt="" width="32"> | **Tasks** | Lists the open model's queued tasks (with Refresh), claims the checked ones, checks them all, then **creates the room layout sheets** (plan, elevations, 3D view, schedule, tags). Run in Revit end to end. Each 3D view hides the walls between its camera and the room and makes the items along them transparent; nested parts are tagged when a rule exists for them. Placing items, and each view's Title on Sheet from a template, are built but not yet run in Revit. |
+| <img src="extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/RlsSettings.pushbutton/Icon.png" alt="" width="32"> | **RLS settings** | Per-model settings for how sheets are made (title blocks, tags, name templates, and per kind of view its view type and Title on Sheet template), stored in the model. |
 | <img src="extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/Server.pushbutton/Icon.png" alt="" width="32"> | **Server** | Which server this model talks to; shown in the blue header of every window. |
 
 Every run reports one readable line per result and one Finished line; a server error says its number
@@ -152,6 +153,9 @@ One Rust binary ([`src/`](src)) that serves the pages and the API.
   and floors to rooms.
 - **Geometry**: areas, adjacency, room location, routing and reach, blueprint resolving.
 - **Authored data**: blueprints, assignments, tasks, the sheet library, tag rules, connections.
+- **Room layout sheets worked out for Revit**: a create-RLS task says where each elevation
+  marker and view goes in the new room, where the plan crop and the tags go, and for each 3D
+  view where its camera is, which of the room's walls to hide and what to see through.
 - **Safe by default**: loopback only. `--bind 0.0.0.0` serves a closed network, with no
   authentication ([security](docs/STRATEGY-SECURITY.md)).
 

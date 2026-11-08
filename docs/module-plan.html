@@ -665,6 +665,7 @@
     reports_api: [127, 314, 50, 119],
     rls_3d: [137, 289, 44, 89],
     rls_create: [1212, 1684, 235, 0],
+    rls_geom: [164, 291, 71, 0],
     rls_place: [54, 70, 11, 0],
     rls_plan: [293, 628, 82, 223],
     rls_tags: [391, 827, 83, 323],
@@ -720,6 +721,7 @@
     u_envelope: [62, 227, 133, 0],
     u_generic: [40, 123, 57, 0],
     u_items: [28, 127, 79, 0],
+    u_nesting: [50, 86, 21, 0],
     u_openings: [25, 106, 59, 0],
     u_phase: [11, 79, 52, 0],
     u_refs: [4, 51, 37, 0],
@@ -784,19 +786,19 @@
       id: "ex_doors", name: "exporters/doors.py", path: "extractor/pyRevit/room_m/exporters/doors.py", zone: "run",
       lang: "IronPython",
       blurb: "The doors half, same three names. Doors no longer wait on rooms: the server resolves a door's rooms itself and treats “the rooms have not arrived yet” as a state it reports, not one it refuses. So the two buckets are independent.",
-      deps: ["post_doors", "u_openings"]
+      deps: ["post_doors", "u_openings", "u_nesting"]
     },
     {
       id: "ex_windows", name: "exporters/windows.py", path: "extractor/pyRevit/room_m/exporters/windows.py", zone: "run",
       lang: "IronPython",
       blurb: "The third entity, and it cost nothing structural — a window IS the <strong>Opening</strong> record, so this is the doors exporter with a category swapped. What differs is not the shape but the <em>distribution</em>: a one-sided opening is the exception for doors and the rule for windows, and a facade model that links its interiors carries none at all.",
-      deps: ["post_windows", "u_openings"]
+      deps: ["post_windows", "u_openings", "u_nesting"]
     },
     {
       id: "ex_ffe", name: "exporters/ffe.py", path: "extractor/pyRevit/room_m/exporters/ffe.py", zone: "run",
       lang: "IronPython",
       blurb: "The first candidate that is <strong>not an opening</strong> — one room rather than two sides, a category, a component id. Nine categories collected. A large <code>excluded_components</code> is normal, not a fault: 179 of 647 on the measured model, most of them furniture nested inside casework.",
-      deps: ["post_ffe", "u_items"]
+      deps: ["post_ffe", "u_items", "u_nesting"]
     },
     {
       id: "ex_spaces", name: "exporters/spaces.py", path: "extractor/pyRevit/room_m/exporters/spaces.py", zone: "run",
@@ -1298,8 +1300,8 @@
     },
     {
       id: "rls_create", name: "rls_task.py + rls_write.py", path: "extractor/pyRevit/room_m/rls_task.py", zone: "run", lang: "IronPython",
-      blurb: "RLS create. The settings window (title block per size, view types, schedule base, tags, name templates, kept in the model), the planner that checks every task before anything is written (pure, CPython-tested), and the writer that makes the sheet, plan and elevation views, <strong>a new 3D view per 3D viewport of the template</strong>, the schedule and the tags through duHast. <strong>RoomMate decides, Revit applies</strong>: the phase is the room's own, and the room tag goes where the server put it. <strong>The elevation line is placed by moving the view's pointer</strong> (the crop box transform is ignored by Revit), and the marker by its pointers. Run in Revit end to end (2026-11-01).",
-      deps: ["apply_tasks", "u_tidy"]
+      blurb: "RLS create. The settings window (title block per size, view types, schedule base, tags, name templates, kept in the model), the planner that checks every task before anything is written (pure, CPython-tested), and the writer that makes the sheet, plan and elevation views, <strong>a new 3D view per 3D viewport of the template</strong> (its section box on the plan crop's footprint, the walls the server names hidden and the items along them 70% transparent), the schedule and the tags through duHast. <strong>RoomMate decides, Revit applies</strong>: the phase is the room's own, and the room tag goes where the server put it. <strong>The elevation line is placed by moving the view's pointer</strong> (the crop box transform is ignored by Revit), and the marker by its pointers. Each view gets its Title on Sheet from a template per kind; the plan keeps the template crop's offsets from its room. Run in Revit end to end (2026-11-01), the 3D wall hiding and transparency since 2026-11-08; the titles are not yet.",
+      deps: ["apply_tasks", "u_tidy", "rls_geom"]
     },
     {
       id: "tasks_ui", name: "tasks_window.py + tasks_form.py", path: "extractor/pyRevit/room_m/tasks_window.py", zone: "run", lang: "IronPython",
@@ -1350,6 +1352,16 @@
     {
       id: "u_tidy", name: "ring_tidy.py", path: "extractor/pyRevit/room_m/ring_tidy.py", zone: "readers", lang: "IronPython",
       blurb: "Small pure helpers. ring_tidy drops the collinear vertices Revit puts wherever a boundary changes wall (77.5% of Sample Project's rooms have one); losslessly, at 0.5 mm. Rooms only.",
+      deps: []
+    },
+    {
+      id: "u_nesting", name: "utils/nesting.py", path: "extractor/pyRevit/room_m/utils/nesting.py", zone: "readers", lang: "IronPython",
+      blurb: "<strong>Every door, window and FF&amp;E item says which shared nested families it holds</strong>, whatever was chosen about pushing them: one pass over the document's FamilyInstances by SuperComponent, every depth, flat, each with its parent, category, family and type. A blueprint that swaps a family must know what comes with the host even when the parts were never pushed.",
+      deps: []
+    },
+    {
+      id: "rls_geom", name: "view_walls.py + section_box.py + detail_numbers.py", path: "extractor/pyRevit/room_m/view_walls.py", zone: "run", lang: "IronPython",
+      blurb: "The pure arithmetic behind an RLS's views, tested on CPython. <strong>view_walls</strong> turns the server's hidden edges into the walls with a face within 200 mm of one and parallel to it (so a thick wall's face counts and the side wall at a corner stays), with the plug-in's own rule as the fallback; <strong>section_box</strong> runs a 3D view's box at the template's heights above this room's level; <strong>detail_numbers</strong> numbers the viewports per kind, numeric or alphabetic.",
       deps: []
     },
     {
@@ -1554,7 +1566,7 @@
     },
     {
       id: "p_library", name: "library/ (React)", path: "src-js/library/", zone: "pages", lang: "TypeScript + React",
-      blurb: "The sheet library and tag rules at /library/: each sheet's paper size, outline-and-viewport preview, rooms covered and blueprint or generic key, renumbered pushes to accept or reject, suggest, and the rules by type code.",
+      blurb: "The sheet library and tag rules at /library/: each sheet's paper size, outline-and-viewport preview (elevation lines, markers, schedule rows and each 3D view's camera as an arrow on the plan), rooms covered and blueprint or generic key, renumbered pushes to accept or reject, suggest, and the rules by type code.",
       deps: ["p_common", "p_tokens"]
     },
     {

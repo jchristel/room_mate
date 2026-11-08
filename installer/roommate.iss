@@ -16,7 +16,7 @@
 ; is replaced wholesale, the data half is only ever seeded when absent.
 
 #ifndef AppVersion
-  #define AppVersion "0.0.1"
+  #define AppVersion "0.2.0"
 #endif
 
 ; The Windows FILE version, which is NOT the same thing as AppVersion above.

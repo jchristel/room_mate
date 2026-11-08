@@ -26,7 +26,7 @@ Sends the sheets you choose to the server's sheet library. A filter, "Check all 
 
 ### <img src="../extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/Tasks.pushbutton/Icon.png" alt="" width="40" align="absmiddle"> Tasks
 
-Carries out the room tasks the server holds for the open model. The window lists the queued tasks, filterable by room, kind and level; Refresh asks the server again without losing what you checked, and the project and filters are remembered. The checked tasks are claimed and all checked before anything is written; populate and update tasks place the items, and create-RLS tasks make the sheets, views, schedule and tags, each task in one transaction group. Every step is written to `RoomMate.log`, and placing items has not yet been run in Revit.
+Carries out the room tasks the server holds for the open model. The window lists the queued tasks, filterable by room, kind and level; Refresh asks the server again without losing what you checked, and the project and filters are remembered. The checked tasks are claimed and all checked before anything is written; populate and update tasks place the items, and create-RLS tasks make the sheets, views, schedule and tags, each task in one transaction group. A new 3D view hides the walls between its camera and the room (the server names the room's edges to clear; every straight wall with a face within 200 mm of one goes) and makes the items along them 70% transparent, in that view only. Every step is written to `RoomMate.log`, and placing items has not yet been run in Revit.
 
 ### <img src="../extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/RlsSettings.pushbutton/Icon.png" alt="" width="40" align="absmiddle"> RLS settings
 
