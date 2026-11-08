@@ -42,7 +42,7 @@ in the main viewer** (a ghost, a best fit and a box laid by hand: see stage 6).
 
 Not built: a mirrored copy (left out on purpose, decision 7); view template in the sheet export; the Revit side
 of the update kind; and running the item-placing half in Revit (room layout sheet creation has run end to end since
-2026-11-01; the 3D views' wall hiding and transparency and nested tags since 2026-11-08; the plan crop offsets and Title on Sheet have not).
+2026-11-01; the 3D views' wall hiding and transparency and nested tags and the plan crop offsets since 2026-11-08; Title on Sheet has not).
 
 ## What exists, and what does not
 
