@@ -22,7 +22,7 @@ path = "src/main.rs"
 # dependency: that is what keeps the crate forkable. Versions match the roommate server's own MCP
 # binary (`src/bin/mcp.rs`) so the two behave alike under one client.
 [dependencies]
-rmcp = { version = "2.1.0", features = ["server", "macros", "transport-io", "schemars"] }
+rmcp = { version = "3.9.0", features = ["server", "macros", "transport-io", "schemars"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "io-std", "net", "io-util", "time"] }
 # rustls only, no default features: no OpenSSL to find on the machine this runs on, and no redirect-following
 # or cookie store we did not ask for. No retry either: a failed call is reported, not repeated.

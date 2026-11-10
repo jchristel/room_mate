@@ -49,7 +49,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
-    model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerInfo},
+    model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig},
     schemars, tool, tool_handler, tool_router,
     transport::stdio,
     ErrorData as McpError, ServerHandler, ServiceExt,
@@ -2283,12 +2283,12 @@ fn settings_to_mcp_error(err: SettingsError) -> McpError {
 
 #[tool_handler]
 impl ServerHandler for RoommateMcp {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         // Not `Implementation::from_build_env()` -- it's a plain fn whose body
         // bakes in `env!()` at *rmcp's own* compile time, so it always reports
         // "rmcp"/rmcp's version rather than ours (confirmed via a stdio smoke
         // test). Name and version explicitly instead.
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("roommate-mcp", env!("CARGO_PKG_VERSION")))
             .with_instructions(
                 "Read-only access to roommate's stored room and reference data -- this process never \
