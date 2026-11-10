@@ -40,7 +40,7 @@
     Register the dRofus server instead (prompts).
 
 .PARAMETER Unattended
-    With -Drofus: take region, database, project and API key from the ROOMMATE_SETUP_REGION, _DATABASE, _PROJECT
+    With -Drofus: take host, database, project and API key from the ROOMMATE_SETUP_HOST, _DATABASE, _PROJECT
     and _KEY environment variables instead of asking, and never wait for a key press. The installer's own page
     collects them and sets them for this one process, so the key is on no command line.
 
@@ -53,6 +53,14 @@
 
 .PARAMETER DryRun
     Print what would be run and change nothing. The API key is shown as ***.
+
+.PARAMETER ResultFile
+    Write the closing message (why it stopped, or that it worked) to this file. The installer runs the script hidden,
+    so this is how its message box can say why, rather than only that it failed.
+
+.NOTES
+    Every run's closing message, and an error that stops it, is also appended to %APPDATA%\RoomMate\RoomMate.log,
+    the log the Revit buttons write. No API key or token is ever written to either.
 #>
 [CmdletBinding()]
 param(
@@ -64,7 +72,8 @@ param(
     [ValidateSet('claude-desktop', 'cursor', 'vscode', 'codex')]
     [string] $PrintConfig,
     [switch] $Remove,
-    [switch] $DryRun
+    [switch] $DryRun,
+    [string] $ResultFile
 )
 
 $ErrorActionPreference = 'Stop'
@@ -73,6 +82,8 @@ $AppRoot  = $PSScriptRoot
 $Settings = Join-Path $env:LOCALAPPDATA 'RoomMate\settings'
 # Where the dRofus key is kept: a file only this account can read, so Claude Code's configuration holds a path.
 $KeyFile  = Join-Path $env:LOCALAPPDATA 'RoomMate\secrets\drofus.key'
+# The Revit buttons' log (room_m/task_log.py), in the same line format, so one file says what RoomMate did.
+$LogFile  = Join-Path $env:APPDATA 'RoomMate\RoomMate.log'
 
 function Find-Claude {
     $found = Get-Command claude -ErrorAction SilentlyContinue
@@ -87,9 +98,33 @@ function Find-Claude {
     return $null
 }
 
+# Appends one line to the log. Never fails the run: a log that cannot be written is not a reason to stop.
+function Write-Log {
+    param([string] $Level, [string] $Message)
+    try {
+        New-Item -ItemType Directory -Force -Path (Split-Path $LogFile) | Out-Null
+        $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+        $line = "$Level | $stamp | Register-ClaudeMcp: " + ($Message -replace '\r?\n', ' / ')
+        Add-Content -LiteralPath $LogFile -Value $line -Encoding UTF8
+    } catch { }
+}
+
+# Every message printed here can reach the log and the installer; a token typed on the command line must not.
+function Hide-Secrets {
+    param([string] $Text)
+    if ($Token) { $Text = $Text.Replace($Token, '***') }
+    return $Text
+}
+
 function Stop-Here {
     param([string] $Message, [int] $Code = 0)
+    $Message = Hide-Secrets $Message
     Write-Host $Message
+    $level = if ($Code -eq 0) { 'INFO' } else { 'ERROR' }
+    Write-Log $level $Message
+    if ($ResultFile) {
+        try { Set-Content -LiteralPath $ResultFile -Value $Message -Encoding Default } catch { }
+    }
     # Hold the window only when somebody can read it: the installer runs this in its own console.
     if ([Environment]::UserInteractive -and -not $Unattended) { Read-Host 'Press Enter to close' | Out-Null }
     exit $Code
@@ -140,6 +175,12 @@ if ($PrintConfig) {
     exit 0
 }
 
+# An error nothing else caught ends the run with what it was, in the log and for the installer, instead of a
+# hidden console closing with no word.
+trap {
+    Stop-Here "Stopped by an error: $($_.Exception.Message)" 1
+}
+
 $Claude = Find-Claude
 
 if (-not $Claude) {
@@ -166,7 +207,12 @@ function Invoke-Claude {
     # 'Stop', and removing a server that is not there writes to stderr.
     $previous = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    try { & $Claude @Arguments *> $null } catch { return $false } finally { $ErrorActionPreference = $previous }
+    # Kept, not discarded, so a refusal can say what Claude Code said.
+    $script:ClaudeSaid = ''
+    # Each line as plain text: Windows PowerShell wraps a native command's stderr in an error record.
+    try { $script:ClaudeSaid = ((& $Claude @Arguments 2>&1 | ForEach-Object { "$_" }) -join ' ').Trim() }
+    catch { $script:ClaudeSaid = $_.Exception.Message; return $false }
+    finally { $ErrorActionPreference = $previous }
     return ($LASTEXITCODE -eq 0)
 }
 
@@ -176,8 +222,13 @@ function Add-Server {
     Invoke-Claude -Arguments @('mcp', 'remove', $Name, '--scope', 'user') | Out-Null
     if (Invoke-Claude -Arguments $AddArguments -Shown $Shown) {
         Write-Host "Registered '$Name' with Claude Code."
+        $what = if ($Shown) { $Shown } else { $AddArguments }
+        Write-Log 'INFO' ("Registered '$Name': claude " + (Hide-Secrets ($what -join ' ')))
     } else {
-        Stop-Here "Could not register '$Name'. Run 'claude mcp add --help' to see what Claude Code expects." 1
+        $said = $script:ClaudeSaid
+        if ($said.Length -gt 600) { $said = '...' + $said.Substring($said.Length - 600) }
+        if (-not $said) { $said = '(it printed nothing)' }
+        Stop-Here "Could not register '$Name'. Claude Code said: $said" 1
     }
 }
 
@@ -223,21 +274,35 @@ function Save-DrofusKey {
     return @{ Where = "$KeyFile (readable by your account only)"; Env = @("DROFUS_API_KEY_FILE=$KeyFile") }
 }
 
+# What the dRofus host field becomes. A bare label (api-no) is a dRofus regional host; anything with a dot, a
+# colon or a slash is an address the organisation serves itself, passed on as typed: drofus-mcp.exe adds https://
+# to a bare host and takes the host alone from a whole request address. Only a blank or a space is refused, since
+# the answer becomes one argument of the registered command.
+function ConvertTo-DrofusBaseUrl {
+    param([string] $Answer)
+    $value = if ($Answer) { $Answer.Trim() } else { '' }
+    if (-not $value) { return 'https://api-no.drofus.com' }
+    if ($value -match '\s') { return $null }
+    if ($value -match '^[A-Za-z0-9-]+$') { return "https://$value.drofus.com" }
+    return $value.TrimEnd('/')
+}
+
 if ($Drofus) {
     $Exe = Join-Path $AppRoot 'drofus-mcp.exe'
     if (-not (Test-Path $Exe)) { Stop-Here "drofus-mcp.exe was not found beside this script ($AppRoot)." 1 }
 
     if ($Unattended) {
-        $region = $env:ROOMMATE_SETUP_REGION
+        $hostAnswer = $env:ROOMMATE_SETUP_HOST
         $database = $env:ROOMMATE_SETUP_DATABASE
         $project = $env:ROOMMATE_SETUP_PROJECT
         $key = $env:ROOMMATE_SETUP_KEY
         # The values were for this process alone; do not leave the key in its environment.
-        foreach ($name in 'REGION', 'DATABASE', 'PROJECT', 'KEY') { Remove-Item "Env:ROOMMATE_SETUP_$name" -ErrorAction SilentlyContinue }
+        foreach ($name in 'HOST', 'DATABASE', 'PROJECT', 'KEY') { Remove-Item "Env:ROOMMATE_SETUP_$name" -ErrorAction SilentlyContinue }
     } else {
         Write-Host 'dRofus: these three values come from your dRofus account.'
-        Write-Host 'Region host: api-no (default), api-eu, api-us, api-ca or api-au.'
-        $region = Read-Host 'Region [api-no]'
+        Write-Host 'Host: a dRofus region (api-no, the default, api-eu, api-us, api-ca or api-au),'
+        Write-Host "or your organisation's own address, e.g. https://drofus.example.org."
+        $hostAnswer = Read-Host 'Host [api-no]'
         $database = Read-Host 'Database'
         $project  = Read-Host 'Project'
         $secure   = Read-Host 'API key (not shown)' -AsSecureString
@@ -245,8 +310,8 @@ if ($Drofus) {
         try { $key = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
         finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
     }
-    if (-not $region) { $region = 'api-no' }
-    if ($region -notmatch '^[A-Za-z0-9-]+$') { Stop-Here "The region '$region' is not a host name part such as api-no; nothing was registered." 1 }
+    $baseUrl = ConvertTo-DrofusBaseUrl $hostAnswer
+    if (-not $baseUrl) { Stop-Here "The host '$hostAnswer' is neither a dRofus region such as api-no nor an address; nothing was registered." 1 }
     if (-not $database -or -not $project -or -not $key) {
         Stop-Here 'Database, project and API key are all needed; nothing was registered.' 1
     }
@@ -254,7 +319,7 @@ if ($Drofus) {
     $saved = Save-DrofusKey -Key $key -Exe $Exe
 
     # The name goes first: --env takes any number of values and would swallow it otherwise.
-    $tail = @('--', $Exe, '--base-url', "https://$region.drofus.com", '--database', $database, '--project', $project)
+    $tail = @('--', $Exe, '--base-url', $baseUrl, '--database', $database, '--project', $project)
     $head = @('mcp', 'add', 'drofus', '--scope', 'user')
     if ($saved.Env.Count -gt 0) { $head = $head + @('--env') + $saved.Env }
     Add-Server -Name 'drofus' -AddArguments ($head + $tail) -Shown ($head + $tail)

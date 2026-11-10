@@ -7,7 +7,7 @@
 #                    (docs/mcp-host-setup.md, 2b); if it has a shared secret, add --ask-token
 #                    (prompts, nothing shown) or set ROOMMATE_MCP_TOKEN. --token SECRET still
 #                    works but is deprecated: a command line shows in history and `ps`
-#   --drofus         ask for region, database, project and API key; register drofus-mcp. The key
+#   --drofus         ask for host, database, project and API key; register drofus-mcp. The key
 #                    goes into the OS credential store (macOS) or else a file only you can read;
 #                    Claude Code is given at most a path
 #   --print-config HOST
@@ -115,15 +115,23 @@ fi
 if [ "$DROFUS" = 1 ]; then
   [ -x "$APP/drofus-mcp" ] || { echo "drofus-mcp was not found beside this script ($APP)." >&2; exit 1; }
   echo "dRofus: these three values come from your dRofus account."
-  echo "Region host: api-no (default), api-eu, api-us, api-ca or api-au."
-  read -r -p "Region [api-no]: " region; region=${region:-api-no}
+  echo "Host: a dRofus region (api-no, the default, api-eu, api-us, api-ca or api-au),"
+  echo "or your organisation's own address, e.g. https://drofus.example.org."
+  read -r -p "Host [api-no]: " host_answer; host_answer=${host_answer:-api-no}
+  # A bare label is a dRofus regional host; anything else is an address the organisation serves itself, passed on
+  # as typed (drofus-mcp adds https:// to a bare host and takes the host alone from a whole request address).
+  case "$host_answer" in
+    *[[:space:]]*) echo "The host '$host_answer' is neither a dRofus region such as api-no nor an address; nothing was registered." >&2; exit 1 ;;
+    *[!A-Za-z0-9-]*) base_url=${host_answer%/} ;;
+    *) base_url="https://$host_answer.drofus.com" ;;
+  esac
   read -r -p "Database: " database
   read -r -p "Project: " project
   read -r -s -p "API key (not shown): " key; echo
   if [ -z "$database" ] || [ -z "$project" ] || [ -z "$key" ]; then
     echo "Database, project and API key are all needed; nothing was registered." >&2; exit 1
   fi
-  tail=(-- "$APP/drofus-mcp" --base-url "https://$region.drofus.com" --database "$database" --project "$project")
+  tail=(-- "$APP/drofus-mcp" --base-url "$base_url" --database "$database" --project "$project")
   # The key is kept where Claude Code's own (plain text) configuration need not hold it. First choice: the OS
   # credential store, written by drofus-mcp itself with the key on standard input (macOS Keychain; Linux has none
   # it can rely on and says so). Fallback: a file only this user can read. Claude Code is told a path at most.
