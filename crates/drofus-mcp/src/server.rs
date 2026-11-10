@@ -20,7 +20,7 @@ use rmcp::{
         router::tool::{ToolRoute, ToolRouter},
         tool::ToolCallContext,
     },
-    model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerInfo, Tool, ToolAnnotations},
+    model::{CallToolResult, ContentBlock, Implementation, ServerCapabilities, ServerConfig, Tool, ToolAnnotations},
     tool, tool_handler, tool_router, ErrorData as McpError, ServerHandler,
 };
 use serde::Serialize;
@@ -149,7 +149,7 @@ impl DrofusMcp {
                 let client = client.clone();
                 Box::pin(async move {
                     let args = ctx.arguments.unwrap_or_default();
-                    Ok(answer_to_result(client.call(endpoint, &args).await))
+                    Ok(answer_to_result(client.call(endpoint, &args).await).into())
                 })
             }));
         }
@@ -168,9 +168,9 @@ impl DrofusMcp {
 // `server_info` and would silently leave the 89 table-built tools unlisted and uncallable.
 #[tool_handler(router = self.tool_router)]
 impl ServerHandler for DrofusMcp {
-    fn get_info(&self) -> ServerInfo {
+    fn get_info(&self) -> ServerConfig {
         // Named explicitly: `Implementation::from_build_env()` would report rmcp's own name and version.
-        ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
+        ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new("drofus-mcp", env!("CARGO_PKG_VERSION")))
             .with_instructions(
                 "Read-only access to a dRofus database through its Project API. Call server_info first: it says \

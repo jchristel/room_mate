@@ -26,7 +26,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpServerConfig, StreamableHttpService};
-use rmcp::{RoleServer, Service};
+use rmcp::ServerHandler;
 
 use crate::network::HostPolicy;
 
@@ -71,10 +71,10 @@ pub fn router<S>(
     token: Option<String>,
 ) -> Router
 where
-    S: Service<RoleServer> + Send + 'static,
+    S: ServerHandler + Send + 'static,
 {
     let mut config = StreamableHttpServerConfig::default();
-    config.stateful_mode = false;
+    config.legacy_session_mode = false;
     config.json_response = true;
     // Replaced by `protect` below; see the module doc.
     config = config.disable_allowed_hosts();
