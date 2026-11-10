@@ -40,7 +40,7 @@
     Register the dRofus server instead (prompts).
 
 .PARAMETER Unattended
-    With -Drofus: take region, database, project and API key from the ROOMMATE_SETUP_REGION, _DATABASE, _PROJECT
+    With -Drofus: take host, database, project and API key from the ROOMMATE_SETUP_HOST, _DATABASE, _PROJECT
     and _KEY environment variables instead of asking, and never wait for a key press. The installer's own page
     collects them and sets them for this one process, so the key is on no command line.
 
@@ -223,21 +223,35 @@ function Save-DrofusKey {
     return @{ Where = "$KeyFile (readable by your account only)"; Env = @("DROFUS_API_KEY_FILE=$KeyFile") }
 }
 
+# What the dRofus host field becomes. A bare label (api-no) is a dRofus regional host; anything with a dot, a
+# colon or a slash is an address the organisation serves itself, passed on as typed: drofus-mcp.exe adds https://
+# to a bare host and takes the host alone from a whole request address. Only a blank or a space is refused, since
+# the answer becomes one argument of the registered command.
+function ConvertTo-DrofusBaseUrl {
+    param([string] $Answer)
+    $value = if ($Answer) { $Answer.Trim() } else { '' }
+    if (-not $value) { return 'https://api-no.drofus.com' }
+    if ($value -match '\s') { return $null }
+    if ($value -match '^[A-Za-z0-9-]+$') { return "https://$value.drofus.com" }
+    return $value.TrimEnd('/')
+}
+
 if ($Drofus) {
     $Exe = Join-Path $AppRoot 'drofus-mcp.exe'
     if (-not (Test-Path $Exe)) { Stop-Here "drofus-mcp.exe was not found beside this script ($AppRoot)." 1 }
 
     if ($Unattended) {
-        $region = $env:ROOMMATE_SETUP_REGION
+        $hostAnswer = $env:ROOMMATE_SETUP_HOST
         $database = $env:ROOMMATE_SETUP_DATABASE
         $project = $env:ROOMMATE_SETUP_PROJECT
         $key = $env:ROOMMATE_SETUP_KEY
         # The values were for this process alone; do not leave the key in its environment.
-        foreach ($name in 'REGION', 'DATABASE', 'PROJECT', 'KEY') { Remove-Item "Env:ROOMMATE_SETUP_$name" -ErrorAction SilentlyContinue }
+        foreach ($name in 'HOST', 'DATABASE', 'PROJECT', 'KEY') { Remove-Item "Env:ROOMMATE_SETUP_$name" -ErrorAction SilentlyContinue }
     } else {
         Write-Host 'dRofus: these three values come from your dRofus account.'
-        Write-Host 'Region host: api-no (default), api-eu, api-us, api-ca or api-au.'
-        $region = Read-Host 'Region [api-no]'
+        Write-Host 'Host: a dRofus region (api-no, the default, api-eu, api-us, api-ca or api-au),'
+        Write-Host "or your organisation's own address, e.g. https://drofus.example.org."
+        $hostAnswer = Read-Host 'Host [api-no]'
         $database = Read-Host 'Database'
         $project  = Read-Host 'Project'
         $secure   = Read-Host 'API key (not shown)' -AsSecureString
@@ -245,8 +259,8 @@ if ($Drofus) {
         try { $key = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
         finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
     }
-    if (-not $region) { $region = 'api-no' }
-    if ($region -notmatch '^[A-Za-z0-9-]+$') { Stop-Here "The region '$region' is not a host name part such as api-no; nothing was registered." 1 }
+    $baseUrl = ConvertTo-DrofusBaseUrl $hostAnswer
+    if (-not $baseUrl) { Stop-Here "The host '$hostAnswer' is neither a dRofus region such as api-no nor an address; nothing was registered." 1 }
     if (-not $database -or -not $project -or -not $key) {
         Stop-Here 'Database, project and API key are all needed; nothing was registered.' 1
     }
@@ -254,7 +268,7 @@ if ($Drofus) {
     $saved = Save-DrofusKey -Key $key -Exe $Exe
 
     # The name goes first: --env takes any number of values and would swallow it otherwise.
-    $tail = @('--', $Exe, '--base-url', "https://$region.drofus.com", '--database', $database, '--project', $project)
+    $tail = @('--', $Exe, '--base-url', $baseUrl, '--database', $database, '--project', $project)
     $head = @('mcp', 'add', 'drofus', '--scope', 'user')
     if ($saved.Env.Count -gt 0) { $head = $head + @('--env') + $saved.Env }
     Add-Server -Name 'drofus' -AddArguments ($head + $tail) -Shown ($head + $tail)

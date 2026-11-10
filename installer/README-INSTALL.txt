@@ -101,7 +101,8 @@ uninstall. To redo it, or if Claude Code was installed afterwards:
 
   powershell -ExecutionPolicy Bypass -File "%LOCALAPPDATA%\Programs\RoomMate\Register-ClaudeMcp.ps1"
 
-The dRofus server needs three things only you have (database, project, API key).
+The dRofus server needs four things only you have (its host, database, project, API key). The host is a
+dRofus region (api-no, api-eu, api-us, api-ca, api-au) or your organisation's own address (https://...).
 Tick "Set up the dRofus MCP server" in the setup and it asks for them on the next page (the key
 in a password box); or run the same script with -Drofus. To use a RoomMate server somebody else runs on the network, run it with
 -Url http://<address>:5152/mcp and -AskToken (it asks for the secret and shows nothing; -Token <secret> works

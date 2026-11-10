@@ -374,8 +374,9 @@ begin
   { Shown only when the dRofus task is ticked (ShouldSkipPage). The last field is a password box. }
   DrofusPage := CreateInputQueryPage(wpSelectTasks, 'dRofus',
     'Connect the dRofus MCP server',
-    'These come from your dRofus account. The API key is kept in the Windows Credential Manager, not in Claude Code''s configuration.');
-  DrofusPage.Add('Region host (api-no, api-eu, api-us, api-ca or api-au):', False);
+    'These come from your dRofus account. The host is a dRofus region (api-no, api-eu, api-us, api-ca or api-au) or your ' +
+    'organisation''s own address (https://...). The API key is kept in the Windows Credential Manager, not in Claude Code''s configuration.');
+  DrofusPage.Add('Host (a region such as api-no, or https://...):', False);
   DrofusPage.Add('Database:', False);
   DrofusPage.Add('Project:', False);
   DrofusPage.Add('API key:', True);
@@ -394,7 +395,7 @@ begin
     if (Trim(DrofusPage.Values[0]) = '') or (Trim(DrofusPage.Values[1]) = '') or
        (Trim(DrofusPage.Values[2]) = '') or (Trim(DrofusPage.Values[3]) = '') then
     begin
-      MsgBox('Region, database, project and API key are all needed. Untick the dRofus task on the previous page to skip it.',
+      MsgBox('Host, database, project and API key are all needed. Untick the dRofus task on the previous page to skip it.',
              mbError, MB_OK);
       Result := False;
     end;
@@ -407,7 +408,7 @@ var
   ResultCode: Integer;
   Ran: Boolean;
 begin
-  SetEnvironmentVariable('ROOMMATE_SETUP_REGION', Trim(DrofusPage.Values[0]));
+  SetEnvironmentVariable('ROOMMATE_SETUP_HOST', Trim(DrofusPage.Values[0]));
   SetEnvironmentVariable('ROOMMATE_SETUP_DATABASE', Trim(DrofusPage.Values[1]));
   SetEnvironmentVariable('ROOMMATE_SETUP_PROJECT', Trim(DrofusPage.Values[2]));
   SetEnvironmentVariable('ROOMMATE_SETUP_KEY', Trim(DrofusPage.Values[3]));
@@ -416,7 +417,7 @@ begin
       '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\Register-ClaudeMcp.ps1') + '" -Drofus -Unattended',
       ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
   finally
-    SetEnvironmentVariable('ROOMMATE_SETUP_REGION', '');
+    SetEnvironmentVariable('ROOMMATE_SETUP_HOST', '');
     SetEnvironmentVariable('ROOMMATE_SETUP_DATABASE', '');
     SetEnvironmentVariable('ROOMMATE_SETUP_PROJECT', '');
     SetEnvironmentVariable('ROOMMATE_SETUP_KEY', '');
