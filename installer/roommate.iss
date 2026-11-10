@@ -407,14 +407,19 @@ procedure RegisterDrofus();
 var
   ResultCode: Integer;
   Ran: Boolean;
+  ResultFile, Retry: String;
+  Said: AnsiString;
 begin
+  { The script runs hidden, so it writes its closing message here for the message box to show (and to the log). }
+  ResultFile := ExpandConstant('{tmp}\drofus-register.txt');
+  DeleteFile(ResultFile);
   SetEnvironmentVariable('ROOMMATE_SETUP_HOST', Trim(DrofusPage.Values[0]));
   SetEnvironmentVariable('ROOMMATE_SETUP_DATABASE', Trim(DrofusPage.Values[1]));
   SetEnvironmentVariable('ROOMMATE_SETUP_PROJECT', Trim(DrofusPage.Values[2]));
   SetEnvironmentVariable('ROOMMATE_SETUP_KEY', Trim(DrofusPage.Values[3]));
   try
     Ran := Exec(ExpandConstant('{sys}\WindowsPowerShell\v1.0\powershell.exe'),
-      '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\Register-ClaudeMcp.ps1') + '" -Drofus -Unattended',
+      '-NoProfile -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\Register-ClaudeMcp.ps1') + '" -Drofus -Unattended -ResultFile "' + ResultFile + '"',
       ExpandConstant('{app}'), SW_HIDE, ewWaitUntilTerminated, ResultCode);
   finally
     SetEnvironmentVariable('ROOMMATE_SETUP_HOST', '');
@@ -422,15 +427,25 @@ begin
     SetEnvironmentVariable('ROOMMATE_SETUP_PROJECT', '');
     SetEnvironmentVariable('ROOMMATE_SETUP_KEY', '');
   end;
+  Retry := 'powershell -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\Register-ClaudeMcp.ps1') + '" -Drofus';
   if Ran and (ResultCode = 2) then
     MsgBox('Claude Code was not found, so the dRofus MCP server was not set up and nothing was stored.' + #13#10#13#10 +
-           'Install Claude Code, then run:' + #13#10#13#10 +
-           'powershell -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\Register-ClaudeMcp.ps1') + '" -Drofus',
+           'Install Claude Code, then run:' + #13#10#13#10 + Retry,
            mbInformation, MB_OK)
   else if (not Ran) or (ResultCode <> 0) then
-    MsgBox('The dRofus MCP server could not be set up. Nothing was stored. To try again, run:' + #13#10#13#10 +
-           'powershell -ExecutionPolicy Bypass -File "' + ExpandConstant('{app}\Register-ClaudeMcp.ps1') + '" -Drofus',
-           mbInformation, MB_OK);
+  begin
+    if not (Ran and LoadStringFromFile(ResultFile, Said)) or (Trim(String(Said)) = '') then
+      if Ran then
+        Said := 'The setup script stopped without saying why (exit code ' + IntToStr(ResultCode) + ').'
+      else
+        Said := 'PowerShell could not be started: ' + SysErrorMessage(ResultCode);
+    MsgBox('The dRofus MCP server could not be set up.' + #13#10#13#10 +
+           Trim(String(Said)) + #13#10#13#10 +
+           'This is also in ' + ExpandConstant('{userappdata}\RoomMate\RoomMate.log') + '.' + #13#10#13#10 +
+           'To try again, run:' + #13#10#13#10 + Retry,
+           mbError, MB_OK);
+  end;
+  DeleteFile(ResultFile);
 end;
 
 procedure CurPageChanged(CurPageID: Integer);

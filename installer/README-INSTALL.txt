@@ -104,7 +104,8 @@ uninstall. To redo it, or if Claude Code was installed afterwards:
 The dRofus server needs four things only you have (its host, database, project, API key). The host is a
 dRofus region (api-no, api-eu, api-us, api-ca, api-au) or your organisation's own address (https://...).
 Tick "Set up the dRofus MCP server" in the setup and it asks for them on the next page (the key
-in a password box); or run the same script with -Drofus. To use a RoomMate server somebody else runs on the network, run it with
+in a password box); or run the same script with -Drofus. If it cannot, the setup says why, and so does
+%APPDATA%\RoomMate\RoomMate.log (the script logs every run there; never the key). To use a RoomMate server somebody else runs on the network, run it with
 -Url http://<address>:5152/mcp and -AskToken (it asks for the secret and shows nothing; -Token <secret> works
 but leaves the secret in your shell history).
 

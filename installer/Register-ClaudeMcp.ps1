@@ -53,6 +53,14 @@
 
 .PARAMETER DryRun
     Print what would be run and change nothing. The API key is shown as ***.
+
+.PARAMETER ResultFile
+    Write the closing message (why it stopped, or that it worked) to this file. The installer runs the script hidden,
+    so this is how its message box can say why, rather than only that it failed.
+
+.NOTES
+    Every run's closing message, and an error that stops it, is also appended to %APPDATA%\RoomMate\RoomMate.log,
+    the log the Revit buttons write. No API key or token is ever written to either.
 #>
 [CmdletBinding()]
 param(
@@ -64,7 +72,8 @@ param(
     [ValidateSet('claude-desktop', 'cursor', 'vscode', 'codex')]
     [string] $PrintConfig,
     [switch] $Remove,
-    [switch] $DryRun
+    [switch] $DryRun,
+    [string] $ResultFile
 )
 
 $ErrorActionPreference = 'Stop'
@@ -73,6 +82,8 @@ $AppRoot  = $PSScriptRoot
 $Settings = Join-Path $env:LOCALAPPDATA 'RoomMate\settings'
 # Where the dRofus key is kept: a file only this account can read, so Claude Code's configuration holds a path.
 $KeyFile  = Join-Path $env:LOCALAPPDATA 'RoomMate\secrets\drofus.key'
+# The Revit buttons' log (room_m/task_log.py), in the same line format, so one file says what RoomMate did.
+$LogFile  = Join-Path $env:APPDATA 'RoomMate\RoomMate.log'
 
 function Find-Claude {
     $found = Get-Command claude -ErrorAction SilentlyContinue
@@ -87,9 +98,33 @@ function Find-Claude {
     return $null
 }
 
+# Appends one line to the log. Never fails the run: a log that cannot be written is not a reason to stop.
+function Write-Log {
+    param([string] $Level, [string] $Message)
+    try {
+        New-Item -ItemType Directory -Force -Path (Split-Path $LogFile) | Out-Null
+        $stamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+        $line = "$Level | $stamp | Register-ClaudeMcp: " + ($Message -replace '\r?\n', ' / ')
+        Add-Content -LiteralPath $LogFile -Value $line -Encoding UTF8
+    } catch { }
+}
+
+# Every message printed here can reach the log and the installer; a token typed on the command line must not.
+function Hide-Secrets {
+    param([string] $Text)
+    if ($Token) { $Text = $Text.Replace($Token, '***') }
+    return $Text
+}
+
 function Stop-Here {
     param([string] $Message, [int] $Code = 0)
+    $Message = Hide-Secrets $Message
     Write-Host $Message
+    $level = if ($Code -eq 0) { 'INFO' } else { 'ERROR' }
+    Write-Log $level $Message
+    if ($ResultFile) {
+        try { Set-Content -LiteralPath $ResultFile -Value $Message -Encoding Default } catch { }
+    }
     # Hold the window only when somebody can read it: the installer runs this in its own console.
     if ([Environment]::UserInteractive -and -not $Unattended) { Read-Host 'Press Enter to close' | Out-Null }
     exit $Code
@@ -140,6 +175,12 @@ if ($PrintConfig) {
     exit 0
 }
 
+# An error nothing else caught ends the run with what it was, in the log and for the installer, instead of a
+# hidden console closing with no word.
+trap {
+    Stop-Here "Stopped by an error: $($_.Exception.Message)" 1
+}
+
 $Claude = Find-Claude
 
 if (-not $Claude) {
@@ -166,7 +207,12 @@ function Invoke-Claude {
     # 'Stop', and removing a server that is not there writes to stderr.
     $previous = $ErrorActionPreference
     $ErrorActionPreference = 'Continue'
-    try { & $Claude @Arguments *> $null } catch { return $false } finally { $ErrorActionPreference = $previous }
+    # Kept, not discarded, so a refusal can say what Claude Code said.
+    $script:ClaudeSaid = ''
+    # Each line as plain text: Windows PowerShell wraps a native command's stderr in an error record.
+    try { $script:ClaudeSaid = ((& $Claude @Arguments 2>&1 | ForEach-Object { "$_" }) -join ' ').Trim() }
+    catch { $script:ClaudeSaid = $_.Exception.Message; return $false }
+    finally { $ErrorActionPreference = $previous }
     return ($LASTEXITCODE -eq 0)
 }
 
@@ -176,8 +222,13 @@ function Add-Server {
     Invoke-Claude -Arguments @('mcp', 'remove', $Name, '--scope', 'user') | Out-Null
     if (Invoke-Claude -Arguments $AddArguments -Shown $Shown) {
         Write-Host "Registered '$Name' with Claude Code."
+        $what = if ($Shown) { $Shown } else { $AddArguments }
+        Write-Log 'INFO' ("Registered '$Name': claude " + (Hide-Secrets ($what -join ' ')))
     } else {
-        Stop-Here "Could not register '$Name'. Run 'claude mcp add --help' to see what Claude Code expects." 1
+        $said = $script:ClaudeSaid
+        if ($said.Length -gt 600) { $said = '...' + $said.Substring($said.Length - 600) }
+        if (-not $said) { $said = '(it printed nothing)' }
+        Stop-Here "Could not register '$Name'. Claude Code said: $said" 1
     }
 }
 
