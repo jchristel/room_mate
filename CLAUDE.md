@@ -582,7 +582,7 @@ target model's frame, mm. The Tasks button's sheet handler reads it (`room_m/rls
 - **Transfer is by the walls, and the wall is chosen by DIRECTION** (`elevation_facing::wall_of`, 2026-11-07): the wall the view looks at most
   squarely, in front of its line and across its width, the overlap breaking a tie between parallel walls. The depth never decides it: a far clip
   dragged to about the wall stopped 28.5 mm short on House A's WC 00.03 and the footprint rule (`faces`, still what `/elevations` lists) found
-  no wall. Template and target are read at the COARSE outline, the wall each elevation is of is mapped by the cyclic shift that fits the shapes (`best_shift`, no reflection), and then the marker
+  no wall. Template and target are read at the COARSE outline, the wall each elevation is of is mapped by the cyclic shift that fits the shapes (`rls_turn::wall_pairing`: no reflection, a tie of shape to the smaller turn), and then the marker
   keeps its fraction along the wall and its distance from it, each view's line ends and direction keep their offsets from the
   marker in the frame of the wall that view faces, and the **depth keeps its length** (a view shows a stretch of wall, not a
   share of the room). `depth_to_wall_mm` is how far the faced wall is, for a person who wants "to the room boundary".
@@ -757,7 +757,7 @@ the Tasks button's sheet handler places tags** from the server's tag plan (`rls.
   cannot be read, and the plug-in applies it as it always did.
 - **A room tag is written against the room's BOUNDARY, not its middle** (`service::room_tag_place`, `Boundary`). A bound rule uses
   the wall recipe against the COARSE outline of the room the sheet was made for (`record.room`): the nearest edge, the fraction
-  along it, paper mm into the room, carried to another room by `best_shift` and refusing a different coarse edge count as the
+  along it, paper mm into the room, carried to another room by `wall_pairing` (the elevations' and the plan turn's pairing) and refusing a different coarse edge count as the
   elevations do. A generic rule uses the smallest rectangle round the room (four sides in a fixed order, long axis towards +x),
   which works for any shape. The server turns the recipe into a place in THIS room when the task is made (`rls.room_tag.head`, model
   frame, mm) and the sheet handler uses it; a rule learned while its room was not on the server has no boundary and keeps the
