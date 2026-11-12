@@ -6,8 +6,9 @@
 //! at 45 is decided by rounding: measured in Revit on a room at 45, the angle rule turned it -45 and a
 //! longest-wall rule +45, a quarter turn apart, one putting its long side up the sheet and the other across it.
 //! The template sheet already says which: its plan shows its room a certain way round. So each template wall is
-//! paired with the target's by the cyclic shift that fits the shapes (`blueprint_resolve::best_shift`, the
-//! pairing the elevations are placed by, so the plan and the elevations agree on which wall is which), and the
+//! paired with the target's by the cyclic shift that fits the shapes ([`wall_pairing`], over
+//! `blueprint_resolve::shift_costs`, the pairing the elevations and a bound room tag are placed by too, so the plan,
+//! the elevations and the tag agree on which wall is which), and the
 //! turn is the length-weighted mean of the pairs' differences in direction, over the whole circle. An L built the
 //! other way round gets a half turn, so its notch is where the template's is on the sheet.
 //!
