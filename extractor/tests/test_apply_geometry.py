@@ -72,6 +72,26 @@ class RoomTags(unittest.TestCase):
         self.assertAlmostEqual(p["head"][1], 2500.0)
         self.assertAlmostEqual(p["rotation"], 0.0)
 
+    def test_in_a_turned_plan_the_offset_turns_with_the_view(self):
+        p = g.tag_placement(g.room_like(1000.0, 2000.0, 90.0), room_rule(head=(20.0, 10.0)), 50)
+        self.assertAlmostEqual(p["head"][0], 1000.0 - 500.0)
+        self.assertAlmostEqual(p["head"][1], 2000.0 + 1000.0)
+
+
+class Turns(unittest.TestCase):
+    def test_a_direction_turns_about_the_vertical_and_keeps_its_z(self):
+        v = g.turn_xy([1.0, 0.0, -1.0], 30.0)
+        self.assertAlmostEqual(v[0], math.cos(math.radians(30.0)))
+        self.assertAlmostEqual(v[1], 0.5)
+        self.assertEqual(v[2], -1.0)
+        self.assertEqual([1.0, 2.0, 3.0], g.turn_xy([1.0, 2.0, 3.0], 0.0))
+
+    def test_a_turned_box_reaches_past_its_unturned_corners(self):
+        lo, hi = g.turned_extent([0.0, 0.0], [4.0, 2.0], 90.0)
+        for got, want in zip(lo + hi, [1.0, -1.0, 3.0, 3.0]):
+            self.assertAlmostEqual(want, got)
+        self.assertEqual(([0.0, 0.0], [4.0, 2.0]), g.turned_extent([0.0, 0.0], [4.0, 2.0], 0.0))
+
 
 class Viewports(unittest.TestCase):
     def test_centre_is_converted_from_mm(self):

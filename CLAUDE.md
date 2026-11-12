@@ -699,7 +699,11 @@ checked before anything is made, then one transaction group per task (`duHast...
   a plan IGNORES a turned `CropBox.Transform`; the element that draws the crop is the view's id + 2, carries the view's name and has **no category**
   (so every `OST_Viewers` lookup finds nothing), and rotating it about the crop's centre turns the view (duHast `views_crop.rotate_view_crop`); a 3D
   section box keeps a turned Transform. Rooms at 30 and -45 degrees came out square on the sheet. **The template's own plan is taken to be unturned**
-  (duHast exports no crop transform). **The plug-in does not read `turn` yet.**
+  (duHast exports no crop transform). **The plug-in** (`rls_task._plan_crop` reads `turn_deg`): `rls_write._turn_plan` crops round the
+  centre as before and then turns the view (a failure is a note, the crop stays right but unturned); each 3D view gets the turned direction
+  and up (`apply_geometry.turn_xy`, in the planner) and `rotation` for its section box, and its wall search covers the turned box
+  (`turned_extent`); a room tag placed by the plan-axes fallback offset turns that offset with the view. A task with no turn passes
+  duHast nothing new. **The turn has not been run in Revit from a task**, only the duHast functions.
 - **Each new elevation can get a 2D grid along its bottom** (`elevation_grid`, "Place 2D grid" in the window's Elevation group: a line based detail family, `FamilyPlacementType.CurveBasedDetail`, listed as "Family : Type" by `rls_settings.line_detail_family_names`). It runs from the crop's bottom left corner to its bottom right, so it is as long as the elevation is wide (`rls_write._bottom_edge`), and is placed by duHast's `place_a_line_based_detail_family_instance_in_view`. **It is the sheet's LAST step**, after every tag, and **never stops the sheet**: the whole step and each elevation are their own try, and a failure, a family the model lacks or a duHast too old to have the function is a note (`rls_write._elevation_grids`). A family the model lacks is also a planner warning (`NO_ELEVATION_GRID`) and a settings warning. Not set: no grid. **Run in Revit** (2026-11-08).
 - **An elevation is cropped to the template view's height** (`height_mm`, from the view's crop box, measured up from where the new crop's bottom already is), so a tall neighbouring room does not make it tall; a new 3D view has Crop View on.
 - **What Revit does with an elevation marker, measured (2026-11-01, all of it matters to `rls_write` and duHast).** The marker has NO point (`Location` is the

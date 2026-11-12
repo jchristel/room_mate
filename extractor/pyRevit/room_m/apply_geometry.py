@@ -108,10 +108,40 @@ def room_rules(rules, viewport_type):
     ]
 
 
-def room_like(x_mm, y_mm):
+def room_like(x_mm, y_mm, turn_deg=0.0):
     """A room as `tag_placement` wants an element: a point, and no orientation of its own, so its
-    tag's offset is in the plan's own axes (+x, then +y), as the server learned it."""
-    return {"x_mm": x_mm, "y_mm": y_mm, "facing_x": 1.0, "facing_y": 0.0}
+    tag's offset is in the plan's own axes (+x, then +y), as the server learned it. In a plan turned by
+    `turn_deg` (the task's `plan_crop.turn`) those axes are the view's right and up, so the offset turns
+    with the view and the tag sits where it would on an unturned sheet."""
+    a = math.radians(turn_deg or 0.0)
+    return {"x_mm": x_mm, "y_mm": y_mm, "facing_x": math.cos(a), "facing_y": math.sin(a)}
+
+
+def turn_xy(vector, turn_deg):
+    """`vector` (`[x, y, z]`) turned counter-clockwise by `turn_deg` about the vertical: a template 3D view's
+    direction carried into a plan turned by that much (`service::rls_three_d` turns its eye the same way)."""
+    if not turn_deg:
+        return list(vector)
+    a = math.radians(turn_deg)
+    c, s = math.cos(a), math.sin(a)
+    return [vector[0] * c - vector[1] * s, vector[0] * s + vector[1] * c, vector[2]]
+
+
+def turned_extent(lo, hi, turn_deg):
+    """The axis-aligned `(lo, hi)` (`[x, y]` each) round the box `lo`..`hi` turned by `turn_deg` about its centre:
+    what a collector must search to find everything inside a turned section box, whose `lo` and `hi` are its
+    corners BEFORE the turn."""
+    if not turn_deg:
+        return list(lo), list(hi)
+    cx, cy = (lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0
+    a = math.radians(turn_deg)
+    c, s = math.cos(a), math.sin(a)
+    xs, ys = [], []
+    for x, y in ((lo[0], lo[1]), (hi[0], lo[1]), (hi[0], hi[1]), (lo[0], hi[1])):
+        dx, dy = x - cx, y - cy
+        xs.append(cx + dx * c - dy * s)
+        ys.append(cy + dx * s + dy * c)
+    return [min(xs), min(ys)], [max(xs), max(ys)]
 
 
 def sheet_size_of(sheet):

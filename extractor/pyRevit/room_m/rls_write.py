@@ -312,10 +312,35 @@ class RlsWriter(object):
             return set_view_crop_around_point_without_transaction_wrapper(view, centre, _ft(size[0]), _ft(size[1]))
 
         self._step("RoomMate: crop {}".format(plan["plan_name"]), crop)
+        if placed and placed.get("turn_deg"):
+            self._turn_plan(view, centre, placed["turn_deg"], plan["plan_name"], notes)
         self._annotation_crop(view, vp, plan["plan_name"])
         self._title_on_sheet(view, plan.get("plan_title"), plan["plan_name"], notes)
         self._viewport(sheet, view, vp, notes, "plan", "plan")
         return view
+
+    def _turn_plan(self, view, centre, turn_deg, name, notes):
+        """Turn the plan by `turn_deg` about the crop's centre, so a room at an angle to its template sits on the sheet
+        the way the template's does (`rls.plan_crop.turn`, chosen by the server from the walls). The crop is already
+        the right size round `centre`, and a turn about its own centre keeps that. A plan ignores a turned
+        `CropBox.Transform`, so duHast turns the element that draws the crop (`views_crop.rotate_view_crop`, measured in
+        Revit 2026). **A failure is a note, never an abort**: the view keeps its crop in the right place, unturned."""
+        try:
+            from duHast.Revit.Views.views_crop import rotate_view_crop_without_transaction_wrapper
+        except ImportError:
+            notes.append("{}: not turned {:.1f} degrees to the room: the duHast loaded cannot turn a plan view "
+                         "(it is older than the one this needs)".format(name, turn_deg))
+            return
+        try:
+            self._regenerate()
+            self._step(
+                "RoomMate: turn {} {:.2f} deg".format(name, turn_deg),
+                lambda: rotate_view_crop_without_transaction_wrapper(self.doc, view, centre, math.radians(turn_deg)),
+            )
+            notes.append(info("{}: turned {:.1f} degrees to the room".format(name, turn_deg)))
+        except Exception as e:
+            task_log.exception("turning {}".format(name))
+            notes.append("{}: not turned {:.1f} degrees to the room ({})".format(name, turn_deg, e))
 
     def _title_on_sheet(self, view, title, name, notes):
         """Write `title` to the view's Title on Sheet (`BuiltInParameter.VIEW_DESCRIPTION`, which the Revit API
@@ -536,21 +561,31 @@ class RlsWriter(object):
         low = XYZ(box.Min.X - margin, box.Min.Y - margin, min(box.Min.Z, self._level_z) - margin)
         high = XYZ(box.Max.X + margin, box.Max.Y + margin, box.Max.Z + margin)
         footprint = plan.get("plan_crop")
+        turn = 0.0
         if footprint:
             low = XYZ(_ft(footprint["min"][0]), _ft(footprint["min"][1]), low.Z)
             high = XYZ(_ft(footprint["max"][0]), _ft(footprint["max"][1]), high.Z)
+            # a turned plan: min and max are the corners before the turn, and the section box is turned about its
+            # centre by the same angle (the directions were turned by the planner, `rls_task.build`)
+            turn = footprint.get("turn_deg") or 0.0
         for v in plan["three_ds"]:
             # the template's section box height, above THIS room's level, where the template carried one
             heights = section_box.above_floor_ft(v["viewport"], geo.mm_to_ft)
             if heights is not None:
                 low = XYZ(low.X, low.Y, self._level_z + heights[0])
                 high = XYZ(high.X, high.Y, self._level_z + heights[1])
-            view = self._step(
-                "RoomMate: {}".format(v["name"]),
-                lambda v=v: create_view_3d_around_box_without_transaction_wrapper(
-                    self.doc, view_type, v["name"], v["forward"], v["up"], low, high, phase),
-            ).result[0]
-            self._hide_walls_in_the_way(view, room, low, high, v, notes)
+            if turn:
+                # only a turned box passes `rotation`, so an unturned task still runs on a duHast without it
+                make = lambda v=v, lo=low, hi=high: create_view_3d_around_box_without_transaction_wrapper(
+                    self.doc, view_type, v["name"], v["forward"], v["up"], lo, hi, phase, rotation=math.radians(turn))
+            else:
+                make = lambda v=v, lo=low, hi=high: create_view_3d_around_box_without_transaction_wrapper(
+                    self.doc, view_type, v["name"], v["forward"], v["up"], lo, hi, phase)
+            view = self._step("RoomMate: {}".format(v["name"]), make).result[0]
+            # what the turned box can reach, as an axis-aligned box for the wall search
+            reach_lo, reach_hi = geo.turned_extent([low.X, low.Y], [high.X, high.Y], turn)
+            self._hide_walls_in_the_way(
+                view, room, XYZ(reach_lo[0], reach_lo[1], low.Z), XYZ(reach_hi[0], reach_hi[1], high.Z), v, notes)
             self._title_on_sheet(view, v.get("title"), v["name"], notes)
             self._viewport(sheet, view, v["viewport"], notes, v["name"], "three_d")
 
@@ -759,11 +794,13 @@ class RlsWriter(object):
                 # The server worked the place out against this room's boundary (plan decision 27).
                 head = XYZ(_ft(plan["room_tag_head"][0]), _ft(plan["room_tag_head"][1]), z)
             else:
-                # A rule learned before its room was on the server: the offset in the plan's axes.
+                # A rule learned before its room was on the server: the offset in the plan's axes, which in a
+                # turned plan are the view's right and up.
+                turn = (plan.get("plan_crop") or {}).get("turn_deg") or 0.0
                 for rule in geo.room_rules(task.get("tag_rules") or [], geo.PLAN):
                     point = room.Location.Point
                     placement = geo.tag_placement(
-                        geo.room_like(point.X * geo.MM_PER_FT, point.Y * geo.MM_PER_FT), rule, plan["plan_scale"])
+                        geo.room_like(point.X * geo.MM_PER_FT, point.Y * geo.MM_PER_FT, turn), rule, plan["plan_scale"])
                     if placement:
                         head = XYZ(_ft(placement["head"][0]), _ft(placement["head"][1]), z)
                     break

@@ -290,9 +290,13 @@ def _title_renderer(settings, values, aborts):
 
 def _plan_crop(task):
     """The plan view's crop the server worked out for this room (the template crop's offset from its room's box,
-    side by side): `{"centre": [x, y], "size": [w, h], "min": [x, y], "max": [x, y]}` in the model's frame, mm; None
-    when the task carries none and the writer is to crop round the room as before. The 3D views take the same
-    footprint (min and max) for their section box."""
+    side by side): `{"centre": [x, y], "size": [w, h], "min": [x, y], "max": [x, y], "turn_deg": a}` in the model's
+    frame, mm; None when the task carries none and the writer is to crop round the room as before. The 3D views take
+    the same footprint (min and max) for their section box.
+
+    `turn_deg` is how far the view is turned, counter-clockwise, about the centre (`rls.plan_crop.turn.angle_deg`,
+    `service::rls_turn`), 0.0 when the task says none: a room at an angle to its template. `min` and `max` are then
+    the crop's corners BEFORE the turn, so cropping round the centre at that size and turning it after is right."""
     crop = (task.get("rls") or {}).get("plan_crop") or {}
     lo, hi = crop.get("min"), crop.get("max")
     try:
@@ -301,8 +305,14 @@ def _plan_crop(task):
         return None
     if len(lo) != 2 or len(hi) != 2 or hi[0] <= lo[0] or hi[1] <= lo[1]:
         return None
+    try:
+        turn = float((crop.get("turn") or {}).get("angle_deg") or 0.0)
+    except (AttributeError, TypeError, ValueError):
+        turn = 0.0
+    if turn != turn or abs(turn) > 360.0:  # NaN or nonsense: no turn
+        turn = 0.0
     return {"centre": [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0], "size": [hi[0] - lo[0], hi[1] - lo[1]],
-            "min": lo, "max": hi}
+            "min": lo, "max": hi, "turn_deg": turn}
 
 
 def build(task, settings, values):
@@ -342,9 +352,14 @@ def build(task, settings, values):
         e["title"] = titles("elevation", n)
     # what the server says each 3D view hides and sees through, by its place among the template's 3D viewports
     server_three_ds = dict((t.get("index"), t) for t in (task.get("rls") or {}).get("three_ds") or [])
+    plan_crop = _plan_crop(task)
+    turn = plan_crop["turn_deg"] if plan_crop else 0.0
     for n, v in enumerate(three_ds, 1):
         v["title"] = titles("three_d", n)
         v["server"] = server_three_ds.get(v["index"])
+        # a turned plan turns its 3D views with it, so the camera faces the walls the template's faced
+        v["forward"] = geo.turn_xy(v["forward"], turn)
+        v["up"] = geo.turn_xy(v["up"], turn)
     plan = {
         "number": number,
         "name": rendered["sheet_name"],
@@ -373,7 +388,7 @@ def build(task, settings, values):
         "untagged_items": len(((task.get("rls") or {}).get("tags") or {}).get("items_without_tags") or []),
         "elevation_tags": _elevation_tags(task),
         "room_tag_head": _room_tag_head(task),
-        "plan_crop": _plan_crop(task),
+        "plan_crop": plan_crop,
     }
     # the detail number each viewport gets, in the order the writer makes them (`detail_numbers`)
     plan["detail_numbers"] = detail_numbers.assign(
