@@ -9,7 +9,8 @@
 //! **Transfer is by the walls, never by coordinates.** Both rooms are read at the coarse outline
 //! (the jogs under 350 mm taken out, as blueprints are), the template's wall that an elevation
 //! faces (`elevation_facing`) is mapped to the target's by the cyclic shift that fits the shapes
-//! (`blueprint_resolve::best_shift`, no reflection), and then:
+//! (`rls_turn::wall_pairing`: no reflection, and of the shifts shape cannot tell apart, the one the plan is turned
+//! by, so the plan and the elevations agree on which wall is which), and then:
 //! - the marker keeps its **fraction along** the wall and its **distance from** the wall,
 //! - each view's line ends and direction keep their offsets from the marker, measured in the
 //!   frame of the wall that view faces (so a view looking at another wall turns with that wall),
@@ -29,11 +30,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::blueprint_geometry::{coarse_outline, dot, edges, sub, Edge, Pt};
-use super::blueprint_resolve::best_shift;
+use super::blueprint_geometry::{coarse_outline, dot, edges, rotate, sub, Edge, Pt};
 use super::elevation_facing::{read_sheet, Elevation};
 use super::rls_tags::{TagPlan, TagRequest};
 use super::rls_three_d::ThreeDPlan;
+use super::rls_turn::{view_turn, wall_pairing, ViewTurn};
 
 /// The sizes a sheet can be asked for; the plug-in maps each to a title block family.
 pub const SIZES: [&str; 4] = ["a0", "a1", "a2", "a3"];
@@ -126,11 +127,19 @@ pub struct RlsPlan {
 
 /// A plan view's crop in this room: a rectangle in the target model's frame, mm, and the offsets of each side from
 /// the room's bounding box that it was made from (positive = outside the room).
+///
+/// With a `turn`, the rectangle is turned by it about its own centre, and `min` and `max` are that centre less and
+/// plus half its size: the corners of the crop BEFORE the turn. That is what the plug-in does (crop round the
+/// centre, then rotate the crop element about it), and a plug-in that does not know `turn` still crops the right
+/// size at the right place, only square to the model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PlanCrop {
     pub min: [f64; 2],
     pub max: [f64; 2],
     pub offsets_mm: CropOffsets,
+    /// How far the new plan view is turned (`rls_turn`); absent when it is not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub turn: Option<ViewTurn>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -181,19 +190,36 @@ fn template_crop(sheet: &Value) -> Option<([f64; 2], [f64; 2])> {
 /// axis-aligned in their own model's frame, which is the crop box's frame for a plan whose crop is not rotated
 /// (duHast exports the crop's Min and Max, not its transform). The fixed-mm offsets are paper-independent, so the
 /// view keeps the template's scale and a larger room gets a larger crop by exactly its own growth.
+///
+/// **A room at an angle to its template is measured in the turned view's own axes** (`rls_turn::view_turn`): its
+/// box is taken with the room turned back by the view's turn, so the offsets land on the same sides of the room as
+/// on the template, and the crop is that rectangle turned about its centre (see [`PlanCrop`]).
 pub fn plan_crop(sheet: &Value, template: &[Pt], target: &[Pt]) -> Option<PlanCrop> {
     let (clo, chi) = template_crop(sheet)?;
     let (tlo, thi) = bounds(template)?;
-    let (glo, ghi) = bounds(target)?;
+    let turn = view_turn(template, target);
+    let deg = turn.map_or(0.0, |t| t.angle_deg);
+    let seen: Vec<Pt> = target.iter().map(|&p| rotate(p, -deg)).collect();
+    let (glo, ghi) = bounds(&seen)?;
     let offsets = CropOffsets {
         left: tlo[0] - clo[0],
         right: chi[0] - thi[0],
         bottom: tlo[1] - clo[1],
         top: chi[1] - thi[1],
     };
-    let min = [glo[0] - offsets.left, glo[1] - offsets.bottom];
-    let max = [ghi[0] + offsets.right, ghi[1] + offsets.top];
-    (max[0] > min[0] && max[1] > min[1]).then_some(PlanCrop { min, max, offsets_mm: offsets })
+    let mut min = [glo[0] - offsets.left, glo[1] - offsets.bottom];
+    let mut max = [ghi[0] + offsets.right, ghi[1] + offsets.top];
+    if !(max[0] > min[0] && max[1] > min[1]) {
+        return None;
+    }
+    if turn.is_some() {
+        // the turned rectangle's centre back in the model, with the corners it has before the turn
+        let half = ((max[0] - min[0]) / 2.0, (max[1] - min[1]) / 2.0);
+        let centre = rotate(((min[0] + max[0]) / 2.0, (min[1] + max[1]) / 2.0), deg);
+        min = [centre.0 - half.0, centre.1 - half.1];
+        max = [centre.0 + half.0, centre.1 + half.1];
+    }
+    Some(PlanCrop { min, max, offsets_mm: offsets, turn })
 }
 
 /// `a1` for ` A1 `, or why it is not a size.
@@ -268,7 +294,7 @@ pub fn transfer(sheet: &Value, template: &[Pt], target: &[Pt], request: &RlsRequ
         ));
         return (Vec::new(), notes);
     }
-    let (shift, _) = best_shift(&tc, &gc);
+    let shift = wall_pairing(&tc, &gc).map_or(0, |p| p.0);
     let (te, ge) = (edges(&tc), edges(&gc));
 
     // The views that can be placed, with the wall each faces.
@@ -453,6 +479,33 @@ mod tests {
         let c = plan_crop(&sheet, &rect(4000.0, 3000.0), &target).unwrap();
         assert_eq!(c.min, [9_900.0, 300.0]);
         assert_eq!(c.max, [16_300.0, 2_900.0]);
+    }
+
+    /// The template room drawn again at 30 degrees elsewhere: its crop is the template's crop exactly, turned 30
+    /// degrees about the turned room's matching point, and says so.
+    #[test]
+    fn a_room_at_an_angle_gets_the_template_crop_turned_with_it() {
+        let sheet = plan_sheet([-100.0, -200.0], [4300.0, 3400.0]); // left 100, bottom 200, right 300, top 400
+        let template = rect(4000.0, 3000.0);
+        let place = |p: Pt| {
+            let q = rotate(p, 30.0);
+            (q.0 + 20_000.0, q.1 - 7_000.0)
+        };
+        let target: Vec<Pt> = template.iter().map(|&p| place(p)).collect();
+        let c = plan_crop(&sheet, &template, &target).unwrap();
+        let turn = c.turn.unwrap();
+        assert!((turn.angle_deg - 30.0).abs() < 1e-9, "{turn:?}");
+        assert!(
+            (c.max[0] - c.min[0] - 4400.0).abs() < 1e-6 && (c.max[1] - c.min[1] - 3600.0).abs() < 1e-6,
+            "{c:?}"
+        );
+        let want = place((2100.0, 1600.0)); // the template crop's centre, carried with the room
+        let centre = ((c.min[0] + c.max[0]) / 2.0, (c.min[1] + c.max[1]) / 2.0);
+        assert!(
+            (centre.0 - want.0).abs() < 1e-6 && (centre.1 - want.1).abs() < 1e-6,
+            "{centre:?} {want:?}"
+        );
+        assert_eq!(c.offsets_mm, CropOffsets { left: 100.0, right: 300.0, bottom: 200.0, top: 400.0 });
     }
 
     #[test]

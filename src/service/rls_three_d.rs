@@ -19,11 +19,15 @@
 //!
 //! Only the outer loop is judged (`model_room_ring` reads no holes), so a column's walls are never hidden from
 //! here. Positions are in the TARGET model's own frame, mm.
+//!
+//! **A turned plan turns the 3D views with it** (`rls_plan::PlanCrop::turn`): the plug-in turns the section box by
+//! the plan's turn about its centre and the template's direction by the same angle, so the camera looks at the
+//! same walls of this room as the template's looked at of its room. The eye here is turned the same way.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::blueprint_geometry::{dot, sub, Pt};
+use super::blueprint_geometry::{dot, rotate, sub, Pt};
 use super::rls_plan::PlanCrop;
 use super::rls_tags::RoomItem;
 
@@ -155,6 +159,7 @@ pub fn three_ds(sheet: &Value, ring: &[Pt], crop: Option<&PlanCrop>, items: &[Ro
         ),
     };
     let centre = ((box_lo.0 + box_hi.0) / 2.0, (box_lo.1 + box_hi.1) / 2.0);
+    let turn = crop.and_then(|c| c.turn).map_or(0.0, |t| t.angle_deg);
     let ports = sheet.get("view_ports").and_then(Value::as_array).cloned().unwrap_or_default();
     ports
         .iter()
@@ -162,7 +167,10 @@ pub fn three_ds(sheet: &Value, ring: &[Pt], crop: Option<&PlanCrop>, items: &[Ro
         .enumerate()
         .map(|(n, port)| {
             let view = port.get("view");
-            let forward = xyz(view.and_then(|v| v.get("forward_direction")));
+            let forward = xyz(view.and_then(|v| v.get("forward_direction"))).map(|f| {
+                let (x, y) = rotate((f[0], f[1]), turn);
+                [x, y, f[2]]
+            });
             // the plug-in stands the camera back twice the box's diagonal; its height is the template's
             let heights = view.and_then(|v| v.get("section_z_above_floor_mm"));
             let dz = heights
@@ -281,8 +289,24 @@ mod tests {
             min: [-1000.0, -1000.0],
             max: [3000.0, 3000.0],
             offsets_mm: super::super::rls_plan::CropOffsets { left: 0.0, right: 0.0, bottom: 0.0, top: 0.0 },
+            turn: None,
         };
         let p = &three_ds(&sheet([0.0, 1.0, -1.0]), &room(), Some(&crop), &[])[0];
         assert!((p.eye[0] - 1000.0).abs() < 1e-6, "{:?}", p.eye);
+    }
+
+    /// A plan turned a quarter turns the camera with it: a template looking north at its room looks west at this
+    /// one, so the east wall is the near one.
+    #[test]
+    fn a_turned_plan_turns_the_camera_by_the_same_angle() {
+        let crop = PlanCrop {
+            min: [0.0, 0.0],
+            max: [4000.0, 3000.0],
+            offsets_mm: super::super::rls_plan::CropOffsets { left: 0.0, right: 0.0, bottom: 0.0, top: 0.0 },
+            turn: Some(super::super::rls_turn::ViewTurn { angle_deg: 90.0, by: super::super::rls_turn::TurnBy::Walls }),
+        };
+        let p = &three_ds(&sheet([0.0, 1.0, -1.0]), &room(), Some(&crop), &[])[0];
+        assert!(p.eye[0] > 4000.0 && (p.eye[1] - 1500.0).abs() < 1e-6, "{:?}", p.eye);
+        assert_eq!(vec![[[4000.0, 0.0], [4000.0, 3000.0]]], p.hide);
     }
 }

@@ -33,6 +33,7 @@ pub mod rls_plan;
 pub mod rls_tag_place;
 pub mod rls_tags;
 pub mod rls_three_d;
+pub mod rls_turn;
 pub mod room_locator;
 pub mod room_tag_place;
 pub mod rooms;

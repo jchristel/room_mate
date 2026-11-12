@@ -686,6 +686,20 @@ checked before anything is made, then one transaction group per task (`duHast...
   exactly (centring a crop of the template's size, never smaller than the room plus 600 mm, made it larger than the original). The first floor plan
   viewport is read, the one `rls_task` makes the plan from. Both boxes are axis-aligned in their model's frame, which is the crop's own frame only
   while the crop is not rotated (duHast exports its Min and Max, not its transform). A task without it crops round the room as before. **A new 3D view's section box takes the same footprint** in plan (its heights still follow the template's, below), so the plan and the 3D frame the same piece of the model. **Run in Revit** (2026-11-08).
+- **A room at an angle to its template gets a TURNED plan** (`rls_turn`, `rls.plan_crop.turn`, 2026-11-12): `angle_deg` (counter-clockwise, the view's
+  right direction from the model's x axis) and `by`. **The template's walls choose the turn, not the room's angle**: each wall is paired with this
+  room's (`wall_pairing`) and the turn is the pairs' mean difference in direction over the whole circle, because the room's angle names only the turn
+  within 45 degrees and at 45 rounding picked it (measured: -45 by the angle rule, +45 by the longest wall, a quarter turn apart). **A tie of shape goes
+  to the smaller turn** (a rectangle fits two ways a half turn apart; `best_shift` alone turned one at 30 degrees by -150, upside down), and the
+  elevations and a bound room tag are paired by the SAME `wall_pairing`, so plan, elevations and tag agree on which wall is which. A different coarse
+  edge count is squared up by the smallest turn (`by: room_angle`). Under `MIN_TURN_DEG` there is no turn, so square rooms are unchanged. The crop is
+  measured in the turned view's axes, and with a turn `min`/`max` are its corners BEFORE the turn (centre and size), so a plug-in that ignores `turn`
+  still crops the right size in the right place. The 3D views turn with it: the section box by the angle about its centre and the template's direction
+  by the same angle, and `rls_three_d` stands the eye where that camera is. **How Revit turns a plan, measured** (the rotated room probe, Revit 2026):
+  a plan IGNORES a turned `CropBox.Transform`; the element that draws the crop is the view's id + 2, carries the view's name and has **no category**
+  (so every `OST_Viewers` lookup finds nothing), and rotating it about the crop's centre turns the view (duHast `views_crop.rotate_view_crop`); a 3D
+  section box keeps a turned Transform. Rooms at 30 and -45 degrees came out square on the sheet. **The template's own plan is taken to be unturned**
+  (duHast exports no crop transform). **The plug-in does not read `turn` yet.**
 - **Each new elevation can get a 2D grid along its bottom** (`elevation_grid`, "Place 2D grid" in the window's Elevation group: a line based detail family, `FamilyPlacementType.CurveBasedDetail`, listed as "Family : Type" by `rls_settings.line_detail_family_names`). It runs from the crop's bottom left corner to its bottom right, so it is as long as the elevation is wide (`rls_write._bottom_edge`), and is placed by duHast's `place_a_line_based_detail_family_instance_in_view`. **It is the sheet's LAST step**, after every tag, and **never stops the sheet**: the whole step and each elevation are their own try, and a failure, a family the model lacks or a duHast too old to have the function is a note (`rls_write._elevation_grids`). A family the model lacks is also a planner warning (`NO_ELEVATION_GRID`) and a settings warning. Not set: no grid. **Run in Revit** (2026-11-08).
 - **An elevation is cropped to the template view's height** (`height_mm`, from the view's crop box, measured up from where the new crop's bottom already is), so a tall neighbouring room does not make it tall; a new 3D view has Crop View on.
 - **What Revit does with an elevation marker, measured (2026-11-01, all of it matters to `rls_write` and duHast).** The marker has NO point (`Location` is the
@@ -702,7 +716,7 @@ checked before anything is made, then one transaction group per task (`duHast...
 - **The Revit calls live in duHast** (PR in the duHast repo): `Family/family_symbol_lookup`, `Views/views_names`, `viewports_create`,
   `schedules_create`, `elevation_marker`, `Annotation/independent_tags_create`, `Rooms/room_tags_create` and `Common/transaction.in_transaction_group`,
   plus fixes to `sheets_create` (unicode text, activate the title block), `plan_view_create` and `elevation_view_create` (optional phase, the crop went to
-  the plan view). **`extractor/duhast.lock` is at `b5767658`**, duHast release `v1.0.5+net8` (2026-11-08), which has all of these and `Family/family_instance_create.place_a_line_based_detail_family_instance_in_view` for the 2D grid; `-DuHastPath` is for a duHast newer still.
+  the plan view). **`extractor/duhast.lock` is at `abbbebef`** (2026-11-12: duHast release `v1.0.5+net8` plus PR #116, `views_crop.rotate_view_crop` and a turned 3D section box), which has all of these and `Family/family_instance_create.place_a_line_based_detail_family_instance_in_view` for the 2D grid; `-DuHastPath` is for a duHast newer still.
 
 ## Tag rules: where a tag goes, learned from tags in Revit views
 

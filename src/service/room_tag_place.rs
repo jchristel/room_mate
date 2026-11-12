@@ -7,8 +7,9 @@
 //! - **A tag that belongs to a room blueprint is written against that room's COARSE outline**
 //!   (`Boundary::Wall`): the edge nearest the tag head, how far along it as a fraction of its
 //!   length, and how far into the room as paper millimetres. It is applied to another room by
-//!   the cyclic shift that fits the shapes (`best_shift`), and a room with another number of
-//!   coarse edges places nothing and says so, exactly as the elevations do.
+//!   the cyclic shift that fits the shapes (`rls_turn::wall_pairing`, the elevations' and the turned plan's
+//!   pairing), and a room with another number of coarse edges places nothing and says so, exactly as the
+//!   elevations do.
 //! - **A generic tag has no outline of its own to attach to**, so it is written against the
 //!   smallest rectangle round the room (`Boundary::Rectangle`): its four sides in a fixed order
 //!   (below, right, above, left of the rectangle's long axis, which points towards +x) work for a
@@ -19,7 +20,7 @@
 //! fraction along is unitless, so it holds for a room of any size. Pure: no state, no Revit.
 
 use super::blueprint_geometry::{coarse_outline, dist, dot, edges, oriented_rectangle, sub, Edge, Pt};
-use super::blueprint_resolve::best_shift;
+use super::rls_turn::wall_pairing;
 use crate::tag_rules::{Boundary, BoundaryOf};
 
 /// The nearest edge of `edges` to `p`, by the distance to the segment.
@@ -78,7 +79,7 @@ pub fn head_in(b: &Boundary, template: Option<&[Pt]>, target: &[Pt], scale: f64)
             if b.edge >= tc.len() {
                 return Err("the room tag's edge is not one of the template room's".to_string());
             }
-            let (shift, _) = best_shift(&tc, &gc);
+            let shift = wall_pairing(&tc, &gc).map_or(0, |p| p.0);
             (edges(&gc), (b.edge + shift) % gc.len())
         }
         BoundaryOf::Rectangle => (edges(&oriented_rectangle(target).ok_or("this room has no area")?), b.edge),
