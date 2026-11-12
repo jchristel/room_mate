@@ -1,6 +1,7 @@
 # RoomMate
 
 [![Latest release](https://img.shields.io/github/v/release/jchristel/room_mate)](https://github.com/jchristel/room_mate/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/jchristel/room_mate/total)](https://github.com/jchristel/room_mate/releases)
 
 A web-based 2D data repository built around **rooms**. Revit pushes rooms, doors,
 windows, ceilings, floors, FF&E and spaces to a server; the server joins them to
