@@ -142,6 +142,37 @@
                     <TextBlock Text="Fixed text and {Room Parameter} in braces, for example RLS-{Number}. View names are under Views." Opacity="0.6" Margin="170,2,0,0" TextWrapping="Wrap"/>
                     </StackPanel>
                 </Border>
+                <!-- sets of rooms (multi-room RLS) -->
+                <Border BorderBrush="Gray" BorderThickness="1" CornerRadius="2" Padding="10" Margin="0,4,0,4">
+                        <StackPanel>
+                    <TextBlock Text="Sets of rooms" FontWeight="SemiBold" Margin="0,0,0,6"/>
+                    <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions>
+                        <TextBlock Text="Sheet number" VerticalAlignment="Center"/>
+                        <TextBox Grid.Column="1" x:Name="tb_set_sheet_number" TextChanged="on_change"/>
+                        <ComboBox Grid.Column="2" x:Name="tk_set_sheet_number" SelectionChanged="on_token_set_sheet_number" Margin="6,0,0,0"/></Grid>
+                    <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions>
+                        <TextBlock Text="Sheet name" VerticalAlignment="Center"/>
+                        <TextBox Grid.Column="1" x:Name="tb_set_sheet_name" TextChanged="on_change"/>
+                        <ComboBox Grid.Column="2" x:Name="tk_set_sheet_name" SelectionChanged="on_token_set_sheet_name" Margin="6,0,0,0"/></Grid>
+                    <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions>
+                        <TextBlock Text="Plan view name" VerticalAlignment="Center"/>
+                        <TextBox Grid.Column="1" x:Name="tb_set_view_name_plan" TextChanged="on_change"/>
+                        <ComboBox Grid.Column="2" x:Name="tk_set_view_name_plan" SelectionChanged="on_token_set_view_name_plan" Margin="6,0,0,0"/></Grid>
+                    <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions>
+                        <TextBlock Text="3D view name" VerticalAlignment="Center"/>
+                        <TextBox Grid.Column="1" x:Name="tb_set_view_name_three_d" TextChanged="on_change"/>
+                        <ComboBox Grid.Column="2" x:Name="tk_set_view_name_three_d" SelectionChanged="on_token_set_view_name_three_d" Margin="6,0,0,0"/></Grid>
+                    <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions>
+                        <TextBlock Text="Plan title on sheet" VerticalAlignment="Center"/>
+                        <TextBox Grid.Column="1" x:Name="tb_set_title_plan" TextChanged="on_change"/>
+                        <ComboBox Grid.Column="2" x:Name="tk_set_title_plan" SelectionChanged="on_token_set_title_plan" Margin="6,0,0,0"/></Grid>
+                    <Grid Margin="0,2,0,2"><Grid.ColumnDefinitions><ColumnDefinition Width="170"/><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions>
+                        <TextBlock Text="3D title on sheet" VerticalAlignment="Center"/>
+                        <TextBox Grid.Column="1" x:Name="tb_set_title_three_d" TextChanged="on_change"/>
+                        <ComboBox Grid.Column="2" x:Name="tk_set_title_three_d" SelectionChanged="on_token_set_title_three_d" Margin="6,0,0,0"/></Grid>
+                    <TextBlock Text="A set of adjacent rooms on its own sheets. {Room Parameter} is the lead (largest) room's, {Rooms:Number} every room's (01.06, 01.07), {Sheet_Counter} the sheet's place in the set: the sheet number needs it when a set has more than one sheet. Empty: the single-room logic above. Elevations and schedules use their own room's single-room logic." Opacity="0.6" Margin="170,2,0,0" TextWrapping="Wrap"/>
+                    </StackPanel>
+                </Border>
             </StackPanel>
         </ScrollViewer>
 

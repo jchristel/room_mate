@@ -83,6 +83,31 @@ class Sections(unittest.TestCase):
         self.assertEqual("x", ps.server_of(gone))
 
 
+
+class SetTemplates(unittest.TestCase):
+    PARAMS = {"room_parameters": ["Number", "Name"]}
+
+    def test_an_empty_set_template_falls_back_to_the_single_room_one(self):
+        s = {"sheet_number": "RLS-{Number}", "view_name": "{Number}", "set_sheet_number": "SET-{Number}-{Sheet_Counter}"}
+        self.assertEqual("SET-{Number}-{Sheet_Counter}", rs.set_template(s, "set_sheet_number"))
+        self.assertEqual("{Number} PLAN", rs.set_template(s, "set_view_name_plan"), "the old single view name too")
+        self.assertEqual("", rs.set_template(s, "set_title_on_sheet_three_d"))
+
+    def test_a_set_template_is_checked_for_its_own_words(self):
+        errors, warnings = rs.validate({
+            "set_sheet_number": "{Rooms:Number}",
+            "set_sheet_name": "{Rooms:Wing} {Sheet_Counter}",
+            "set_view_name_plan": "{Number} PLAN {Seq_Counter}",
+            "set_view_name_three_d": "{Number} 3D {Sheet_Counter}",
+        }, self.PARAMS)
+        self.assertEqual(3, len(errors), errors)
+        self.assertIn("{Rooms:Wing}", errors[0])
+        self.assertIn("Seq_Counter", errors[1])
+        self.assertIn("{Sheet_Counter}", errors[2], "the sheet counter means nothing in a view name")
+        self.assertEqual(1, len(warnings))
+        self.assertIn("Sheet_Counter", warnings[0])
+        self.assertEqual(([], []), rs.validate({"set_sheet_number": "S-{Number}-{Sheet_Counter}"}, self.PARAMS))
+
 if __name__ == "__main__":
     unittest.main()
 

@@ -401,6 +401,10 @@ def check(task, settings, facts, taken):
     tasks before this one will make, so two tasks of one list cannot collide with each other."""
     aborts, warnings = [], []
     label = (task.get("room") or {}).get("number") or task.get("id") or "?"
+    if task.get("kind") == "create_rls_set":
+        # a set of rooms has a planner of its own, with the same facts, findings and `taken`
+        from room_m import rls_set_plan
+        return rls_set_plan.check(task, settings, facts, taken)
     if task.get("kind") != CREATE_RLS:
         return None, [finding(UNKNOWN_KIND, "{}: this script makes room layout sheets, not {} tasks".format(label, task.get("kind")))], []
     missing = rls_settings.missing(settings)

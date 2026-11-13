@@ -20,6 +20,8 @@ HANDLER_OF = {
     "populate_room": APPLY,
     "update_room": APPLY,
     "create_rls": RLS,
+    # a set of rooms: the same handler, which plans it with `rls_set_plan` and writes it with `rls_set_write`
+    "create_rls_set": RLS,
 }
 
 ORDER = (APPLY, RLS)

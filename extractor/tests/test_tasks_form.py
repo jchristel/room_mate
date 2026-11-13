@@ -48,6 +48,18 @@ class Rows(unittest.TestCase):
             [form.ALL_LEVELS, "LEVEL 1", "LEVEL 2", form.NO_LEVEL], form.level_choices(form.rows(SUMMARIES, level_of)))
 
 
+class Sets(unittest.TestCase):
+    SUMMARY = {"id": "t5", "kind": "create_rls_set", "room": {"room_id": "1", "number": "00.02", "name": "OFFICE"},
+               "set_rooms": [{"room_id": "1", "number": "00.02", "name": "OFFICE"}, {"room_id": "2", "number": "00.03", "name": "WC"}]}
+
+    def test_a_set_names_its_lead_and_how_many_more_and_is_found_by_any_of_its_rooms(self):
+        row = form.row_of(self.SUMMARY, lambda room: "LEVEL 00")
+        self.assertTrue(row["text"].startswith("00.02 OFFICE + 1 room  -  Create RLS set"), row["text"])
+        self.assertTrue(form.shown(row, "wc", form.KIND_ALL, None))
+        self.assertTrue(form.shown(row, "", form.KIND_RLS, None), "a set is an RLS task")
+        self.assertFalse(form.shown(row, "", form.KIND_OTHER, None))
+
+
 class Filters(unittest.TestCase):
     def ids(self, text="", kind=form.KIND_ALL, level=form.ALL_LEVELS):
         return [r["id"] for r in form.rows(SUMMARIES, level_of) if form.shown(r, text, kind, level)]

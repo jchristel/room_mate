@@ -727,8 +727,16 @@ checked before anything is made, then one transaction group per task (`duHast...
   unknown, placed twice, or neither placed nor left out, and an empty sheet, refuse the task (the layout IS the task); past the paper is
   a finding. The task's `room` is the lead and `rls_set.rooms` all of them, lead first; each viewport is its CENTRE in mm from the
   paper's bottom left, y up. One live set per room: two live set tasks may not share ANY room (`tasks::overlaps`), not only the lead.
-  Not built: the plug-in writer (`task_dispatch.HANDLER_OF` has no `create_rls_set`, so a claimed one is reported failed), the set's
-  naming settings, tags, and the 3D view's walls for a set.
+  **The plug-in makes it** (2026-11-14): the Tasks button's RLS handler plans a set with `rls_set_plan` (routed by kind from
+  `rls_task.check`) and writes it with `rls_set_write.RlsSetWriter`, an `RlsWriter` whose `_place_on` answers each viewport's own sheet
+  and centre; every other step (plan crop and turn, markers, 3D, titles, annotation crop, detail numbers per sheet, 2D grids) is the
+  single-room code. The whole set is ONE transaction group. **The paper's bottom left is taken to be the sheet's origin.** Naming:
+  the six SET templates (`rls_settings.SET_TEMPLATES`, a "Sets of rooms" group in the window, empty = the single-room one) read the
+  lead room, `{Rooms:P}` (every room's distinct values, ", ", lead first) and `{Sheet_Counter}` (required in the number when the
+  set has more than one sheet, else an abort); elevations and schedules keep the single-room templates from their own room,
+  `{Seq_Counter}` 1-4 within it. The rooms are tagged in the plan where Revit puts a tag; no item tags, and the 3D view hides no
+  walls (the single-room rule would hide the walls between the set's rooms). The set's plan left out means no elevations (a
+  marker needs a plan view): a planner warning. **Not run in Revit.**
 - **Each new elevation can get a 2D grid along its bottom** (`elevation_grid`, "Place 2D grid" in the window's Elevation group: a line based detail family, `FamilyPlacementType.CurveBasedDetail`, listed as "Family : Type" by `rls_settings.line_detail_family_names`). It runs from the crop's bottom left corner to its bottom right, so it is as long as the elevation is wide (`rls_write._bottom_edge`), and is placed by duHast's `place_a_line_based_detail_family_instance_in_view`. **It is the sheet's LAST step**, after every tag, and **never stops the sheet**: the whole step and each elevation are their own try, and a failure, a family the model lacks or a duHast too old to have the function is a note (`rls_write._elevation_grids`). A family the model lacks is also a planner warning (`NO_ELEVATION_GRID`) and a settings warning. Not set: no grid. **Run in Revit** (2026-11-08).
 - **An elevation is cropped to the template view's height** (`height_mm`, from the view's crop box, measured up from where the new crop's bottom already is), so a tall neighbouring room does not make it tall; a new 3D view has Crop View on.
 - **What Revit does with an elevation marker, measured (2026-11-01, all of it matters to `rls_write` and duHast).** The marker has NO point (`Location` is the

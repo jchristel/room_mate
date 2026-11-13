@@ -24,9 +24,14 @@ NO_LEVEL = "(level not found)"
 
 _KIND_LABELS = {
     "create_rls": "Create RLS",
+    "create_rls_set": "Create RLS set",
     "populate_room": "Populate room",
     "update_room": "Update room",
 }
+
+
+# the kinds the "Create RLS" filter shows: one room's sheet, or a set of rooms' sheets
+_RLS_KINDS = (KIND_RLS, "create_rls_set")
 
 
 def kind_label(kind):
@@ -43,6 +48,11 @@ def row_of(summary, level_of):
     level = level_of(room) or NO_LEVEL
     blueprint = (summary.get("blueprint") or {}).get("name") or ""
     label = " ".join(p for p in (number, name) if p) or "(room {})".format(room.get("room_id"))
+    # a set names its lead room and how many more; every room of it is found by the search
+    others = [r for r in summary.get("set_rooms") or [] if r.get("room_id") != room.get("room_id")]
+    every = " ".join(" ".join(p for p in (r.get("number") or "", r.get("name") or "") if p) for r in others)
+    if others:
+        label += " + {} room{}".format(len(others), "" if len(others) == 1 else "s")
     text = "{}  -  {}".format(label, kind_label(kind))
     if blueprint:
         text += "  -  blueprint {}".format(blueprint)
@@ -51,7 +61,7 @@ def row_of(summary, level_of):
         "kind": kind,
         "level": level,
         "text": text + "  -  " + level,
-        "search": " ".join((label, kind_label(kind), blueprint, summary.get("id") or "")).lower(),
+        "search": " ".join((label, every, kind_label(kind), blueprint, summary.get("id") or "")).lower(),
     }
 
 
@@ -69,9 +79,9 @@ def level_choices(all_rows):
 def shown(row, text, kind_key, level):
     """Whether `row` passes the filters: the text (any part of the room number or name, the kind, the
     blueprint or the task id, ignoring case), the kind, and the level."""
-    if kind_key == KIND_RLS and row["kind"] != KIND_RLS:
+    if kind_key == KIND_RLS and row["kind"] not in _RLS_KINDS:
         return False
-    if kind_key == KIND_OTHER and row["kind"] == KIND_RLS:
+    if kind_key == KIND_OTHER and row["kind"] in _RLS_KINDS:
         return False
     if level and level != ALL_LEVELS and row["level"] != level:
         return False

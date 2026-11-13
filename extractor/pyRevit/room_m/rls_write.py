@@ -316,7 +316,8 @@ class RlsWriter(object):
             self._turn_plan(view, centre, placed["turn_deg"], plan["plan_name"], notes)
         self._annotation_crop(view, vp, plan["plan_name"])
         self._title_on_sheet(view, plan.get("plan_title"), plan["plan_name"], notes)
-        self._viewport(sheet, view, vp, notes, "plan", "plan")
+        on, at_mm = self._place_on(plan, sheet)
+        self._viewport(on, view, vp, notes, "plan", "plan", at_mm)
         return view
 
     def _turn_plan(self, view, centre, turn_deg, name, notes):
@@ -376,8 +377,16 @@ class RlsWriter(object):
             lambda: set_annotation_crop_without_transaction_wrapper(view, wanted[0], wanted[1]),
         )
 
-    def _viewport(self, sheet, view, template_vp, notes, label, kind):
-        at = (geo.viewport_centre_ft(template_vp) if template_vp else None)
+    def _place_on(self, item, sheet):
+        """`(sheet, centre_mm)`: where a view of `item` goes. One sheet, at the template viewport's place (`None`);
+        a set's writer (`room_m.rls_set_write`) answers the item's own sheet and centre from the task."""
+        return sheet, None
+
+    def _viewport(self, sheet, view, template_vp, notes, label, kind, at_mm=None):
+        # a set's task says where each viewport's centre is on its sheet (mm from the paper's bottom left)
+        at = (_ft(at_mm[0]), _ft(at_mm[1])) if at_mm else None
+        if at is None:
+            at = (geo.viewport_centre_ft(template_vp) if template_vp else None)
         if at is None:
             at = (0.0, 0.0)
             notes.append("the {} viewport had no place on the template sheet: put at the sheet's origin".format(label))
@@ -489,7 +498,8 @@ class RlsWriter(object):
             if (-d.X * looks[0] - d.Y * looks[1]) < FACES_PLAN:
                 notes.append("{} does not face the way the plan says (the marker's other views are at fixed quarter turns)".format(e["name"]))
             self._title_on_sheet(view, e.get("title"), e["name"], notes)
-            self._viewport(sheet, view, e["viewport"], notes, e["name"], "elevation")
+            on, at_mm = self._place_on(e, sheet)
+            self._viewport(on, view, e["viewport"], notes, e["name"], "elevation", at_mm)
 
     def _elevation_grids(self, plan, notes):
         """The 2D grid (`elevation_grid`, a line based detail family) along the bottom of every new elevation: from the
@@ -590,7 +600,8 @@ class RlsWriter(object):
             self._hide_walls_in_the_way(
                 view, room, XYZ(reach_lo[0], reach_lo[1], low.Z), XYZ(reach_hi[0], reach_hi[1], high.Z), v, notes)
             self._title_on_sheet(view, v.get("title"), v["name"], notes)
-            self._viewport(sheet, view, v["viewport"], notes, v["name"], "three_d")
+            on, at_mm = self._place_on(v, sheet)
+            self._viewport(on, view, v["viewport"], notes, v["name"], "three_d", at_mm)
 
     def _hide_walls_in_the_way(self, view, room, low, high, three_d, notes):
         """Hide, in the new 3D view, the walls on the camera's side of the room and make the items along them
@@ -601,6 +612,10 @@ class RlsWriter(object):
         nothing. A failure here is a note: the view is made and placed either way."""
         name = three_d["name"]
         server = three_d.get("server")
+        if three_d.get("keep_walls"):
+            # a set's 3D view: the plug-in's own rule judges one room, and would hide the walls between the set's rooms
+            notes.append(info("{}: no walls hidden (a set of rooms)".format(name)))
+            return
         try:
             if server:
                 ids = self._walls_along(server, low, high)
