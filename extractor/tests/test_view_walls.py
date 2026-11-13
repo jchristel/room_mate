@@ -30,7 +30,8 @@ class Eye(unittest.TestCase):
     def test_the_camera_is_back_along_the_direction(self):
         e = vw.eye_xy(CENTRE, (0, 5, -5), 10.0)
         self.assertAlmostEqual(2.0, e[0])
-        self.assertAlmostEqual(-8.5, e[1])
+        self.assertAlmostEqual(1.5 - 10.0 / 2 ** 0.5, e[1], msg="10 back along the unit direction, at 45 degrees down")
+        self.assertAlmostEqual(-8.5, vw.eye_xy(CENTRE, (0, 5, 0), 10.0)[1], msg="level: all of it in plan")
 
     def test_a_view_straight_down_has_no_plan_eye(self):
         self.assertIsNone(vw.eye_xy(CENTRE, (0, 0, -1), 10.0))

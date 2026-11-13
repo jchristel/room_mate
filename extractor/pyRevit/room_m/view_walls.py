@@ -53,12 +53,14 @@ def segments_cross(p1, p2, q1, q2):
 
 
 def eye_xy(centre_xy, forward, distance):
-    """Where the camera is in plan: back from the centre along the view's direction. None when the view looks
-    straight down (no plan direction, so no wall is between)."""
-    length = (forward[0] ** 2 + forward[1] ** 2) ** 0.5
-    if length < 1.0e-6:
+    """Where the camera is in plan: `distance` back from the centre along the view's UNIT direction, as duHast's
+    `view_3d_create` puts it, so a view looking down stands nearer in plan than the distance. None when the view
+    looks straight down (no plan direction, so no wall is between)."""
+    plan = (forward[0] ** 2 + forward[1] ** 2) ** 0.5
+    if plan < 1.0e-6:
         return None
-    k = distance / length
+    z = forward[2] if len(forward) > 2 else 0.0
+    k = distance / (plan * plan + z * z) ** 0.5
     return (centre_xy[0] - forward[0] * k, centre_xy[1] - forward[1] * k)
 
 

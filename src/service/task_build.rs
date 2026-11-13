@@ -420,11 +420,11 @@ fn sheet_for_rules(record: &sheets::SheetRecord) -> BlueprintSheet {
     }
 }
 
-/// Where the template's elevation markers and views go in this room (`service::rls_plan`), with a
-/// finding for whatever could not be placed.
 /// The template room's outline and this room's, either absent when the room is not on the server.
 type Rings = (Option<Vec<Pt>>, Option<Vec<Pt>>);
 
+/// Where the template's elevation markers and views go in this room (`service::rls_plan`), with a
+/// finding for whatever could not be placed.
 fn place_elevations(
     rings: &Rings,
     record: &sheets::SheetRecord,

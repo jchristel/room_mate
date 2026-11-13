@@ -568,8 +568,11 @@ class RlsWriter(object):
             # a turned plan: min and max are the corners before the turn, and the section box is turned about its
             # centre by the same angle (the directions were turned by the planner, `rls_task.build`)
             turn = footprint.get("turn_deg") or 0.0
+        room_low, room_high = low, high
         for v in plan["three_ds"]:
-            # the template's section box height, above THIS room's level, where the template carried one
+            # the template's section box height, above THIS room's level, where the template carried one; each
+            # view starts from the room's box, so a view without heights never takes the previous view's
+            low, high = room_low, room_high
             heights = section_box.above_floor_ft(v["viewport"], geo.mm_to_ft)
             if heights is not None:
                 low = XYZ(low.X, low.Y, self._level_z + heights[0])
