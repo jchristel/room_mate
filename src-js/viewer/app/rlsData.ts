@@ -1,6 +1,7 @@
-// What the RLS tool asks of the server: the library's sheets, one sheet in full (for its preview), and the
-// one write it makes (queue a `create_rls` task per room).
+// What the RLS tool asks of the server: the library's sheets, one sheet in full (for its preview), the one write it
+// makes (queue a `create_rls` task per room), and the preview of a set of rooms the composer lays out.
 
+import type { SetPreview } from "../rlsSet.js";
 import type { Made, Solved } from "../rlsTool.js";
 import type { SheetRecord, SheetSummary } from "../../library/types.js";
 import { fetchJson } from "./api.js";
@@ -51,6 +52,23 @@ export async function solveRooms(project: string, roomIds: readonly string[], si
       signal: signal ?? null,
     });
     return res.ok ? ((await res.json()) as Solved[]) : (await res.text()).trim() || `HTTP ${res.status}`;
+  } catch (err) {
+    return signal?.aborted ? "" : `Could not reach the server: ${String(err)}`;
+  }
+}
+
+/** The server's preview of a set of adjacent rooms: whether they make one, and the views it gets with their sizes on
+ *  paper. Stores nothing. `sheetId` null: the best-matching library sheet. */
+export async function previewSet(project: string, roomIds: readonly string[], sheetId: string | null, signal?: AbortSignal): Promise<SetPreview | string> {
+  try {
+    const res = await fetch(`${base(project)}/tasks/rls-set-preview`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(sheetId ? { room_ids: roomIds, sheet_id: sheetId } : { room_ids: roomIds }),
+      cache: "no-store",
+      signal: signal ?? null,
+    });
+    return res.ok ? ((await res.json()) as SetPreview) : (await res.text()).trim() || `HTTP ${res.status}`;
   } catch (err) {
     return signal?.aborted ? "" : `Could not reach the server: ${String(err)}`;
   }

@@ -742,6 +742,26 @@
   .preview .elevation-line text { fill: var(--danger, #c0392b); font-family: var(--mono); pointer-events: none; }
   .preview .key { margin-right: 0.8rem; }
   .preview .key::before { content: ""; display: inline-block; width: 0.7em; height: 0.7em; margin-right: 0.3em; opacity: 0.6; }
+  /* The set composer: the views waiting on the left, the sheets side by side on the right, scrolling sideways. */
+  .rlsFindings { margin: 0; padding: 0.2rem 0.5rem 0.2rem 1.5rem; border-bottom: 1px solid var(--rule); background: var(--paper); font-size: 0.85em; }
+  .rlsFindings .refused { color: var(--danger, #c0392b); }
+  .rlsComposer { display: flex; gap: 0.5rem; padding: 0.3rem 0.5rem; border-bottom: 1px solid var(--rule); background: var(--paper); max-height: 42vh; }
+  .rlsPorts { display: flex; flex-direction: column; gap: 0.2rem; width: 15rem; flex: none; overflow-y: auto; font-size: 0.85em; }
+  .rlsPort { display: flex; justify-content: space-between; align-items: center; gap: 0.3rem; padding: 0.1rem 0.3rem;
+             border: 1px solid var(--rule); border-left-width: 4px; cursor: grab; }
+  .rlsPort.plan { border-left-color: var(--accent); }
+  .rlsPort.elevation { border-left-color: var(--ink); }
+  .rlsPort.three_d { border-left-color: var(--ok); }
+  .rlsPort.out { opacity: 0.55; cursor: default; }
+  .rlsSheets { display: flex; gap: 0.5rem; overflow-x: auto; flex: 1; align-items: flex-start; }
+  .rlsSheet { flex: none; width: 24rem; max-width: none; }
+  .rlsSheet figcaption { display: flex; gap: 0.5rem; align-items: center; }
+  .rlsSheet .margin { fill: none; stroke: var(--rule); stroke-width: 0.5; stroke-dasharray: 4 3; }
+  .rlsSheet .port { cursor: move; touch-action: none; }
+  .rlsSheet .port.estimate rect { stroke-dasharray: 3 2; }
+  .rlsSheet .port.dragging rect { fill-opacity: 0.6; }
+  .rlsSheet .port.tooBig rect { stroke: var(--danger, #c0392b); stroke-width: 2.5; }
+  .rlsPort.tooBig { border-color: var(--danger, #c0392b); color: var(--danger, #c0392b); }
   /* A handle is a short line with a wide, round, non-scaling stroke: a dot that stays one size on screen. */
   .bp-handle { stroke: var(--accent); stroke-width: 13px; stroke-linecap: round; vector-effect: non-scaling-stroke;
                pointer-events: stroke; cursor: grab; touch-action: none; }

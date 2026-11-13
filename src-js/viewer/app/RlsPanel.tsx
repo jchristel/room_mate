@@ -1,6 +1,6 @@
 // The RLS tool's bar: which library sheet to copy, the rooms picked (click rooms on the plan), and the button that
 // queues a `create_rls` task per room for the Revit session. Mounted inside a zone beside the blueprint bar and
-// renders nothing while the tool is off.
+// renders nothing while the tool is off. Set mode (several adjacent rooms on one set of sheets) is `RlsSetPanel`.
 //
 // Nothing is asked about a phase (the views take their room's) or about where things go (the server works that
 // out from the walls). The preview under the bar is the sheet's layout, so a person knows what is being copied.
@@ -26,6 +26,7 @@ import {
   type Made,
   type RlsMode,
 } from "../rlsTool.js";
+import { RlsSetPanel } from "./RlsSetPanel.js";
 import { getLibrarySheet, listLibrarySheets, makeRlsTasks, solveRooms, type LibrarySheet, type LibrarySheetRecord } from "./rlsData.js";
 import { getState, patchZoneRls, setZoneRlsMode, type ZoneRow } from "./store.js";
 import { watchRoomTasks } from "./taskData.js";
@@ -138,6 +139,8 @@ export function RlsPanel({ zone, rooms }: { zone: ZoneRow; rooms: readonly Room[
     setNotice(madeText(made));
   };
 
+  if (tool.mode === "set") return <RlsSetPanel zoneId={zoneId} tool={tool} project={project} sheets={sheets} name={name} />;
+
   if (auto) {
     const nameOf = (id: string) => rooms.find((r) => r.id === id)?.name ?? id;
     const best = focus ? tool.solved[focus]?.choices[0] : undefined;
@@ -147,6 +150,7 @@ export function RlsPanel({ zone, rooms }: { zone: ZoneRow; rooms: readonly Room[
         <select className="picker" value={tool.mode} onChange={(e) => mode(e.target.value as RlsMode)} aria-label="RLS mode">
           <option value="manual">RLS manual</option>
           <option value="auto">RLS auto</option>
+          <option value="set">RLS set</option>
         </select>
         <span className="routeResult" title="Rooms of this level without a task are matched to the closest library sheet by area, proportions and item count">
           {set.length} rooms matched: {counts.green} green, {counts.yellow} yellow, {counts.red} red, {counts.override} overridden
@@ -206,6 +210,7 @@ export function RlsPanel({ zone, rooms }: { zone: ZoneRow; rooms: readonly Room[
         <select className="picker" value={tool.mode} onChange={(e) => mode(e.target.value as RlsMode)} aria-label="RLS mode">
           <option value="manual">RLS manual</option>
           <option value="auto">RLS auto</option>
+          <option value="set">RLS set</option>
         </select>
         <select
           className="picker"

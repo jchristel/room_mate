@@ -717,8 +717,12 @@ checked before anything is made, then one transaction group per task (`duHast...
   gets four elevations square to ITS OWN walls, marker at its box's centre on slots 0/2/4/6 (west, north, east, south, as House A's markers),
   as deep as the wall plus 300 mm and as tall as its clear height (`connectivity::clear_heights`, the route checks' rule; else 2700 mm and a
   finding); a schedule per room and one 3D view at the template's paper size, marked `estimate` (rows and projection are Revit's). The lead room,
-  whose parameters will fill the set's own names on the plug-in side, is the LARGEST. Not built: the composer, the `create_rls_set` task, the
-  plug-in writer, the set's naming settings.
+  whose parameters will fill the set's own names on the plug-in side, is the LARGEST. **The composer is the RLS tool's `set` mode**
+  (`viewer/rlsSet.ts` rules, `app/RlsSetPanel.tsx`): rooms clicked on the plan, a first layout in rows, then a person drags views between
+  sheets and the list, adds and removes (empty) sheets and leaves views out. One view, one sheet (schedules too until splitting). A paper
+  change moves nothing; what no longer fits is a finding. **A view too big for the paper at all** (the plan of a large set at
+  1:50) is its own finding (`too_big`), red and first, whether placed or waiting, naming the smallest A size that holds it or saying none does. The drawable area is the sheet less `MARGIN_MM` until the title block's is known.
+  The layout lives in the page only. Not built: saving it (the `create_rls_set` task), the plug-in writer, the set's naming settings.
 - **Each new elevation can get a 2D grid along its bottom** (`elevation_grid`, "Place 2D grid" in the window's Elevation group: a line based detail family, `FamilyPlacementType.CurveBasedDetail`, listed as "Family : Type" by `rls_settings.line_detail_family_names`). It runs from the crop's bottom left corner to its bottom right, so it is as long as the elevation is wide (`rls_write._bottom_edge`), and is placed by duHast's `place_a_line_based_detail_family_instance_in_view`. **It is the sheet's LAST step**, after every tag, and **never stops the sheet**: the whole step and each elevation are their own try, and a failure, a family the model lacks or a duHast too old to have the function is a note (`rls_write._elevation_grids`). A family the model lacks is also a planner warning (`NO_ELEVATION_GRID`) and a settings warning. Not set: no grid. **Run in Revit** (2026-11-08).
 - **An elevation is cropped to the template view's height** (`height_mm`, from the view's crop box, measured up from where the new crop's bottom already is), so a tall neighbouring room does not make it tall; a new 3D view has Crop View on.
 - **What Revit does with an elevation marker, measured (2026-11-01, all of it matters to `rls_write` and duHast).** The marker has NO point (`Location` is the
