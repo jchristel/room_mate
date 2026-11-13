@@ -1,7 +1,7 @@
 // What the RLS tool asks of the server: the library's sheets, one sheet in full (for its preview), the one write it
 // makes (queue a `create_rls` task per room), and the preview of a set of rooms the composer lays out.
 
-import type { SetPreview } from "../rlsSet.js";
+import type { SetPreview, SetTaskBody } from "../rlsSet.js";
 import type { Made, Solved } from "../rlsTool.js";
 import type { SheetRecord, SheetSummary } from "../../library/types.js";
 import { fetchJson } from "./api.js";
@@ -71,5 +71,20 @@ export async function previewSet(project: string, roomIds: readonly string[], sh
     return res.ok ? ((await res.json()) as SetPreview) : (await res.text()).trim() || `HTTP ${res.status}`;
   } catch (err) {
     return signal?.aborted ? "" : `Could not reach the server: ${String(err)}`;
+  }
+}
+
+/** Queue the one task of a set as laid out. The answer is one row: the task, or why it was refused. */
+export async function makeRlsSetTask(project: string, body: SetTaskBody): Promise<Made[] | string> {
+  try {
+    const res = await fetch(`${base(project)}/tasks`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+      cache: "no-store",
+    });
+    return res.ok ? ((await res.json()) as Made[]) : (await res.text()).trim() || `HTTP ${res.status}`;
+  } catch (err) {
+    return `Could not reach the server: ${String(err)}`;
   }
 }

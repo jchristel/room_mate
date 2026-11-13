@@ -213,5 +213,64 @@ fn test_two_adjacent_rooms_make_a_set_and_two_apart_do_not() {
     let apart = ask(&["2626834", "2626844"]);
     assert!(!apart.valid && apart.views.is_none());
     assert!(apart.findings.iter().any(|f| f["kind"] == "not_adjacent"), "{:?}", apart.findings);
+
+    // The composer's layout becomes ONE task: every view but the OFFICE's west elevation, on two A1 sheets.
+    use crate::service::rls_set_task::{set_task, PlacedView, SetTaskRequest, SetViewKind, SheetLayout};
+    let at = |view: &str, x_mm: f64| PlacedView { view: view.to_string(), x_mm, y_mm: 20.0 };
+    let mut second: Vec<PlacedView> = Vec::new();
+    for (i, e) in views.elevations.iter().enumerate() {
+        let id = format!("elevation:{}:{}", e.room_id, e.marker_index);
+        if id != "elevation:2626834:0" {
+            second.push(at(&id, 20.0 + 90.0 * i as f64));
+        }
+    }
+    let request = SetTaskRequest {
+        room_ids: vec!["2626836".to_string(), "2626834".to_string()],
+        sheet_id: "office".to_string(),
+        sheet_size: "a1".to_string(),
+        overwrite_rls: false,
+        sheets: vec![
+            SheetLayout {
+                views: vec![
+                    at("plan", 20.0),
+                    at("schedule:2626834", 300.0),
+                    at("schedule:2626836", 500.0),
+                ],
+            },
+            SheetLayout { views: second },
+        ],
+        left_out: vec!["elevation:2626834:0".to_string()],
+    };
+    let new = set_task(&state, PROJECT, &ctx, std::slice::from_ref(&sheet), &request).expect("a set task");
+    assert_eq!("2626834", new.room.room_id, "the task's room is the lead");
+    let plan = new.rls_set.as_ref().expect("the set's plan");
+    assert_eq!(
+        vec!["2626834", "2626836"],
+        plan.rooms.iter().map(|r| r.room_id.as_str()).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        vec![3, 4],
+        plan.markers.iter().map(|m| m.views.len()).collect::<Vec<_>>(),
+        "the left-out elevation is not made"
+    );
+    assert_eq!(2, plan.sheets.len());
+    let first = &plan.sheets[0].views[0];
+    assert_eq!(SetViewKind::Plan, first.kind);
+    assert_eq!(
+        [
+            20.0 + views.plan.paper_mm[0] / 2.0,
+            594.0 - (20.0 + views.plan.paper_mm[1] / 2.0)
+        ],
+        first.centre_mm,
+        "a centre from the bottom left"
+    );
+    assert!(plan.plan.is_some() && !plan.three_d, "the sheet has no 3D viewport to give");
+
+    let mut missing = request.clone();
+    missing.left_out.clear();
+    assert!(
+        matches!(set_task(&state, PROJECT, &ctx, std::slice::from_ref(&sheet), &missing), Err(crate::service::ServiceError::Invalid(m)) if m.contains("elevation:2626834:0")),
+        "a view neither placed nor left out refuses the layout"
+    );
     std::fs::remove_dir_all(projects.parent().unwrap()).ok();
 }

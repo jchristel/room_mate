@@ -19,6 +19,7 @@ use crate::service::blueprint_capture::qualify_room;
 use crate::service::rls_plan::{DepthOverride, RlsRequest};
 use crate::service::rls_reads::RlsReads;
 use crate::service::rls_set::{self, SetPreview, SetRequest};
+use crate::service::rls_set_task::{set_task, SetTaskRequest};
 use crate::service::rls_tags::TagRequest;
 use crate::service::room_locator::RoomRef;
 use crate::service::sheet_suggest;
@@ -26,7 +27,7 @@ use crate::service::task_build::{
     populate_from_assignment, rls_from_sheet, rls_from_sheet_with, update_from_assignment, PopulateParams, UpdateParams,
 };
 use crate::service::ServiceError;
-use crate::state::Shared;
+use crate::state::{AppState, Shared};
 use crate::tasks::{self, Report, ReportOutcome, Task, TaskState, TaskSummary, UpdateMode};
 
 const MAX_ROOMS_PER_REQUEST: usize = 200;
@@ -105,26 +106,37 @@ pub async fn http_preview_rls_set(
     Json(body): Json<SetRequest>,
 ) -> Result<Json<SetPreview>, (StatusCode, String)> {
     let projects = projects_dir(&state)?;
-    let mut records = crate::sheets::load_all(&projects, &project_id).map_err(to_http)?;
-    let retired: std::collections::HashSet<String> = crate::blueprints::list(&projects, &project_id)
+    let (records, ctx) = set_inputs(&state, &projects, &project_id)?;
+    rls_set::preview(&state, &project_id, &ctx, &records, &body)
+        .map(Json)
+        .map_err(service_error)
+}
+
+/// What a set preview reads, and so what a set task reads: the library without the sheets of blueprints not in use,
+/// and the project's rooms and item counts. One function, so a task is made from exactly what was previewed.
+fn set_inputs(
+    state: &AppState,
+    projects: &std::path::Path,
+    project_id: &str,
+) -> Result<(Vec<crate::sheets::SheetRecord>, sheet_suggest::Context), (StatusCode, String)> {
+    let mut records = crate::sheets::load_all(projects, project_id).map_err(to_http)?;
+    let retired: std::collections::HashSet<String> = crate::blueprints::list(projects, project_id)
         .unwrap_or_default()
         .into_iter()
         .filter(|b| !b.in_use)
         .map(|b| b.id)
         .collect();
     records.retain(|r| r.blueprint.as_deref().is_none_or(|b| !retired.contains(b)));
-    let ctx = match sheet_suggest::context(&state, &project_id) {
-        Ok(Some(ctx)) => ctx,
-        Ok(None) => return Err((StatusCode::NOT_FOUND, "this project has no rooms".to_string())),
-        Err(e) => return Err(service_error(e)),
-    };
-    rls_set::preview(&state, &project_id, &ctx, &records, &body)
-        .map(Json)
-        .map_err(service_error)
+    match sheet_suggest::context(state, project_id) {
+        Ok(Some(ctx)) => Ok((records, ctx)),
+        Ok(None) => Err((StatusCode::NOT_FOUND, "this project has no rooms".to_string())),
+        Err(e) => Err(service_error(e)),
+    }
 }
 
 /// What to make. `populate_room` and `update_room` name assignments (one task per assignment);
-/// `create_rls` names a library sheet and the rooms to make sheets for.
+/// `create_rls` names a library sheet and the rooms to make sheets for; `create_rls_set` is one task for a set
+/// of rooms and its layout.
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CreateBody {
@@ -163,6 +175,8 @@ pub enum CreateBody {
         #[serde(default)]
         tags: Option<TagRequest>,
     },
+    /// The sheets of ONE set of adjacent rooms, as a person laid them out in the composer (`rls_set_task`).
+    CreateRlsSet(SetTaskRequest),
     /// Bring rooms populated earlier back in line with their assignments' blueprints.
     UpdateRoom {
         assignment_ids: Vec<String>,
@@ -256,6 +270,16 @@ pub async fn http_create_tasks(
                     Err(ServiceError::Invalid(reason)) => out.push(refusal(&id, &assignment.room_name, reason)),
                     Err(e) => return Err(service_error(e)),
                 }
+            }
+        }
+        CreateBody::CreateRlsSet(request) => {
+            // one task for the whole set: its row names the lead room, or says why there is none
+            let (records, ctx) = set_inputs(&state, &projects, &project_id)?;
+            let subject = request.room_ids.join(",");
+            match set_task(&state, &project_id, &ctx, &records, &request) {
+                Ok(new) => out.push(queue(&projects, &project_id, &subject, new)),
+                Err(ServiceError::Invalid(reason)) => out.push(refusal(&subject, "", reason)),
+                Err(e) => return Err(service_error(e)),
             }
         }
         CreateBody::CreateRls { sheet_id, room_ids, phase: _, overwrite_rls, with_tags, sheet_size, depths, tags } => {

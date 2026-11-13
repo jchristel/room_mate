@@ -7,11 +7,13 @@
 //! what a Revit session writes cannot change underneath it, and a later look says what was asked.
 //! The plugin validates and writes; it never resolves (decision 2).
 //!
-//! **Three kinds.** `populate_room` places a blueprint's items in a room (and, if asked, its
+//! **Four kinds.** `populate_room` places a blueprint's items in a room (and, if asked, its
 //! sheets); `create_rls` makes room layout sheets from a library sheet and places nothing;
 //! `update_room` brings a room populated earlier back in line with its blueprint (decision 21:
 //! items, or only their locations, after a room-size or design change). An update is a DRY RUN
 //! unless the person turns that off (decision 13): the session reports the diff and writes nothing.
+//! `create_rls_set` makes the sheets of a SET of adjacent rooms as a person laid them out
+//! (`service::rls_set_task`); its `room` is the set's lead room and `rls_set.rooms` names them all.
 //!
 //! **States, and who moves them.** A task is `queued` when made or resent. A Revit session asks
 //! for a model's tasks (`claim`) and every queued one becomes `in_progress`, so another session
@@ -33,6 +35,7 @@ use serde_json::Value;
 
 use crate::service::blueprint_model::{BlueprintSheet, ItemClass, Property};
 use crate::service::rls_plan::RlsPlan;
+use crate::service::rls_set_task::RlsSetPlan;
 use crate::state::is_path_safe_component;
 use crate::tag_rules::TaskRule;
 
@@ -55,6 +58,8 @@ pub enum TaskKind {
     /// resolver now places it, and the session matches it to what is in the room by the
     /// marker each placed item carries (blueprint id, revision, item id).
     UpdateRoom,
+    /// Make the sheets of a set of adjacent rooms, laid out in the composer (`rls_set`).
+    CreateRlsSet,
 }
 
 /// What an update changes in a room that already holds the blueprint's items.
@@ -181,6 +186,9 @@ pub struct Task {
     /// with nothing to place.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rls: Option<RlsPlan>,
+    /// `create_rls_set`: the rooms, the views and where each goes on which sheet. `room` is the lead room.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rls_set: Option<RlsSetPlan>,
     /// How to tag what the sheets show, as the rules were when the task was made: one per key
     /// (`tag_rules`), for the viewport types of the sheets and, for a populate task, only the
     /// type codes it places. Where each tag goes, never which tag: that is the model's RLS settings
@@ -220,6 +228,9 @@ pub struct TaskSummary {
     pub created_at: String,
     pub updated_at: String,
     pub attempts: usize,
+    /// `create_rls_set`: every room of the set, the lead first, so a list can say which rooms a set covers.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub set_rooms: Vec<TaskRoom>,
     /// What the last attempt said, for a glance at why a task failed or aborted.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub last_messages: Vec<String>,
@@ -241,12 +252,14 @@ impl From<&Task> for TaskSummary {
             dry_run: t.dry_run,
             blueprint: t.blueprint.clone(),
             items: t.items.len(),
-            sheets: t.sheets.len(),
+            // a set's own sheets, not the one template it carries
+            sheets: t.rls_set.as_ref().map_or(t.sheets.len(), |s| s.sheets.len()),
             tag_rules: t.tag_rules.len(),
             findings: t.findings.len(),
             created_at: t.created_at.clone(),
             updated_at: t.updated_at.clone(),
             attempts: t.attempts.len(),
+            set_rooms: t.rls_set.as_ref().map(|s| s.rooms.clone()).unwrap_or_default(),
             last_messages: t.attempts.last().map(|a| a.messages.clone()).unwrap_or_default(),
         }
     }
@@ -273,6 +286,7 @@ pub struct NewTask {
     pub items: Vec<TaskItem>,
     pub sheets: Vec<BlueprintSheet>,
     pub rls: Option<RlsPlan>,
+    pub rls_set: Option<RlsSetPlan>,
     pub tag_rules: Vec<TaskRule>,
     pub findings: Vec<Value>,
 }
@@ -427,6 +441,20 @@ fn is_live(t: &Task) -> bool {
     matches!(t.state, TaskState::Queued | TaskState::InProgress)
 }
 
+/// The rooms a task works on: a set's every room, else its one room.
+fn rooms_of<'a>(room: &'a TaskRoom, set: Option<&'a RlsSetPlan>) -> Vec<&'a str> {
+    match set {
+        Some(s) if !s.rooms.is_empty() => s.rooms.iter().map(|r| r.room_id.as_str()).collect(),
+        _ => vec![room.room_id.as_str()],
+    }
+}
+
+/// Whether two tasks of one kind and model would work on a room in common. For sets that is any shared room: two
+/// sets holding one room would each make its elevations.
+fn overlaps(t: &Task, kind: TaskKind, model_id: &str, rooms: &[&str]) -> bool {
+    t.kind == kind && t.model_id == model_id && rooms_of(&t.room, t.rls_set.as_ref()).iter().any(|r| rooms.contains(r))
+}
+
 /// Queue a task. **Refused when the same kind of task for the same room is already queued or in
 /// progress**: two would be handed out together, and the second would find the room populated.
 pub fn create(projects_dir: &Path, project: &str, new: NewTask) -> Result<Task, TaskError> {
@@ -438,13 +466,19 @@ pub fn create(projects_dir: &Path, project: &str, new: NewTask) -> Result<Task, 
     if existing.len() >= MAX_TASKS_PER_PROJECT {
         return bad(format!("a project holds at most {MAX_TASKS_PER_PROJECT} tasks"));
     }
-    if let Some(t) = existing
-        .iter()
-        .find(|t| is_live(t) && t.kind == new.kind && t.model_id == new.model_id && t.room.room_id == new.room.room_id)
-    {
+    let rooms = rooms_of(&new.room, new.rls_set.as_ref());
+    if let Some(t) = existing.iter().find(|t| is_live(t) && overlaps(t, new.kind, &new.model_id, &rooms)) {
+        // name the room the two have in common, which for a set need not be either one's lead
+        let held = rooms_of(&t.room, t.rls_set.as_ref());
+        let shared = rooms.iter().find(|r| held.contains(r)).copied().unwrap_or(new.room.room_id.as_str());
+        let name = new
+            .rls_set
+            .as_ref()
+            .and_then(|s| s.rooms.iter().find(|r| r.room_id == shared))
+            .map_or(new.room.name.as_str(), |r| r.name.as_str());
         return Err(TaskError::Conflict(format!(
             "room {:?} already has a {} task ({}); dismiss it or wait for it first",
-            new.room.name,
+            name,
             serde_json::to_value(t.state)
                 .ok()
                 .and_then(|v| v.as_str().map(str::to_string))
@@ -471,6 +505,7 @@ pub fn create(projects_dir: &Path, project: &str, new: NewTask) -> Result<Task, 
         items: new.items,
         sheets: new.sheets,
         rls: new.rls,
+        rls_set: new.rls_set,
         tag_rules: new.tag_rules,
         findings: new.findings,
         created_at: stamp.clone(),
@@ -600,13 +635,10 @@ pub fn resend(projects_dir: &Path, project: &str, id: &str) -> Result<Task, Task
     if task.state == TaskState::Queued {
         return Err(TaskError::Conflict("the task is already queued".to_string()));
     }
-    let clash = list_all(projects_dir, project)?.into_iter().any(|t| {
-        t.id != task.id
-            && is_live(&t)
-            && t.kind == task.kind
-            && t.model_id == task.model_id
-            && t.room.room_id == task.room.room_id
-    });
+    let rooms = rooms_of(&task.room, task.rls_set.as_ref());
+    let clash = list_all(projects_dir, project)?
+        .into_iter()
+        .any(|t| t.id != task.id && is_live(&t) && overlaps(&t, task.kind, &task.model_id, &rooms));
     if clash {
         return Err(TaskError::Conflict(
             "another task of this kind for the room is queued or in progress".to_string(),
@@ -649,6 +681,7 @@ mod tests {
             items: vec![],
             sheets: vec![],
             rls: None,
+            rls_set: None,
             tag_rules: vec![],
             findings: vec![],
         }
@@ -685,6 +718,52 @@ mod tests {
         let rest = claim(&dir, "p", "m1", &[]).unwrap();
         assert_eq!(rest.len(), 1, "the populate task was not handed over to the RLS script");
         assert_eq!(rest[0].kind, TaskKind::PopulateRoom);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn set_task(model: &str, rooms: &[&str]) -> NewTask {
+        let room = |id: &str| TaskRoom { room_id: id.to_string(), number: None, name: format!("Room {id}") };
+        let mut t = new_task(model, rooms[0]);
+        t.kind = TaskKind::CreateRlsSet;
+        t.rls_set = Some(RlsSetPlan {
+            sheet_size: "a1".to_string(),
+            paper_mm: [841.0, 594.0],
+            lead_room: rooms[0].to_string(),
+            rooms: rooms.iter().map(|r| room(r)).collect(),
+            plan: None,
+            markers: vec![],
+            schedules: vec![],
+            three_d: false,
+            sheets: vec![],
+        });
+        t
+    }
+
+    #[test]
+    fn two_live_sets_may_not_share_a_room_and_resend_says_so_too() {
+        let dir = temp_dir("sets");
+        let first = create(&dir, "p", set_task("m1", &["a", "b"])).unwrap();
+        // b is not the lead of either set: it is the overlap that counts, not the lead room
+        let clash = create(&dir, "p", set_task("m1", &["c", "b"]));
+        assert!(
+            matches!(&clash, Err(TaskError::Conflict(m)) if m.contains("Room b")),
+            "names the shared room: {clash:?}"
+        );
+        create(&dir, "p", set_task("m1", &["c", "d"])).expect("no room in common");
+        create(&dir, "p", set_task("m2", &["a", "b"])).expect("another model's rooms");
+        let mut single = new_task("m1", "b");
+        single.kind = TaskKind::CreateRls;
+        create(&dir, "p", single).expect("a one-room sheet of a room in a set is another kind of task");
+        assert_eq!(TaskSummary::from(&first).set_rooms.len(), 2);
+
+        dismiss(&dir, "p", &first.id).unwrap();
+        let again = create(&dir, "p", set_task("m1", &["e", "a"])).unwrap();
+        assert!(
+            matches!(resend(&dir, "p", &first.id), Err(TaskError::Conflict(_))),
+            "a is in a live set again"
+        );
+        dismiss(&dir, "p", &again.id).unwrap();
+        resend(&dir, "p", &first.id).expect("nothing live holds a or b now");
         std::fs::remove_dir_all(&dir).ok();
     }
 

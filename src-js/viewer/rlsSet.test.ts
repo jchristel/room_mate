@@ -11,6 +11,8 @@ import {
   portsOf,
   putBack,
   removeSheet,
+  saveBlocked,
+  setTaskBody,
   sheetOf,
   sizeOfPaper,
   unplace,
@@ -139,5 +141,26 @@ describe("the set composer", () => {
     expect(sizeOfPaper({ width_mm: 297, height_mm: 420 })).toBe("a3");
     expect(sizeOfPaper({ width_mm: 500, height_mm: 400 })).toBeNull();
     expect(sizeOfPaper(undefined)).toBeNull();
+  });
+
+  it("sends where each view is and what is left out, and is held back only by what the server would refuse", () => {
+    const ports = [box("a", 50, 50), box("b", 50, 50), box("c", 10, 10)];
+    let l = leaveOut(autoLayout(ports, "a3"), "c");
+    const body = setTaskBody(["r1", "r2"], "sheet", "a3", true, l);
+    expect(body).toEqual({
+      kind: "create_rls_set",
+      room_ids: ["r1", "r2"],
+      sheet_id: "sheet",
+      sheet_size: "a3",
+      overwrite_rls: true,
+      sheets: [{ views: [{ view: "a", x_mm: MARGIN_MM, y_mm: MARGIN_MM }, { view: "b", x_mm: MARGIN_MM + 60, y_mm: MARGIN_MM }] }],
+      left_out: ["c"],
+    });
+    expect(saveBlocked(layoutFindings(l, ports, "a3"))).toBeNull();
+    // an overlap and a view past the edge are advice; a view on no sheet and an empty sheet are not
+    expect(saveBlocked(layoutFindings(place(l, "b", 0, 30, 30), ports, "a3"))).toBeNull();
+    expect(saveBlocked(layoutFindings(putBack(l, "c"), ports, "a3"))).toContain("not on a sheet");
+    l = addSheet(l);
+    expect(saveBlocked(layoutFindings(l, ports, "a3"))).toContain("Sheet 2 is empty");
   });
 });

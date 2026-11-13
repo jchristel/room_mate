@@ -4,7 +4,7 @@
 // big each is on paper; it places none of them. Where they go is a person's decision, so the layout lives here: a
 // list of sheets, each a list of views at a point in paper millimetres (y down, the box's top left corner), and the
 // views left out. A first layout is made automatically, and a person moves views, adds and removes sheets, and leaves
-// views out. Saving it as a `create_rls_set` task is the next slice; the layout is shaped to be that task's body.
+// views out. Saving queues ONE `create_rls_set` task for the set (`setTaskBody`).
 //
 // **One view, one sheet**, schedules included for now: a schedule on several sheets is a split, which comes with
 // schedule splitting. **Changing the paper size keeps every view where it is and at its size**; what no longer fits
@@ -286,4 +286,39 @@ export function carryLayout(old: Layout | null, ports: readonly Port[], size: Pa
 /** The text of a server finding, for the bar. */
 export function findingText(f: SetPreview["findings"][number]): string {
   return typeof f.message === "string" && f.message ? f.message : f.kind.replace(/_/g, " ");
+}
+
+/** The `create_rls_set` request (`service::rls_set_task::SetTaskRequest`): the rooms, the library sheet the views were
+ *  worked out from, the paper, and per sheet each view's id at its top left corner. The server works the views out
+ *  again from the rooms and sheet, so only WHERE goes over the wire, never a size or a crop. */
+export interface SetTaskBody {
+  kind: "create_rls_set";
+  room_ids: string[];
+  sheet_id: string;
+  sheet_size: PaperSize;
+  overwrite_rls: boolean;
+  sheets: { views: { view: string; x_mm: number; y_mm: number }[] }[];
+  left_out: string[];
+}
+
+export function setTaskBody(roomIds: readonly string[], sheetId: string, size: PaperSize, overwrite: boolean, l: Layout): SetTaskBody {
+  return {
+    kind: "create_rls_set",
+    room_ids: [...roomIds],
+    sheet_id: sheetId,
+    sheet_size: size,
+    overwrite_rls: overwrite,
+    sheets: l.sheets.map((s) => ({ views: s.map((p) => ({ view: p.port, x_mm: p.x, y_mm: p.y })) })),
+    left_out: [...l.leftOut],
+  };
+}
+
+/** Why the layout cannot be saved yet, or null. The server refuses the same two (the layout must say exactly what is
+ *  made); every other finding is advice and saves. */
+export function saveBlocked(findings: readonly LayoutFinding[]): string | null {
+  const waiting = findings.find((f) => f.code === "not_placed");
+  if (waiting) return `${waiting.message}: place each view or leave it out`;
+  const empty = findings.find((f) => f.code === "empty_sheet");
+  if (empty) return `${empty.message}: remove it or put a view on it`;
+  return null;
 }

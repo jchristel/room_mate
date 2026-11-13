@@ -27,7 +27,14 @@ export const KIND_TEXT: Record<TaskKind, string> = {
   populate_room: "Populate room",
   create_rls: "Create RLS",
   update_room: "Update room",
+  create_rls_set: "Create RLS set",
 };
+
+/** "OFFICE 00.02" for a one-room task, "OFFICE 00.02 + 2 rooms" for a set (the lead room first). */
+export function roomsLabel(t: { room: { name: string }; set_rooms?: unknown[] }): string {
+  const more = (t.set_rooms?.length ?? 0) - 1;
+  return more > 0 ? `${t.room.name} + ${more} room${more === 1 ? "" : "s"}` : t.room.name;
+}
 
 export const UPDATE_MODE_TEXT: Record<UpdateMode, string> = {
   items: "items (add, remove, change, move)",

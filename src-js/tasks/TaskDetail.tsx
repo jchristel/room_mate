@@ -37,7 +37,17 @@ export function TaskDetail({ task, busy, onDismiss, onResend }: DetailProps) {
         <dt>Room</dt>
         <dd>
           {t.room.name} · id {t.room.room_id} · {t.room.number ? `number ${t.room.number}` : "no number"}
+          {t.rls_set && t.rls_set.rooms.length > 1 ? ` (lead of a set with ${t.rls_set.rooms.slice(1).map((r) => r.name).join(", ")})` : ""}
         </dd>
+        {t.rls_set ? (
+          <>
+            <dt>Set</dt>
+            <dd>
+              {t.rls_set.sheets.length} {t.rls_set.sheet_size.toUpperCase()} sheet{t.rls_set.sheets.length === 1 ? "" : "s"},{" "}
+              {t.rls_set.sheets.reduce((n, s) => n + s.views.length, 0)} views
+            </dd>
+          </>
+        ) : null}
         <dt>Phase</dt>
         <dd>{t.phase}</dd>
         {populate || update ? (
@@ -64,7 +74,7 @@ export function TaskDetail({ task, busy, onDismiss, onResend }: DetailProps) {
             <dd>{t.library_sheet_id ?? "—"}</dd>
           </>
         )}
-        {update ? null : (
+        {update || t.rls_set ? null : (
           <>
             <dt>Create RLS</dt>
             <dd>
@@ -111,8 +121,17 @@ export function TaskDetail({ task, busy, onDismiss, onResend }: DetailProps) {
 
       {t.sheets.length > 0 ? (
         <>
-          <h3>Sheets to make ({t.sheets.length})</h3>
-          <p className="hint">The source sheet's number, name and id are not used for the new sheets: the Revit side generates those from the room. Tags are not in the layout: the rules below say where they go.</p>
+          {t.rls_set ? (
+            <>
+              <h3>Template sheet</h3>
+              <p className="hint">The set's views take their scales and the plan's framing from this library sheet; the sheets themselves are laid out as the set says above.</p>
+            </>
+          ) : (
+            <>
+              <h3>Sheets to make ({t.sheets.length})</h3>
+              <p className="hint">The source sheet's number, name and id are not used for the new sheets: the Revit side generates those from the room. Tags are not in the layout: the rules below say where they go.</p>
+            </>
+          )}
           <table>
             <thead>
               <tr>

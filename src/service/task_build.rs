@@ -85,7 +85,7 @@ fn room_facts(state: &AppState, project: &str, room: &RoomRef) -> Result<Option<
 }
 
 /// [`room_facts`] over the project's rooms already read.
-fn room_facts_in(rooms: &RoomsResult, room: &RoomRef) -> Option<TaskRoom> {
+pub(super) fn room_facts_in(rooms: &RoomsResult, room: &RoomRef) -> Option<TaskRoom> {
     rooms
         .rooms
         .iter()
@@ -219,6 +219,7 @@ pub fn populate_from_assignment(
     };
     Ok(NewTask {
         rls: None,
+        rls_set: None,
         kind: TaskKind::PopulateRoom,
         update_mode: None,
         dry_run: false,
@@ -604,6 +605,7 @@ pub fn rls_from_sheet_with(
     .then_some(RlsPlan { sheet_size, markers, tags, room_tag, plan_crop, three_ds });
     Ok(NewTask {
         rls,
+        rls_set: None,
         kind: TaskKind::CreateRls,
         update_mode: None,
         dry_run: false,

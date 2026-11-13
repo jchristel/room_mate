@@ -20,6 +20,8 @@ import {
   portsOf,
   putBack,
   removeSheet,
+  saveBlocked,
+  setTaskBody,
   sizeOfPaper,
   unplace,
   unplaced,
@@ -29,7 +31,7 @@ import {
   type SetPreview,
 } from "../rlsSet.js";
 import type { RlsMode, RlsToolState } from "../rlsTool.js";
-import { previewSet, type LibrarySheet } from "./rlsData.js";
+import { makeRlsSetTask, previewSet, type LibrarySheet } from "./rlsData.js";
 import { patchZoneRls, setZoneRlsMode } from "./store.js";
 
 const SIZES: PaperSize[] = ["a0", "a1", "a2", "a3"];
@@ -77,8 +79,9 @@ export function RlsSetPanel({
 
   const roomKey = tool.roomIds.join("\u0000");
   useEffect(() => {
-    setNotice(null);
+    // an empty set keeps the notice: it is what a save that just cleared the rooms said
     if (!project || tool.roomIds.length === 0) return setPreview(null);
+    setNotice(null);
     const ac = new AbortController();
     setBusy(true);
     void previewSet(project, tool.roomIds, sheetId, ac.signal).then((answer) => {
@@ -110,6 +113,20 @@ export function RlsSetPanel({
   const bigIds = new Set(findings.filter((f) => f.code === "too_big").flatMap((f) => f.ports));
   const leftOut = layout ? layout.leftOut.flatMap((id) => byId.get(id) ?? []) : [];
   const lead = preview?.lead_room ? name(preview.lead_room) : null;
+  const blocked = !layout || !preview?.sheet_id ? "lay the set out first" : saveBlocked(findings);
+  const save = async () => {
+    if (!project || !layout || !preview?.sheet_id || blocked) return;
+    setBusy(true);
+    setNotice(null);
+    const answer = await makeRlsSetTask(project, setTaskBody(tool.roomIds, preview.sheet_id, size, tool.overwrite, layout));
+    setBusy(false);
+    if (typeof answer === "string") return setNotice(answer);
+    const row = answer[0];
+    if (!row || row.refused) return setNotice(`Not queued: ${row?.refused ?? "the server said nothing"}`);
+    setNotice(`Queued one task for the set of ${tool.roomIds.length} rooms (${layout.sheets.length} sheet${layout.sheets.length === 1 ? "" : "s"}).`);
+    // the set is done with: pick the next one
+    patchZoneRls(zoneId, { ...tool, roomIds: [] });
+  };
   const others = (sheets ?? []).filter((s) => !preview?.suggestions.some((x) => x.sheet_id === s.id));
 
   /** Drop at a client point: onto a sheet (the view's top left corner is the point less where it was grabbed), or
@@ -173,10 +190,21 @@ export function RlsSetPanel({
         <button className="chip" disabled={!layout} onClick={() => layout && setLayout(addSheet(layout))}>
           Add sheet
         </button>
-        <button className="chip on" disabled title="Saving the layout as a create_rls_set task comes with the task itself (the next step of the plan)">
-          Save task
+        <label title="Replace sheets that already exist (off, they are skipped with a warning)">
+          <input type="checkbox" checked={tool.overwrite} onChange={(e) => patchZoneRls(zoneId, { ...tool, overwrite: e.target.checked })} /> overwrite
+        </label>
+        <button
+          className="chip on"
+          disabled={busy || blocked !== null}
+          title={blocked ?? "Queue one task for the set, for the Revit session to make (the Tasks button)"}
+          onClick={() => void save()}
+        >
+          {busy ? "Working…" : "Save task"}
         </button>
         {notice ? <span className="meta">{notice}</span> : null}
+        <a className="chip" href={`/tasks/?project=${encodeURIComponent(project ?? "")}`} title="See the tasks and what Revit did with them">
+          Tasks page
+        </a>
         <button className="chip" title="Leave the RLS tool (Esc)" onClick={() => setZoneRlsMode(zoneId, false)}>
           Close
         </button>

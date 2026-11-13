@@ -1,6 +1,6 @@
 // The left pane: the project's tasks, newest first, narrowed by model and by state.
 
-import { KIND_TEXT, STATES, STATE_TEXT, countByState, modelsOf, needsAttention, newestFirst, shortTime } from "./model.js";
+import { KIND_TEXT, STATES, STATE_TEXT, countByState, modelsOf, needsAttention, newestFirst, roomsLabel, shortTime } from "./model.js";
 import type { TaskState, TaskSummary } from "./types.js";
 
 export interface ListProps {
@@ -52,7 +52,7 @@ export function TaskList({ rows, selectedId, model, states, onModel, onToggleSta
         {shown.map((t) => (
           <li key={t.id}>
             <button type="button" className={t.id === selectedId ? "on" : ""} aria-pressed={t.id === selectedId} onClick={() => onSelect(t.id)}>
-              <b>{t.room.name}</b>
+              <b>{roomsLabel(t)}</b>
               <span>
                 <i className={`badge ${t.state} ${needsAttention(t.state) ? "attention" : ""}`}>{STATE_TEXT[t.state]}</i> {KIND_TEXT[t.kind]}
                 {t.blueprint ? ` · ${t.blueprint.name} r${t.blueprint.revision}` : ""}
