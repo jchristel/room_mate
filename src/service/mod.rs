@@ -30,6 +30,7 @@ pub mod reach;
 pub mod reference;
 pub mod reports;
 pub mod rls_plan;
+pub mod rls_reads;
 pub mod rls_tag_place;
 pub mod rls_tags;
 pub mod rls_three_d;

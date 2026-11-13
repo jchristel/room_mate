@@ -17,10 +17,11 @@ use crate::blueprints_api::service_error;
 use crate::http_error::{projects_dir, to_http};
 use crate::service::blueprint_capture::qualify_room;
 use crate::service::rls_plan::{DepthOverride, RlsRequest};
+use crate::service::rls_reads::RlsReads;
 use crate::service::rls_tags::TagRequest;
 use crate::service::room_locator::RoomRef;
 use crate::service::task_build::{
-    populate_from_assignment, rls_from_sheet, update_from_assignment, PopulateParams, UpdateParams,
+    populate_from_assignment, rls_from_sheet, rls_from_sheet_with, update_from_assignment, PopulateParams, UpdateParams,
 };
 use crate::service::ServiceError;
 use crate::state::Shared;
@@ -237,8 +238,10 @@ pub async fn http_create_tasks(
             if room_ids.len() > MAX_ROOMS_PER_REQUEST {
                 return Err((StatusCode::BAD_REQUEST, format!("at most {MAX_ROOMS_PER_REQUEST} rooms at a time")));
             }
+            // the project's rooms and FF&E are read once for every room of the request (`rls_reads`)
+            let reads = RlsReads::new(&state, &project_id);
             for room_id in room_ids {
-                let room: RoomRef = match qualify_room(&state, &project_id, &room_id, None) {
+                let room: RoomRef = match reads.qualify(&room_id) {
                     Ok(Some(room)) => room,
                     Ok(None) => {
                         out.push(refusal(&room_id, "", "no such room in this project".to_string()));
@@ -250,15 +253,7 @@ pub async fn http_create_tasks(
                     }
                     Err(e) => return Err(service_error(e)),
                 };
-                match rls_from_sheet(
-                    &state,
-                    &projects,
-                    &project_id,
-                    &sheet_id,
-                    &room,
-                    crate::tasks::ROOM_OWN_PHASE,
-                    &request,
-                ) {
+                match rls_from_sheet_with(&reads, &projects, &sheet_id, &room, crate::tasks::ROOM_OWN_PHASE, &request) {
                     Ok(mut new) => {
                         if !with_tags {
                             new.tag_rules.clear();

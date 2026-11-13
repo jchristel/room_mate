@@ -30,7 +30,7 @@ use super::blueprint_capture::loop_mm;
 use super::blueprint_geometry::{dist, oriented_rectangle, signed_area, Pt};
 use super::items::{assemble_items, ItemScope};
 use super::room_locator::RoomRef;
-use super::rooms::{assemble_rooms, RoomScope};
+use super::rooms::{assemble_rooms, RoomScope, RoomsResult};
 use super::ServiceError;
 
 /// The three figures of a room.
@@ -126,21 +126,24 @@ pub fn room_summary(state: &AppState, project: &str, room: &RoomRef) -> Result<O
     let Some(rooms) = assemble_rooms(state, &RoomScope { project: Some(project), ..Default::default() })? else {
         return Ok(None);
     };
-    let Some(found) = rooms.rooms.iter().find(|r| r.model_id == room.model_id && r.room.id == room.room_id) else {
+    // the room first: the FF&E read is the slow half and a missing room does not need it
+    if room_summary_in(&rooms, room, 0).is_none() {
         return Ok(None);
-    };
-    let Some(outer) = found.room.loops.first() else {
-        return Ok(None);
-    };
-    let ring: Vec<Pt> = loop_mm(outer);
-    let Some((x_mm, y_mm)) = enclosing_rectangle(&ring) else {
-        return Ok(None);
-    };
+    }
     let mut items = 0;
     if let Some(ffe) = assemble_items(state, &ItemScope { project: Some(project), ..Default::default() })? {
         items = ffe.ffe.iter().filter(|it| it.owner_rooms_qualified.contains(room)).count();
     }
-    Ok(Some(RoomSummary { x_mm, y_mm, area_m2: signed_area(&ring).abs() * M2_PER_MM2, items }))
+    Ok(room_summary_in(&rooms, room, items))
+}
+
+/// [`room_summary`] against the project's rooms already read, with the room's item count worked out by the caller
+/// (a create-RLS request reads the FF&E once for all its rooms). `None` when the room is not among them.
+pub fn room_summary_in(rooms: &RoomsResult, room: &RoomRef, items: usize) -> Option<RoomSummary> {
+    let found = rooms.rooms.iter().find(|r| r.model_id == room.model_id && r.room.id == room.room_id)?;
+    let ring: Vec<Pt> = loop_mm(found.room.loops.first()?);
+    let (x_mm, y_mm) = enclosing_rectangle(&ring)?;
+    Some(RoomSummary { x_mm, y_mm, area_m2: signed_area(&ring).abs() * M2_PER_MM2, items })
 }
 
 fn ratio_distance(a: f64, b: f64) -> f64 {

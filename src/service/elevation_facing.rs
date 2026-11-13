@@ -40,7 +40,7 @@ use crate::state::AppState;
 use super::blueprint_capture::FT_TO_MM;
 use super::blueprint_geometry::{dist, dot, edges, signed_area, simplify, sub, unit, Pt, FINE_TOLERANCE_MM};
 use super::room_locator::RoomRef;
-use super::rooms::{assemble_rooms, RoomScope};
+use super::rooms::{assemble_rooms, RoomScope, RoomsResult};
 use super::task_build::project_to_model;
 use super::ServiceError;
 
@@ -300,10 +300,20 @@ pub fn for_sheet(state: &AppState, project: &str, record: &SheetRecord) -> Resul
 /// counter-clockwise, at the fine tolerance. Not `blueprint_capture::room_ring`, which answers in the
 /// project's plan frame.
 pub fn model_room_ring(state: &AppState, project: &str, room: &SheetRoom) -> Result<Option<Vec<Pt>>, ServiceError> {
-    let target = RoomRef { model_id: room.model_id.clone(), room_id: room.room_id.clone() };
     let Some(rooms) = assemble_rooms(state, &RoomScope { project: Some(project), ..Default::default() })? else {
         return Ok(None);
     };
+    model_room_ring_in(state, project, &rooms, room)
+}
+
+/// [`model_room_ring`] against the project's rooms already read, for a request that needs several rings.
+pub fn model_room_ring_in(
+    state: &AppState,
+    project: &str,
+    rooms: &RoomsResult,
+    room: &SheetRoom,
+) -> Result<Option<Vec<Pt>>, ServiceError> {
+    let target = RoomRef { model_id: room.model_id.clone(), room_id: room.room_id.clone() };
     let Some(found) = rooms.rooms.iter().find(|r| r.model_id == target.model_id && r.room.id == target.room_id) else {
         return Ok(None);
     };

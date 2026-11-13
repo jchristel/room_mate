@@ -31,7 +31,7 @@ use super::blueprint_model::{
 use super::items::{assemble_items, ItemScope};
 use super::openings::{assemble_openings, OpeningKind, OpeningScope};
 use super::room_locator::RoomRef;
-use super::rooms::{assemble_rooms, RoomScope};
+use super::rooms::{assemble_rooms, RoomScope, RoomsResult};
 use super::ServiceError;
 
 /// Feet to millimetres: the wire's plan geometry is decimal feet.
@@ -392,6 +392,12 @@ pub fn qualify_room(
     let Some(rooms) = assemble_rooms(state, &RoomScope { project: Some(project), ..Default::default() })? else {
         return Ok(None);
     };
+    qualify_room_in(&rooms, room_id)
+}
+
+/// [`qualify_room`] with no model named, against the project's rooms already read: a request that qualifies many
+/// rooms reads them once.
+pub fn qualify_room_in(rooms: &RoomsResult, room_id: &str) -> Result<Option<RoomRef>, ServiceError> {
     let mut models: Vec<&str> =
         rooms.rooms.iter().filter(|r| r.room.id == room_id).map(|r| r.model_id.as_str()).collect();
     models.sort_unstable();
