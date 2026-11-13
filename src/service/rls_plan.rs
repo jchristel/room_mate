@@ -195,9 +195,15 @@ fn template_crop(sheet: &Value) -> Option<([f64; 2], [f64; 2])> {
 /// box is taken with the room turned back by the view's turn, so the offsets land on the same sides of the room as
 /// on the template, and the crop is that rectangle turned about its centre (see [`PlanCrop`]).
 pub fn plan_crop(sheet: &Value, template: &[Pt], target: &[Pt]) -> Option<PlanCrop> {
+    plan_crop_turned(sheet, template, target, view_turn(template, target))
+}
+
+/// [`plan_crop`] with the turn decided by the caller, round every point of `target`: a set of adjacent rooms
+/// (`rls_set`) passes all its rooms' points and the set's own turn (`rls_turn::set_turn`), and gets the template's
+/// framing round the whole set.
+pub fn plan_crop_turned(sheet: &Value, template: &[Pt], target: &[Pt], turn: Option<ViewTurn>) -> Option<PlanCrop> {
     let (clo, chi) = template_crop(sheet)?;
     let (tlo, thi) = bounds(template)?;
-    let turn = view_turn(template, target);
     let deg = turn.map_or(0.0, |t| t.angle_deg);
     let seen: Vec<Pt> = target.iter().map(|&p| rotate(p, -deg)).collect();
     let (glo, ghi) = bounds(&seen)?;

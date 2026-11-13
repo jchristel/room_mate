@@ -241,6 +241,64 @@ impl Context {
         ))
     }
 
+    /// The project's rooms as read for this context.
+    pub fn rooms(&self) -> &super::rooms::RoomsResult {
+        &self.rooms
+    }
+
+    /// How many FF&E items the project's own read attributes to `room` (its nested-component policy applied).
+    pub fn item_count(&self, room: &RoomRef) -> usize {
+        self.item_counts.get(room).copied().unwrap_or(0)
+    }
+
+    /// Rank `sheets` against any `signature`: one room's ([`suggest_in`]) or a set of rooms taken as one
+    /// (`rls_set`). Also the sheets that could not be ranked, and how many name no room and carry no figures.
+    pub fn rank_sheets(
+        &self,
+        signature: &Signature,
+        sheets: &[SheetRecord],
+    ) -> (Vec<Suggestion>, Vec<Unresolved>, usize) {
+        let signature_of = |room: &RoomRef| self.signature_of(room);
+        let (mut candidates, mut unresolved, mut unassigned) = (Vec::new(), Vec::new(), 0);
+        for sheet in sheets {
+            // The figures stored with the sheet win: they are what it was made for, they are all a
+            // sheet pushed without a linked room has, and they still rank when a room has moved on.
+            if let Some(summary) = sheet.room_summary {
+                let name = if !sheet.rooms.is_empty() {
+                    sheet.rooms.join("; ")
+                } else {
+                    sheet
+                        .room
+                        .as_ref()
+                        .and_then(|r| {
+                            signature_of(&RoomRef { model_id: r.model_id.clone(), room_id: r.room_id.clone() })
+                        })
+                        .map_or_else(String::new, |(name, _)| name)
+                };
+                candidates.push((sheet, sheet.room.clone(), name, Signature::from(summary)));
+                continue;
+            }
+            // No figures: only a linked room can still be read as it is today.
+            let Some(sheet_room) = &sheet.room else {
+                unassigned += 1;
+                continue;
+            };
+            let room_ref = RoomRef { model_id: sheet_room.model_id.clone(), room_id: sheet_room.room_id.clone() };
+            match signature_of(&room_ref) {
+                Some((name, sig)) => candidates.push((sheet, Some(sheet_room.clone()), name, sig)),
+                None => unresolved.push(Unresolved {
+                    sheet_id: sheet.id.clone(),
+                    sheet_number: sheet.sheet_number.clone(),
+                    reason: format!(
+                        "room {:?} of model {:?} is not in the model today",
+                        sheet_room.room_id, sheet_room.model_id
+                    ),
+                }),
+            }
+        }
+        (rank(signature, candidates), unresolved, unassigned)
+    }
+
     /// Every room with this id, one per model that has it.
     pub fn rooms_with_id(&self, room_id: &str) -> Vec<RoomRef> {
         self.rooms
@@ -268,44 +326,8 @@ pub fn suggest(
 
 /// `suggest` against rooms already read.
 pub fn suggest_in(ctx: &Context, target: &RoomRef, sheets: &[SheetRecord]) -> Option<Suggestions> {
-    let signature_of = |room: &RoomRef| ctx.signature_of(room);
-    let (room_name, signature) = signature_of(target)?;
-
-    let (mut candidates, mut unresolved, mut unassigned) = (Vec::new(), Vec::new(), 0);
-    for sheet in sheets {
-        // The figures stored with the sheet win: they are what it was made for, they are all a
-        // sheet pushed without a linked room has, and they still rank when a room has moved on.
-        if let Some(summary) = sheet.room_summary {
-            let name = if !sheet.rooms.is_empty() {
-                sheet.rooms.join("; ")
-            } else {
-                sheet
-                    .room
-                    .as_ref()
-                    .and_then(|r| signature_of(&RoomRef { model_id: r.model_id.clone(), room_id: r.room_id.clone() }))
-                    .map_or_else(String::new, |(name, _)| name)
-            };
-            candidates.push((sheet, sheet.room.clone(), name, Signature::from(summary)));
-            continue;
-        }
-        // No figures: only a linked room can still be read as it is today.
-        let Some(sheet_room) = &sheet.room else {
-            unassigned += 1;
-            continue;
-        };
-        let room_ref = RoomRef { model_id: sheet_room.model_id.clone(), room_id: sheet_room.room_id.clone() };
-        match signature_of(&room_ref) {
-            Some((name, sig)) => candidates.push((sheet, Some(sheet_room.clone()), name, sig)),
-            None => unresolved.push(Unresolved {
-                sheet_id: sheet.id.clone(),
-                sheet_number: sheet.sheet_number.clone(),
-                reason: format!(
-                    "room {:?} of model {:?} is not in the model today",
-                    sheet_room.room_id, sheet_room.model_id
-                ),
-            }),
-        }
-    }
+    let (room_name, signature) = ctx.signature_of(target)?;
+    let (suggestions, unresolved, unassigned) = ctx.rank_sheets(&signature, sheets);
     Some(Suggestions {
         target: Target {
             model_id: target.model_id.clone(),
@@ -313,7 +335,7 @@ pub fn suggest_in(ctx: &Context, target: &RoomRef, sheets: &[SheetRecord]) -> Op
             room_name,
             signature,
         },
-        suggestions: rank(&signature, candidates),
+        suggestions,
         unassigned,
         unresolved,
     })

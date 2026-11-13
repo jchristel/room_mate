@@ -707,6 +707,18 @@ checked before anything is made, then one transaction group per task (`duHast...
   and up (`apply_geometry.turn_xy`, in the planner) and `rotation` for its section box, and its wall search covers the turned box
   (`turned_extent`); a room tag placed by the plan-axes fallback offset turns that offset with the view. A task with no turn passes
   duHast nothing new. **The turn has not been run in Revit from a task**, only the duHast functions.
+- **A SET of adjacent rooms (multi-room RLS) is previewed on the server, and nothing more is built yet** (`service::rls_set`,
+  `POST .../tasks/rls-set-preview`, 2026-11-13; the plan is the "Road map plan" tab of the blueprints plan). The rooms must be ONE group by the
+  server's own adjacency (`service::adjacency`: a shared wall, same level, the default wall tolerance) in one model; otherwise a finding names the
+  groups and there are no views. **The set is matched to library sheets as ONE room**: the smallest rectangle round the convex hull of all its
+  rooms' points, their summed area and items, which is how the extractor measures a sheet covering several rooms (`room_figures`), so
+  `sheet_suggest::Context::rank_sheets` ranks it with no new rule. The chosen sheet gives the scales and the plan's framing
+  (`rls_plan::plan_crop_turned` round every room, turned by `rls_turn::set_turn`: the walls of all the rooms together, smallest turn). Each room
+  gets four elevations square to ITS OWN walls, marker at its box's centre on slots 0/2/4/6 (west, north, east, south, as House A's markers),
+  as deep as the wall plus 300 mm and as tall as its clear height (`connectivity::clear_heights`, the route checks' rule; else 2700 mm and a
+  finding); a schedule per room and one 3D view at the template's paper size, marked `estimate` (rows and projection are Revit's). The lead room,
+  whose parameters will fill the set's own names on the plug-in side, is the LARGEST. Not built: the composer, the `create_rls_set` task, the
+  plug-in writer, the set's naming settings.
 - **Each new elevation can get a 2D grid along its bottom** (`elevation_grid`, "Place 2D grid" in the window's Elevation group: a line based detail family, `FamilyPlacementType.CurveBasedDetail`, listed as "Family : Type" by `rls_settings.line_detail_family_names`). It runs from the crop's bottom left corner to its bottom right, so it is as long as the elevation is wide (`rls_write._bottom_edge`), and is placed by duHast's `place_a_line_based_detail_family_instance_in_view`. **It is the sheet's LAST step**, after every tag, and **never stops the sheet**: the whole step and each elevation are their own try, and a failure, a family the model lacks or a duHast too old to have the function is a note (`rls_write._elevation_grids`). A family the model lacks is also a planner warning (`NO_ELEVATION_GRID`) and a settings warning. Not set: no grid. **Run in Revit** (2026-11-08).
 - **An elevation is cropped to the template view's height** (`height_mm`, from the view's crop box, measured up from where the new crop's bottom already is), so a tall neighbouring room does not make it tall; a new 3D view has Crop View on.
 - **What Revit does with an elevation marker, measured (2026-11-01, all of it matters to `rls_write` and duHast).** The marker has NO point (`Location` is the

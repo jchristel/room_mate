@@ -166,3 +166,52 @@ fn test_solve_picks_the_sheet_whose_room_is_the_same_size() {
     );
     std::fs::remove_dir_all(projects.parent().unwrap()).ok();
 }
+
+/// A room layout sheet SET (`rls_set`): OFFICE 00.02 and WC 00.03 share a wall and make one; OFFICE and GARAGE 00.04
+/// do not. The library sheet is made here (the sample has none) with the OFFICE as its room, so the plan keeps that
+/// sheet's framing round both rooms.
+#[test]
+fn test_two_adjacent_rooms_make_a_set_and_two_apart_do_not() {
+    use crate::service::rls_set::{preview, SetRequest};
+    use crate::service::sheet_suggest;
+    use crate::sheets::SheetRecord;
+    let (state, projects) = booted("rls-set");
+    let ctx = sheet_suggest::context(&state, PROJECT).unwrap().expect("rooms");
+    let office = ctx.rooms().rooms.iter().find(|r| r.room.id == "2626834").expect("OFFICE 00.02");
+    let sheet: SheetRecord = serde_json::from_value(serde_json::json!({
+        "schema_version": 1, "id": "office", "taken_at": "", "revit_sheet_id": "1", "document_title": "D",
+        "sheet_number": "50H-00.02", "sheet_name": "OFFICE", "received_at": "",
+        "room": {"model_id": office.model_id, "room_id": "2626834"},
+        "room_summary": {"x_mm": 4500.0, "y_mm": 3700.0, "area_m2": 16.7, "items": 20},
+        "sheet": {"view_ports": [
+            {"vp_type": "floor plan", "view": {"view_scale": 50.0,
+                "bounding_box": {"min_x": -100000.0, "min_y": -100000.0, "max_x": 100000.0, "max_y": 100000.0}}},
+            {"vp_type": "elevation", "view": {"view_scale": 25.0}},
+            {"vp_type": "schedule", "bounding_box": {"min_x": 0.0, "min_y": 0.0, "max_x": 133.0, "max_y": 65.0}}
+        ]}
+    }))
+    .expect("a sheet record");
+    let ask = |ids: &[&str]| {
+        let request = SetRequest { room_ids: ids.iter().map(|s| s.to_string()).collect(), sheet_id: None };
+        preview(&state, PROJECT, &ctx, std::slice::from_ref(&sheet), &request).unwrap()
+    };
+
+    let set = ask(&["2626836", "2626834"]);
+    assert!(set.valid, "{:?}", set.findings);
+    assert_eq!(Some("2626834".to_string()), set.lead_room, "the larger room leads");
+    assert_eq!(Some("office".to_string()), set.sheet_id);
+    let views = set.views.expect("views");
+    assert_eq!(8, views.elevations.len(), "four per room");
+    assert!(
+        views.elevations.iter().all(|e| e.scale == 25.0),
+        "the elevations take the sheet's elevation scale"
+    );
+    assert_eq!(2, views.schedules.len());
+    assert!(set.rooms.iter().all(|r| r.height_mm > 2000.0), "{:?}", set.rooms);
+    assert!(views.plan.scale == 50.0 && views.plan.paper_mm.iter().all(|&mm| mm > 0.0));
+
+    let apart = ask(&["2626834", "2626844"]);
+    assert!(!apart.valid && apart.views.is_none());
+    assert!(apart.findings.iter().any(|f| f["kind"] == "not_adjacent"), "{:?}", apart.findings);
+    std::fs::remove_dir_all(projects.parent().unwrap()).ok();
+}

@@ -18,8 +18,10 @@ use crate::http_error::{projects_dir, to_http};
 use crate::service::blueprint_capture::qualify_room;
 use crate::service::rls_plan::{DepthOverride, RlsRequest};
 use crate::service::rls_reads::RlsReads;
+use crate::service::rls_set::{self, SetPreview, SetRequest};
 use crate::service::rls_tags::TagRequest;
 use crate::service::room_locator::RoomRef;
+use crate::service::sheet_suggest;
 use crate::service::task_build::{
     populate_from_assignment, rls_from_sheet, rls_from_sheet_with, update_from_assignment, PopulateParams, UpdateParams,
 };
@@ -91,6 +93,34 @@ pub async fn http_preview_rls(
         Ok(new) => Ok(Json(serde_json::json!({ "room": new.room, "rls": new.rls, "findings": new.findings }))),
         Err(e) => Err(service_error(e)),
     }
+}
+
+/// What a room layout sheet SET of these adjacent rooms would be (`service::rls_set`): whether they make a set, the
+/// lead room, the library sheets ranked against the set as one room, and the views with their paper sizes on the chosen
+/// (or best) sheet. A read: nothing is stored. The library is read as `/sheets/solve` reads it, leaving out the sheets
+/// bound to a blueprint that is not in use.
+pub async fn http_preview_rls_set(
+    State(state): State<Shared>,
+    UrlPath(project_id): UrlPath<String>,
+    Json(body): Json<SetRequest>,
+) -> Result<Json<SetPreview>, (StatusCode, String)> {
+    let projects = projects_dir(&state)?;
+    let mut records = crate::sheets::load_all(&projects, &project_id).map_err(to_http)?;
+    let retired: std::collections::HashSet<String> = crate::blueprints::list(&projects, &project_id)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|b| !b.in_use)
+        .map(|b| b.id)
+        .collect();
+    records.retain(|r| r.blueprint.as_deref().is_none_or(|b| !retired.contains(b)));
+    let ctx = match sheet_suggest::context(&state, &project_id) {
+        Ok(Some(ctx)) => ctx,
+        Ok(None) => return Err((StatusCode::NOT_FOUND, "this project has no rooms".to_string())),
+        Err(e) => return Err(service_error(e)),
+    };
+    rls_set::preview(&state, &project_id, &ctx, &records, &body)
+        .map(Json)
+        .map_err(service_error)
 }
 
 /// What to make. `populate_room` and `update_room` name assignments (one task per assignment);

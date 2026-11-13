@@ -124,10 +124,42 @@ pub fn view_turn(template: &[Pt], target: &[Pt]) -> Option<ViewTurn> {
     (turn.angle_deg.abs() >= MIN_TURN_DEG).then_some(turn)
 }
 
+/// How far to turn the ONE plan of a set of adjacent rooms (`rls_set`): there is no single room to pair walls with,
+/// so the set is squared up by the smallest turn, like rooms with differing edge counts (`TurnBy::RoomAngle`). Its
+/// angle is the dominant angle of every room's coarse walls together, length-weighted, so a long corridor counts
+/// for more than a cupboard off it. A room of the set at another angle than the rest sits skewed on the plan: the
+/// elevations, which belong to each room, are still square to it.
+pub fn set_turn(template: &[Pt], rooms: &[Vec<Pt>]) -> Option<ViewTurn> {
+    let (mut s, mut c) = (0.0, 0.0);
+    for ring in rooms {
+        for e in edges(&coarse_outline(ring)) {
+            let a = 4.0 * e.t.1.atan2(e.t.0);
+            s += e.len * a.sin();
+            c += e.len * a.cos();
+        }
+    }
+    if s.hypot(c) < 1e-9 {
+        return None;
+    }
+    let set_deg = s.atan2(c).to_degrees() / 4.0;
+    let angle_deg = fold_quarter(set_deg - dominant_angle_deg(template));
+    (angle_deg.abs() >= MIN_TURN_DEG).then_some(ViewTurn { angle_deg, by: TurnBy::RoomAngle })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::service::blueprint_geometry::rotate;
+
+    #[test]
+    fn a_set_turns_by_its_walls_together_and_the_longer_walls_win() {
+        let corridor = turned(&rect(12_000.0, 1_800.0), 30.0, (0.0, 0.0));
+        let cupboard = turned(&rect(900.0, 600.0), 10.0, (0.0, 5_000.0));
+        let t = set_turn(&rect(4000.0, 3000.0), &[corridor.clone(), cupboard]).unwrap();
+        assert!(t.angle_deg > 25.0 && t.angle_deg < 30.0, "{t:?}");
+        assert_eq!(TurnBy::RoomAngle, t.by);
+        assert_eq!(None, set_turn(&rect(4000.0, 3000.0), &[rect(5000.0, 2000.0), rect(1000.0, 1000.0)]));
+    }
 
     fn rect(w: f64, h: f64) -> Vec<Pt> {
         vec![(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)]
