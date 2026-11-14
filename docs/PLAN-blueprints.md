@@ -41,7 +41,9 @@ turns single items, kept with its assignment, applied by the resolver before its
 in the main viewer** (a ghost, a best fit and a box laid by hand: see stage 6).
 
 Not built: a mirrored copy (left out on purpose, decision 7); view template in the sheet export; the Revit side
-of the update kind; and running the item-placing half in Revit (room layout sheet creation has run end to end since
+of the update kind; running a **set of rooms** (`create_rls_set`, built 2026-11-14 on server, viewer and plug-in: see
+CLAUDE.md, Create-RLS) in Revit, with item tags and hidden walls in a set and the title block's real drawable area
+still open; and running the item-placing half in Revit (room layout sheet creation has run end to end since
 2026-11-01; the 3D views' wall hiding and transparency, nested tags, the plan crop offsets and Title on Sheet since 2026-11-08).
 
 ## What exists, and what does not

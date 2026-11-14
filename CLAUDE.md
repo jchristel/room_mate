@@ -707,7 +707,7 @@ checked before anything is made, then one transaction group per task (`duHast...
   and up (`apply_geometry.turn_xy`, in the planner) and `rotation` for its section box, and its wall search covers the turned box
   (`turned_extent`); a room tag placed by the plan-axes fallback offset turns that offset with the view. A task with no turn passes
   duHast nothing new. **The turn has not been run in Revit from a task**, only the duHast functions.
-- **A SET of adjacent rooms (multi-room RLS) is previewed on the server, and nothing more is built yet** (`service::rls_set`,
+- **A SET of adjacent rooms (multi-room RLS) is previewed on the server, laid out in the viewer and made by the plug-in** (`service::rls_set`,
   `POST .../tasks/rls-set-preview`, 2026-11-13; the plan is the "Road map plan" tab of the blueprints plan). The rooms must be ONE group by the
   server's own adjacency (`service::adjacency`: a shared wall, same level, the default wall tolerance) in one model; otherwise a finding names the
   groups and there are no views. **The set is matched to library sheets as ONE room**: the smallest rectangle round the convex hull of all its
