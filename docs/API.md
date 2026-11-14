@@ -30,7 +30,9 @@ Reads, all GET unless noted:
 Writes are the ingest routes the extractor pushes to (`/rooms`, `/doors`,
 `/windows`, `/ceilings`, `/floors`, `/ffe`, `/spaces`, each with a `/stream`
 sibling) and `/projects/{id}/reference/{source}` for a reference CSV. Every read
-route above has a matching **MCP tool** in the second binary — see
+route above has a matching **MCP tool** in the second binary, including the reads that answer a POST and store
+nothing (`preview_rls`, `preview_rls_set`, `solve_sheets`, `solve_blueprint`), except
+`POST .../blueprints/reshape`, a step inside the blueprint page's box editor — see
 [MCP](STRATEGY-MCP.md) and [docs/mcp-host-setup.md](mcp-host-setup.md).
 
 `static/` is found **beside the executable**, falling back to the working

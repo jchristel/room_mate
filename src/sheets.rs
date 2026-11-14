@@ -307,6 +307,21 @@ fn read(path: &Path) -> Result<SheetRecord, SheetError> {
         .map_err(|e| SheetError::Internal(anyhow::anyhow!("{} is not a sheet record: {e}", path.display())))
 }
 
+/// [`load_all`] without the sheets bound to a blueprint that is NOT IN USE: what a person is offered when choosing a
+/// sheet for a room (suggest, solve, the set preview and the set task). One function, so the HTTP routes and the MCP
+/// tools offer the same library. A blueprint list that cannot be read hides nothing.
+pub fn load_in_use(projects_dir: &Path, project: &str) -> Result<Vec<SheetRecord>, SheetError> {
+    let mut records = load_all(projects_dir, project)?;
+    let retired: std::collections::HashSet<String> = crate::blueprints::list(projects_dir, project)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|b| !b.in_use)
+        .map(|b| b.id)
+        .collect();
+    records.retain(|r| r.blueprint.as_deref().is_none_or(|b| !retired.contains(b)));
+    Ok(records)
+}
+
 /// Every record of the project, by sheet number then document. A file that cannot be read is
 /// an error, not a gap: skipping it would make a corrupt sheet look like a deleted one.
 pub fn load_all(projects_dir: &Path, project: &str) -> Result<Vec<SheetRecord>, SheetError> {

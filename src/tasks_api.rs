@@ -119,14 +119,7 @@ fn set_inputs(
     projects: &std::path::Path,
     project_id: &str,
 ) -> Result<(Vec<crate::sheets::SheetRecord>, sheet_suggest::Context), (StatusCode, String)> {
-    let mut records = crate::sheets::load_all(projects, project_id).map_err(to_http)?;
-    let retired: std::collections::HashSet<String> = crate::blueprints::list(projects, project_id)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|b| !b.in_use)
-        .map(|b| b.id)
-        .collect();
-    records.retain(|r| r.blueprint.as_deref().is_none_or(|b| !retired.contains(b)));
+    let records = crate::sheets::load_in_use(projects, project_id).map_err(to_http)?;
     match sheet_suggest::context(state, project_id) {
         Ok(Some(ctx)) => Ok((records, ctx)),
         Ok(None) => Err((StatusCode::NOT_FOUND, "this project has no rooms".to_string())),
