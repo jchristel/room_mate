@@ -29,6 +29,30 @@ VIEW_NAMES = (
 )
 # Before 2026-11-08 one `view_name` served every kind and each view added its kind to it. A model saved then reads as
 # that name plus the old ending, per kind, until the window saves it again.
+# The templates of a SET of rooms (multi-room RLS, `room_m.rls_set_plan`): (settings key, the single-room key it falls
+# back to when empty, what to call it). They read the LEAD room's parameters, `{Rooms:Parameter}` (every room's) and,
+# the sheet number and name only, `{Sheet_Counter}`. A set's elevations and schedules keep the single-room templates,
+# filled from their own room, so they are not here.
+SET_TEMPLATES = (
+    ("set_sheet_number", "sheet_number", "set sheet number logic"),
+    ("set_sheet_name", "sheet_name", "set sheet name logic"),
+    ("set_view_name_plan", "view_name_plan", "set plan view name logic"),
+    ("set_view_name_three_d", "view_name_three_d", "set 3D view name logic"),
+    ("set_title_on_sheet_plan", "title_on_sheet_plan", "set plan title on sheet"),
+    ("set_title_on_sheet_three_d", "title_on_sheet_three_d", "set 3D title on sheet"),
+)
+_SET_SHEET_KEYS = ("set_sheet_number", "set_sheet_name")
+
+
+def set_template(settings, key):
+    """The template a set uses for `key` (one of `SET_TEMPLATES`): its own when not empty, else the single-room one."""
+    s = with_view_names(settings)
+    for own, fallback, _label in SET_TEMPLATES:
+        if own == key:
+            return (non_blank_text(s.get(own)) or non_blank_text(s.get(fallback)) or "").strip()
+    raise KeyError(key)
+
+
 LEGACY_VIEW_NAME = "view_name"
 _LEGACY_ENDINGS = {"plan": " PLAN", "elevation": " ELEV {Seq_Counter}", "three_d": " 3D", "schedule": " SCHEDULE"}
 
@@ -131,7 +155,31 @@ def validate(settings, options):
     for key in detail_numbers.SETTING_OF.values():
         if s.get(key) is not None and s.get(key) not in detail_numbers.STYLES:
             errors.append("{} '{}' is not numeric or alphabetic".format(key.replace("_", " "), s.get(key)))
+    _validate_sets(s, options, errors, warnings)
     return errors, warnings
+
+
+def _validate_sets(s, options, errors, warnings):
+    """The set templates' own words (`SET_TEMPLATES`): a room parameter, `{Rooms:Parameter}` of one, and in the sheet
+    number and name `{Sheet_Counter}`. `{Seq_Counter}` means nothing in a set's plan or 3D (one of each per set). A set
+    sheet number of its own without `{Sheet_Counter}` only warns: a set of one sheet needs none, a larger one aborts."""
+    from room_m import rls_settings_form
+    from room_m.rls_template import SEQ_COUNTER, SHEET_COUNTER, TOKEN
+
+    for own, _fallback, label in SET_TEMPLATES:
+        text = s.get(own)
+        if non_blank_text(text) is None:
+            continue
+        bad = rls_settings_form.unknown_set_tokens(
+            text, (options or {}).get("room_parameters"), own in _SET_SHEET_KEYS)
+        if bad:
+            errors.append("{}: not a room parameter: {}".format(label, " ".join("{" + t + "}" for t in bad)))
+        if own not in _SET_SHEET_KEYS and any(t.strip().lower() == SEQ_COUNTER.lower() for t in TOKEN.findall(text)):
+            errors.append("{}: {{{}}} means nothing in it: a set has one plan and one 3D view".format(label, SEQ_COUNTER))
+    # only a set number of its own: a project that never makes sets falls back and is not nagged (the planner aborts)
+    number = non_blank_text(s.get("set_sheet_number"))
+    if number and not any(t.strip().lower() == SHEET_COUNTER.lower() for t in TOKEN.findall(number)):
+        warnings.append("set sheet number logic has no {{{}}}: a set of more than one sheet aborts".format(SHEET_COUNTER))
 
 
 def _names(elements, label):

@@ -15,7 +15,7 @@ def t(tid, kind):
 
 class Dispatch(unittest.TestCase):
     def test_every_kind_with_a_handler_is_asked_for(self):
-        self.assertEqual(d.claim_kinds(), ["create_rls", "populate_room", "update_room"])
+        self.assertEqual(d.claim_kinds(), ["create_rls", "create_rls_set", "populate_room", "update_room"])
 
     def test_items_are_placed_before_sheets_are_made(self):
         groups, unhandled = d.split([t("s", "create_rls"), t("p", "populate_room"), t("u", "update_room")])

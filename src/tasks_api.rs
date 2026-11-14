@@ -17,13 +17,17 @@ use crate::blueprints_api::service_error;
 use crate::http_error::{projects_dir, to_http};
 use crate::service::blueprint_capture::qualify_room;
 use crate::service::rls_plan::{DepthOverride, RlsRequest};
+use crate::service::rls_reads::RlsReads;
+use crate::service::rls_set::{self, SetPreview, SetRequest};
+use crate::service::rls_set_task::{set_task, SetTaskRequest};
 use crate::service::rls_tags::TagRequest;
 use crate::service::room_locator::RoomRef;
+use crate::service::sheet_suggest;
 use crate::service::task_build::{
-    populate_from_assignment, rls_from_sheet, update_from_assignment, PopulateParams, UpdateParams,
+    populate_from_assignment, rls_from_sheet, rls_from_sheet_with, update_from_assignment, PopulateParams, UpdateParams,
 };
 use crate::service::ServiceError;
-use crate::state::Shared;
+use crate::state::{AppState, Shared};
 use crate::tasks::{self, Report, ReportOutcome, Task, TaskState, TaskSummary, UpdateMode};
 
 const MAX_ROOMS_PER_REQUEST: usize = 200;
@@ -92,8 +96,47 @@ pub async fn http_preview_rls(
     }
 }
 
+/// What a room layout sheet SET of these adjacent rooms would be (`service::rls_set`): whether they make a set, the
+/// lead room, the library sheets ranked against the set as one room, and the views with their paper sizes on the chosen
+/// (or best) sheet. A read: nothing is stored. The library is read as `/sheets/solve` reads it, leaving out the sheets
+/// bound to a blueprint that is not in use.
+pub async fn http_preview_rls_set(
+    State(state): State<Shared>,
+    UrlPath(project_id): UrlPath<String>,
+    Json(body): Json<SetRequest>,
+) -> Result<Json<SetPreview>, (StatusCode, String)> {
+    let projects = projects_dir(&state)?;
+    let (records, ctx) = set_inputs(&state, &projects, &project_id)?;
+    rls_set::preview(&state, &project_id, &ctx, &records, &body)
+        .map(Json)
+        .map_err(service_error)
+}
+
+/// What a set preview reads, and so what a set task reads: the library without the sheets of blueprints not in use,
+/// and the project's rooms and item counts. One function, so a task is made from exactly what was previewed.
+fn set_inputs(
+    state: &AppState,
+    projects: &std::path::Path,
+    project_id: &str,
+) -> Result<(Vec<crate::sheets::SheetRecord>, sheet_suggest::Context), (StatusCode, String)> {
+    let mut records = crate::sheets::load_all(projects, project_id).map_err(to_http)?;
+    let retired: std::collections::HashSet<String> = crate::blueprints::list(projects, project_id)
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|b| !b.in_use)
+        .map(|b| b.id)
+        .collect();
+    records.retain(|r| r.blueprint.as_deref().is_none_or(|b| !retired.contains(b)));
+    match sheet_suggest::context(state, project_id) {
+        Ok(Some(ctx)) => Ok((records, ctx)),
+        Ok(None) => Err((StatusCode::NOT_FOUND, "this project has no rooms".to_string())),
+        Err(e) => Err(service_error(e)),
+    }
+}
+
 /// What to make. `populate_room` and `update_room` name assignments (one task per assignment);
-/// `create_rls` names a library sheet and the rooms to make sheets for.
+/// `create_rls` names a library sheet and the rooms to make sheets for; `create_rls_set` is one task for a set
+/// of rooms and its layout.
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CreateBody {
@@ -132,6 +175,8 @@ pub enum CreateBody {
         #[serde(default)]
         tags: Option<TagRequest>,
     },
+    /// The sheets of ONE set of adjacent rooms, as a person laid them out in the composer (`rls_set_task`).
+    CreateRlsSet(SetTaskRequest),
     /// Bring rooms populated earlier back in line with their assignments' blueprints.
     UpdateRoom {
         assignment_ids: Vec<String>,
@@ -227,6 +272,16 @@ pub async fn http_create_tasks(
                 }
             }
         }
+        CreateBody::CreateRlsSet(request) => {
+            // one task for the whole set: its row names the lead room, or says why there is none
+            let (records, ctx) = set_inputs(&state, &projects, &project_id)?;
+            let subject = request.room_ids.join(",");
+            match set_task(&state, &project_id, &ctx, &records, &request) {
+                Ok(new) => out.push(queue(&projects, &project_id, &subject, new)),
+                Err(ServiceError::Invalid(reason)) => out.push(refusal(&subject, "", reason)),
+                Err(e) => return Err(service_error(e)),
+            }
+        }
         CreateBody::CreateRls { sheet_id, room_ids, phase: _, overwrite_rls, with_tags, sheet_size, depths, tags } => {
             let request = RlsRequest {
                 sheet_size,
@@ -237,8 +292,10 @@ pub async fn http_create_tasks(
             if room_ids.len() > MAX_ROOMS_PER_REQUEST {
                 return Err((StatusCode::BAD_REQUEST, format!("at most {MAX_ROOMS_PER_REQUEST} rooms at a time")));
             }
+            // the project's rooms and FF&E are read once for every room of the request (`rls_reads`)
+            let reads = RlsReads::new(&state, &project_id);
             for room_id in room_ids {
-                let room: RoomRef = match qualify_room(&state, &project_id, &room_id, None) {
+                let room: RoomRef = match reads.qualify(&room_id) {
                     Ok(Some(room)) => room,
                     Ok(None) => {
                         out.push(refusal(&room_id, "", "no such room in this project".to_string()));
@@ -250,15 +307,7 @@ pub async fn http_create_tasks(
                     }
                     Err(e) => return Err(service_error(e)),
                 };
-                match rls_from_sheet(
-                    &state,
-                    &projects,
-                    &project_id,
-                    &sheet_id,
-                    &room,
-                    crate::tasks::ROOM_OWN_PHASE,
-                    &request,
-                ) {
+                match rls_from_sheet_with(&reads, &projects, &sheet_id, &room, crate::tasks::ROOM_OWN_PHASE, &request) {
                     Ok(mut new) => {
                         if !with_tags {
                             new.tag_rules.clear();

@@ -582,7 +582,7 @@ target model's frame, mm. The Tasks button's sheet handler reads it (`room_m/rls
 - **Transfer is by the walls, and the wall is chosen by DIRECTION** (`elevation_facing::wall_of`, 2026-11-07): the wall the view looks at most
   squarely, in front of its line and across its width, the overlap breaking a tie between parallel walls. The depth never decides it: a far clip
   dragged to about the wall stopped 28.5 mm short on House A's WC 00.03 and the footprint rule (`faces`, still what `/elevations` lists) found
-  no wall. Template and target are read at the COARSE outline, the wall each elevation is of is mapped by the cyclic shift that fits the shapes (`best_shift`, no reflection), and then the marker
+  no wall. Template and target are read at the COARSE outline, the wall each elevation is of is mapped by the cyclic shift that fits the shapes (`rls_turn::wall_pairing`: no reflection, a tie of shape to the smaller turn), and then the marker
   keeps its fraction along the wall and its distance from it, each view's line ends and direction keep their offsets from the
   marker in the frame of the wall that view faces, and the **depth keeps its length** (a view shows a stretch of wall, not a
   share of the room). `depth_to_wall_mm` is how far the faced wall is, for a person who wants "to the room boundary".
@@ -605,8 +605,11 @@ plan rules keep theirs. The server (`rls_tags`) finds the rule for the way each 
 the plug-in adds it to the item's own point along the NEW view's `RightDirection`/`UpDirection` (`apply_geometry.elevation_head_ft`, `rls_write._elevation_tags`), because the item's height is
 Revit's to read. **Measured from the item's bounding-box CENTRE, not its insertion point** (2026-11-07): the extractor sends each tagged item's `centre` (`sheet_tags.attach_centres`, `tag_codes.centre_reader`), an elevation sample from it is `from_centre`, and so is a rule and the task's tag, which the plug-in adds to the middle of the item's box (`apply_geometry.elevation_reference_ft`). A family that lifts itself by a parameter keeps one insertion point at the level for every height: House A's WC has three towel rails at 900, 1200 and 1500 mm on one point, and the pooled rule stacked all three tags. Old samples are from the point and cannot be converted, so `reduce` uses only the centred samples when there are any; a rule stays from the point until its sheets are pushed again. A plan sample keeps the point (its offsets turn with the facing). The rule's leader (elbow and end, the same offsets) and its orientation (`Horizontal`/`Vertical`, which is how an elevation tag turns; an arbitrary angle is not settable) are applied too. An item an elevation shows and no rule covers stays a candidate, and `items_without_tags` says which: no elevation tag for the
 type code, or one for an item seen the other way. A chosen tag there is still placed along the line only. The tag export carries z (read in duHast `to_data_tag`: `TagHeadPosition` and the element's `Location.Point`, both 3D in mm), for **floor plan and elevation views only**
-(`view_ports_to_data` calls `get_tags_in_view` for those two; a section or 3D view's tags are not exported). **Not run in Revit.** **A nested component is tagged only when the library has a rule for its type code** (2026-11-07, `rls_tags::plan_tags`, `RoomItem::nested`): the task reads the room's items with `ItemScope::with_components`, whatever `[ffe] nested_components` says, because a person may tag a part (House A's WC: the shower rail `HYTP-100` nested in the shower), and that tag is the evidence the part is worth tagging; a part nobody tagged (a handle) is left out entirely, never a candidate nor listed untagged. Tagging a nested element from the plug-in **works in Revit** (2026-11-08). Computing it reads the room's FF&E (seconds on a large real project), so a request
-  without `with_tags` skips it. The tasks page does not show it yet; the plug-in does not read it.
+(`view_ports_to_data` calls `get_tags_in_view` for those two; a section or 3D view's tags are not exported). **Not run in Revit.** **A nested component is tagged only when the library has a rule for its type code** (2026-11-07, `rls_tags::plan_tags`, `RoomItem::nested`): the task reads the room's items with `ItemScope::with_components`, whatever `[ffe] nested_components` says, because a person may tag a part (House A's WC: the shower rail `HYTP-100` nested in the shower), and that tag is the evidence the part is worth tagging; a part nobody tagged (a handle) is left out entirely, never a candidate nor listed untagged. Tagging a nested element from the plug-in **works in Revit** (2026-11-08). Computing it reads the project's FF&E (seconds on a large real project), so a request
+  without `with_tags` skips it. **A create request reads the rooms and FF&E ONCE for all its rooms** (`service::rls_reads`, 2026-11-13): each
+  room used to read the rooms about six times and the FF&E twice; measured on a large real project, 200 rooms went from 215 s to 2.4 s with every
+  task identical. A new per-room read in `rls_from_sheet_with` goes through `RlsReads`, or that comes back. The tasks page does not show it yet; the plug-in places the plan and elevation tags from it (`rls_task._plan_tags`,
+  `_elevation_tags`).
 
 ## The RLS creation script: settings, task, duHast
 
@@ -680,12 +683,61 @@ checked before anything is made, then one transaction group per task (`duHast...
 - **Each kind of view has its own view name logic** (`view_name_plan` / `_elevation` / `_three_d` / `_schedule`, `rls_settings.VIEW_NAMES`, 2026-11-08), in that kind's group of the window: fixed text, `{Room Parameter}` and `{Seq_Counter}` (the view's place among its kind, elevations marker by marker, as for the titles). The elevation one must name `{Seq_Counter}` (`validate`), the 3D one is asked for only by a template with a 3D viewport, and two views of one sheet given one name abort (`VIEW_EXISTS`). **A model saved with the old single `view_name`** reads it per kind with the old endings (`with_view_names`: ` PLAN`, ` ELEV {Seq_Counter}`, ` 3D`, ` SCHEDULE`; an elevation was ` ELEV m-n` before) until the window saves it per kind, which drops `view_name`. The viewport type stays one setting for every kind. The schedule's FIRST filter is set to the room number. **Not run in Revit.**
 - **Each view's Title on Sheet comes from a template per kind** (`title_on_sheet_plan` / `_elevation` / `_three_d` / `_schedule`, in the model's `rls` settings, a "Title on sheet" section of the window): fixed text, `{Room Parameter}` and `{Seq_Counter}`, the viewport's place among the viewports of its kind on the sheet from 1 (elevations in the order they are named, marker by marker; the plan and the schedule are 1). `rls_task._title_renderer` fills it (a room parameter the room lacks aborts, as the naming logic does), `rls_write._title_on_sheet` writes it to `BuiltInParameter.VIEW_DESCRIPTION` (the API's `ParameterTypeId.ViewDescription`, "Title on Sheet") before the viewport is placed. Optional: empty keeps Revit's title (the view name); a view without the parameter or one that refuses it is a note, never an abort. `{Seq_Counter}` means nothing in the sheet number and name, and `validate` flags it there. Plug-in only; the server knows nothing of it. **Run in Revit** (2026-11-08); whether the schedule's was among those checked is not recorded.
   The plan view type is assumed to carry its view template; none is applied. Free-text sheet content, a number of sheets other than one per
-  task, FF&E placement, elevation tags and the rectangle round a chosen item are **not done**.
+  task, FF&E placement and the rectangle round a chosen item are **not done** (elevation tags are: `rls_write._elevation_tags`, from `rls.tags`).
 - **A plan view's crop keeps the template crop's offset from its room's bounding box on each side** (`rls_plan::plan_crop`, `rls.plan_crop`,
   2026-11-07): left, right, bottom, top, in mm, from the template room's box to this room's, so the room a sheet was made from gets its own crop back
   exactly (centring a crop of the template's size, never smaller than the room plus 600 mm, made it larger than the original). The first floor plan
   viewport is read, the one `rls_task` makes the plan from. Both boxes are axis-aligned in their model's frame, which is the crop's own frame only
   while the crop is not rotated (duHast exports its Min and Max, not its transform). A task without it crops round the room as before. **A new 3D view's section box takes the same footprint** in plan (its heights still follow the template's, below), so the plan and the 3D frame the same piece of the model. **Run in Revit** (2026-11-08).
+- **A room at an angle to its template gets a TURNED plan** (`rls_turn`, `rls.plan_crop.turn`, 2026-11-12): `angle_deg` (counter-clockwise, the view's
+  right direction from the model's x axis) and `by`. **The template's walls choose the turn, not the room's angle**: each wall is paired with this
+  room's (`wall_pairing`) and the turn is the pairs' mean difference in direction over the whole circle, because the room's angle names only the turn
+  within 45 degrees and at 45 rounding picked it (measured: -45 by the angle rule, +45 by the longest wall, a quarter turn apart). **A tie of shape goes
+  to the smaller turn** (a rectangle fits two ways a half turn apart; `best_shift` alone turned one at 30 degrees by -150, upside down), and the
+  elevations and a bound room tag are paired by the SAME `wall_pairing`, so plan, elevations and tag agree on which wall is which. A different coarse
+  edge count is squared up by the smallest turn (`by: room_angle`). Under `MIN_TURN_DEG` there is no turn, so square rooms are unchanged. The crop is
+  measured in the turned view's axes, and with a turn `min`/`max` are its corners BEFORE the turn (centre and size), so a plug-in that ignores `turn`
+  still crops the right size in the right place. The 3D views turn with it: the section box by the angle about its centre and the template's direction
+  by the same angle, and `rls_three_d` stands the eye where that camera is. **How Revit turns a plan, measured** (the rotated room probe, Revit 2026):
+  a plan IGNORES a turned `CropBox.Transform`; the element that draws the crop is the view's id + 2, carries the view's name and has **no category**
+  (so every `OST_Viewers` lookup finds nothing), and rotating it about the crop's centre turns the view (duHast `views_crop.rotate_view_crop`); a 3D
+  section box keeps a turned Transform. Rooms at 30 and -45 degrees came out square on the sheet. **The template's own plan is taken to be unturned**
+  (duHast exports no crop transform). **The plug-in** (`rls_task._plan_crop` reads `turn_deg`): `rls_write._turn_plan` crops round the
+  centre as before and then turns the view (a failure is a note, the crop stays right but unturned); each 3D view gets the turned direction
+  and up (`apply_geometry.turn_xy`, in the planner) and `rotation` for its section box, and its wall search covers the turned box
+  (`turned_extent`); a room tag placed by the plan-axes fallback offset turns that offset with the view. A task with no turn passes
+  duHast nothing new. **The turn has not been run in Revit from a task**, only the duHast functions.
+- **A SET of adjacent rooms (multi-room RLS) is previewed on the server, and nothing more is built yet** (`service::rls_set`,
+  `POST .../tasks/rls-set-preview`, 2026-11-13; the plan is the "Road map plan" tab of the blueprints plan). The rooms must be ONE group by the
+  server's own adjacency (`service::adjacency`: a shared wall, same level, the default wall tolerance) in one model; otherwise a finding names the
+  groups and there are no views. **The set is matched to library sheets as ONE room**: the smallest rectangle round the convex hull of all its
+  rooms' points, their summed area and items, which is how the extractor measures a sheet covering several rooms (`room_figures`), so
+  `sheet_suggest::Context::rank_sheets` ranks it with no new rule. The chosen sheet gives the scales and the plan's framing
+  (`rls_plan::plan_crop_turned` round every room, turned by `rls_turn::set_turn`: the walls of all the rooms together, smallest turn). Each room
+  gets four elevations square to ITS OWN walls, marker at its box's centre on slots 0/2/4/6 (west, north, east, south, as House A's markers),
+  as deep as the wall plus 300 mm and as tall as its clear height (`connectivity::clear_heights`, the route checks' rule; else 2700 mm and a
+  finding); a schedule per room and one 3D view at the template's paper size, marked `estimate` (rows and projection are Revit's). The lead room,
+  whose parameters will fill the set's own names on the plug-in side, is the LARGEST. **The composer is the RLS tool's `set` mode**
+  (`viewer/rlsSet.ts` rules, `app/RlsSetPanel.tsx`): rooms clicked on the plan, a first layout in rows, then a person drags views between
+  sheets and the list, adds and removes (empty) sheets and leaves views out. One view, one sheet, EXCEPT a schedule, which may be
+  placed whole on several sheets, once on each ("Place again"; decided 2026-11-14: repeated, never split). A paper
+  change moves nothing; what no longer fits is a finding. **A view too big for the paper at all** (the plan of a large set at
+  1:50) is its own finding (`too_big`), red and first, whether placed or waiting, naming the smallest A size that holds it or saying none does. The drawable area is the sheet less `MARGIN_MM` until the title block's is known.
+  **Save queues ONE `create_rls_set` task** (`service::rls_set_task`, 2026-11-14): the request sends only WHERE (view ids at their top
+  left corner); the server re-runs the preview from the same rooms and sheet, so every crop, line and size in the task is its own. A view
+  unknown, placed twice (a schedule: twice on one sheet), or neither placed nor left out, and an empty sheet, refuse the task (the layout IS the task); past the paper is
+  a finding. The task's `room` is the lead and `rls_set.rooms` all of them, lead first; each viewport is its CENTRE in mm from the
+  paper's bottom left, y up. One live set per room: two live set tasks may not share ANY room (`tasks::overlaps`), not only the lead.
+  **The plug-in makes it** (2026-11-14): the Tasks button's RLS handler plans a set with `rls_set_plan` (routed by kind from
+  `rls_task.check`) and writes it with `rls_set_write.RlsSetWriter`, an `RlsWriter` whose `_place_on` answers each viewport's own sheet
+  and centre; every other step (plan crop and turn, markers, 3D, titles, annotation crop, detail numbers per sheet, 2D grids) is the
+  single-room code. The whole set is ONE transaction group. **The paper's bottom left is taken to be the sheet's origin.** Naming:
+  the six SET templates (`rls_settings.SET_TEMPLATES`, a "Sets of rooms" group in the window, empty = the single-room one) read the
+  lead room, `{Rooms:P}` (every room's distinct values, ", ", lead first) and `{Sheet_Counter}` (required in the number when the
+  set has more than one sheet, else an abort); elevations and schedules keep the single-room templates from their own room,
+  `{Seq_Counter}` 1-4 within it. The rooms are tagged in the plan where Revit puts a tag; no item tags, and the 3D view hides no
+  walls (the single-room rule would hide the walls between the set's rooms). The set's plan left out means no elevations (a
+  marker needs a plan view): a planner warning. **Not run in Revit.**
 - **Each new elevation can get a 2D grid along its bottom** (`elevation_grid`, "Place 2D grid" in the window's Elevation group: a line based detail family, `FamilyPlacementType.CurveBasedDetail`, listed as "Family : Type" by `rls_settings.line_detail_family_names`). It runs from the crop's bottom left corner to its bottom right, so it is as long as the elevation is wide (`rls_write._bottom_edge`), and is placed by duHast's `place_a_line_based_detail_family_instance_in_view`. **It is the sheet's LAST step**, after every tag, and **never stops the sheet**: the whole step and each elevation are their own try, and a failure, a family the model lacks or a duHast too old to have the function is a note (`rls_write._elevation_grids`). A family the model lacks is also a planner warning (`NO_ELEVATION_GRID`) and a settings warning. Not set: no grid. **Run in Revit** (2026-11-08).
 - **An elevation is cropped to the template view's height** (`height_mm`, from the view's crop box, measured up from where the new crop's bottom already is), so a tall neighbouring room does not make it tall; a new 3D view has Crop View on.
 - **What Revit does with an elevation marker, measured (2026-11-01, all of it matters to `rls_write` and duHast).** The marker has NO point (`Location` is the
@@ -702,7 +754,7 @@ checked before anything is made, then one transaction group per task (`duHast...
 - **The Revit calls live in duHast** (PR in the duHast repo): `Family/family_symbol_lookup`, `Views/views_names`, `viewports_create`,
   `schedules_create`, `elevation_marker`, `Annotation/independent_tags_create`, `Rooms/room_tags_create` and `Common/transaction.in_transaction_group`,
   plus fixes to `sheets_create` (unicode text, activate the title block), `plan_view_create` and `elevation_view_create` (optional phase, the crop went to
-  the plan view). **`extractor/duhast.lock` is at `b5767658`**, duHast release `v1.0.5+net8` (2026-11-08), which has all of these and `Family/family_instance_create.place_a_line_based_detail_family_instance_in_view` for the 2D grid; `-DuHastPath` is for a duHast newer still.
+  the plan view). **`extractor/duhast.lock` is at `abbbebef`** (2026-11-12: duHast release `v1.0.5+net8` plus PR #116, `views_crop.rotate_view_crop` and a turned 3D section box), which has all of these and `Family/family_instance_create.place_a_line_based_detail_family_instance_in_view` for the 2D grid; `-DuHastPath` is for a duHast newer still.
 
 ## Tag rules: where a tag goes, learned from tags in Revit views
 
@@ -743,7 +795,7 @@ the Tasks button's sheet handler places tags** from the server's tag plan (`rls.
   cannot be read, and the plug-in applies it as it always did.
 - **A room tag is written against the room's BOUNDARY, not its middle** (`service::room_tag_place`, `Boundary`). A bound rule uses
   the wall recipe against the COARSE outline of the room the sheet was made for (`record.room`): the nearest edge, the fraction
-  along it, paper mm into the room, carried to another room by `best_shift` and refusing a different coarse edge count as the
+  along it, paper mm into the room, carried to another room by `wall_pairing` (the elevations' and the plan turn's pairing) and refusing a different coarse edge count as the
   elevations do. A generic rule uses the smallest rectangle round the room (four sides in a fixed order, long axis towards +x),
   which works for any shape. The server turns the recipe into a place in THIS room when the task is made (`rls.room_tag.head`, model
   frame, mm) and the sheet handler uses it; a rule learned while its room was not on the server has no boundary and keeps the

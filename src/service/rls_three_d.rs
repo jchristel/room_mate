@@ -5,7 +5,8 @@
 //! camera: the plug-in makes each 3D view looking along the template view's `forward_direction` at a section box
 //! cut to the plan crop (`rls_plan::plan_crop`, else the room's box plus the margin), and duHast's
 //! `view_3d_create` puts the eye back along that direction from the box's centre. So the eye in plan is computed
-//! here the same way, and the old plug-in rule (`room_m.view_walls.walls_to_hide`) runs on the room's outline:
+//! here the same way (exactly when the template carries its section box heights; without them the box's height is
+//! unknown here and left out), and the old plug-in rule (`room_m.view_walls.walls_to_hide`) runs on the room's outline:
 //! an edge the line from the eye to the room's middle crosses, and every edge facing the camera (the camera on its
 //! outside by [`FACING`] of the distance, about 3 degrees), so from a corner both walls of the corner go.
 //!
@@ -19,11 +20,15 @@
 //!
 //! Only the outer loop is judged (`model_room_ring` reads no holes), so a column's walls are never hidden from
 //! here. Positions are in the TARGET model's own frame, mm.
+//!
+//! **A turned plan turns the 3D views with it** (`rls_plan::PlanCrop::turn`): the plug-in turns the section box by
+//! the plan's turn about its centre and the template's direction by the same angle, so the camera looks at the
+//! same walls of this room as the template's looked at of its room. The eye here is turned the same way.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::blueprint_geometry::{dot, sub, Pt};
+use super::blueprint_geometry::{dot, rotate, sub, Pt};
 use super::rls_plan::PlanCrop;
 use super::rls_tags::RoomItem;
 
@@ -155,15 +160,22 @@ pub fn three_ds(sheet: &Value, ring: &[Pt], crop: Option<&PlanCrop>, items: &[Ro
         ),
     };
     let centre = ((box_lo.0 + box_hi.0) / 2.0, (box_lo.1 + box_hi.1) / 2.0);
-    let ports = sheet.get("view_ports").and_then(Value::as_array).cloned().unwrap_or_default();
+    let turn = crop.and_then(|c| c.turn).map_or(0.0, |t| t.angle_deg);
+    let ports: &[Value] = sheet.get("view_ports").and_then(Value::as_array).map_or(&[], Vec::as_slice);
     ports
         .iter()
         .filter(|p| is_three_d(p))
         .enumerate()
         .map(|(n, port)| {
             let view = port.get("view");
-            let forward = xyz(view.and_then(|v| v.get("forward_direction")));
-            // the plug-in stands the camera back twice the box's diagonal; its height is the template's
+            let forward = xyz(view.and_then(|v| v.get("forward_direction"))).map(|f| {
+                let (x, y) = rotate((f[0], f[1]), turn);
+                [x, y, f[2]]
+            });
+            // duHast stands the camera back twice the box's 3D diagonal along the UNIT direction, so in plan it is
+            // that distance times the direction's share in plan. The box's height is the template's; without it
+            // the server cannot know it (a room carries no height) and leaves it out, which puts the eye a little
+            // nearer than the plug-in's: approximate, and only a borderline wall can come out differently.
             let heights = view.and_then(|v| v.get("section_z_above_floor_mm"));
             let dz = heights
                 .and_then(|h| Some(h.get("max")?.as_f64()? - h.get("min")?.as_f64()?))
@@ -171,8 +183,9 @@ pub fn three_ds(sheet: &Value, ring: &[Pt], crop: Option<&PlanCrop>, items: &[Ro
             let (dx, dy) = (box_hi.0 - box_lo.0, box_hi.1 - box_lo.1);
             let distance = 2.0 * (dx * dx + dy * dy + dz * dz).sqrt();
             let eye = forward.and_then(|f| {
-                let len = (f[0] * f[0] + f[1] * f[1]).sqrt();
-                (len > 1e-6).then(|| (centre.0 - f[0] / len * distance, centre.1 - f[1] / len * distance))
+                let plan = (f[0] * f[0] + f[1] * f[1]).sqrt();
+                let len = (plan * plan + f[2] * f[2]).sqrt();
+                (plan > 1e-6).then(|| (centre.0 - f[0] / len * distance, centre.1 - f[1] / len * distance))
             });
             let hide = eye.map(|e| edges_to_hide(e, looks_at, ring)).unwrap_or_default();
             let see_through = items
@@ -281,8 +294,40 @@ mod tests {
             min: [-1000.0, -1000.0],
             max: [3000.0, 3000.0],
             offsets_mm: super::super::rls_plan::CropOffsets { left: 0.0, right: 0.0, bottom: 0.0, top: 0.0 },
+            turn: None,
         };
         let p = &three_ds(&sheet([0.0, 1.0, -1.0]), &room(), Some(&crop), &[])[0];
         assert!((p.eye[0] - 1000.0).abs() < 1e-6, "{:?}", p.eye);
+    }
+
+    /// duHast puts the eye twice the box's 3D diagonal back along the UNIT direction, so a view looking down at 45
+    /// degrees has its eye only cos 45 of that distance away in plan.
+    #[test]
+    fn the_eye_is_as_far_back_in_plan_as_duhast_puts_it() {
+        let crop = PlanCrop {
+            min: [0.0, 0.0],
+            max: [4000.0, 3000.0],
+            offsets_mm: super::super::rls_plan::CropOffsets { left: 0.0, right: 0.0, bottom: 0.0, top: 0.0 },
+            turn: None,
+        };
+        let p = &three_ds(&sheet([0.0, 1.0, -1.0]), &room(), Some(&crop), &[])[0];
+        let diagonal = (4000.0f64.powi(2) + 3000.0f64.powi(2) + 3300.0f64.powi(2)).sqrt();
+        let back = 2.0 * diagonal * std::f64::consts::FRAC_1_SQRT_2;
+        assert!((p.eye[1] - (1500.0 - back)).abs() < 1e-6, "{:?}", p.eye);
+    }
+
+    /// A plan turned a quarter turns the camera with it: a template looking north at its room looks west at this
+    /// one, so the east wall is the near one.
+    #[test]
+    fn a_turned_plan_turns_the_camera_by_the_same_angle() {
+        let crop = PlanCrop {
+            min: [0.0, 0.0],
+            max: [4000.0, 3000.0],
+            offsets_mm: super::super::rls_plan::CropOffsets { left: 0.0, right: 0.0, bottom: 0.0, top: 0.0 },
+            turn: Some(super::super::rls_turn::ViewTurn { angle_deg: 90.0, by: super::super::rls_turn::TurnBy::Walls }),
+        };
+        let p = &three_ds(&sheet([0.0, 1.0, -1.0]), &room(), Some(&crop), &[])[0];
+        assert!(p.eye[0] > 4000.0 && (p.eye[1] - 1500.0).abs() < 1e-6, "{:?}", p.eye);
+        assert_eq!(vec![[[4000.0, 0.0], [4000.0, 3000.0]]], p.hide);
     }
 }

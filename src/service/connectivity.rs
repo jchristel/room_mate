@@ -236,6 +236,45 @@ fn ceiling_heights(
     Ok(heights)
 }
 
+/// Where a room's clear height came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HeightFrom {
+    Ceiling,
+    RoomProperty,
+}
+
+/// The clear height, mm, of each of `wanted` that has one, by the rule the route size checks use: the lowest ceiling
+/// covering enough of the room ([`ceiling_heights`], when the project reads heights from ceilings), else the room's
+/// height property (`[routing] room_height_property`). Shared so a room layout sheet set (`rls_set`) cuts its
+/// elevations to the height a route through the room is checked against, never a second answer.
+pub(super) fn clear_heights(
+    state: &AppState,
+    project: &str,
+    rooms: &super::rooms::RoomsResult,
+    wanted: &[RoomRef],
+) -> Result<BTreeMap<RoomRef, (f64, HeightFrom)>, ServiceError> {
+    let policy = state.settings().settings_for(project).map(|b| b.routing.clone()).unwrap_or_default();
+    let from_ceilings = if policy.room_height_from_ceilings {
+        ceiling_heights(state, project, None)?
+    } else {
+        BTreeMap::new()
+    };
+    let key = norm(policy.room_height_property());
+    let mut out = BTreeMap::new();
+    for room in wanted {
+        if let Some(&h) = from_ceilings.get(room) {
+            out.insert(room.clone(), (h, HeightFrom::Ceiling));
+            continue;
+        }
+        let found = rooms.rooms.iter().find(|r| r.model_id == room.model_id && r.room.id == room.room_id);
+        if let Some(h) = found.and_then(|r| property_mm(&r.room.properties, &[key.as_str()])) {
+            out.insert(room.clone(), (h, HeightFrom::RoomProperty));
+        }
+    }
+    Ok(out)
+}
+
 /// One node per room, each carrying its clear height: from a ceiling when one covers it,
 /// else from the room's height property.
 fn room_nodes(

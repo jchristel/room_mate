@@ -936,7 +936,7 @@ def _settings_state(settings, options):
 
 
 def _rls_group(project, selected_doc, tasks, forms, output):
-    """The `rls` handler: make a room layout sheet for each create_rls task.
+    """The `rls` handler: make a room layout sheet for each create_rls task, and the sheets of each create_rls_set task.
 
     The model's RLS settings come first (extensible storage). Missing or incomplete ones open the
     settings window; if they are still incomplete the tasks are reported aborted, never left claimed.
@@ -965,7 +965,18 @@ def _rls_group(project, selected_doc, tasks, forms, output):
 
     task_log.step("rls: reading the model for {} task(s)".format(len(tasks)))
     facts = RlsFacts(selected_doc)
-    writer = RlsWriter(selected_doc, facts)
+    single = RlsWriter(selected_doc, facts)
+    sets = []
+
+    def writer(verdict):
+        # a set of rooms (`create_rls_set`) is planned with `set` in its plan, and written by its own writer
+        if (verdict.get("plan") or {}).get("set"):
+            if not sets:
+                from room_m.rls_set_write import RlsSetWriter
+                sets.append(RlsSetWriter(selected_doc, facts))
+            return sets[0](verdict)
+        return single(verdict)
+
     return _run_claimed_tasks(
         project, tasks, facts, writer, forms, output, "sheets",
         planner=lambda claimed: rls_task.plan_tasks(claimed, settings, facts))

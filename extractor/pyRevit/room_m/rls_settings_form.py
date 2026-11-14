@@ -9,7 +9,7 @@ survives this one saving.
 """
 
 from room_m import detail_numbers
-from room_m.rls_template import SEQ_COUNTER, TOKEN
+from room_m.rls_template import ROOMS_PREFIX, SEQ_COUNTER, SHEET_COUNTER, TOKEN, rooms_parameter
 from room_m.textutil import is_text
 
 NOT_SET = "(not set)"
@@ -44,7 +44,18 @@ TEXTS = [
     ("tb_title_elevation", "title_on_sheet_elevation"),
     ("tb_title_three_d", "title_on_sheet_three_d"),
     ("tb_title_schedule", "title_on_sheet_schedule"),
+    ("tb_set_sheet_number", "set_sheet_number"),
+    ("tb_set_sheet_name", "set_sheet_name"),
+    ("tb_set_view_name_plan", "set_view_name_plan"),
+    ("tb_set_view_name_three_d", "set_view_name_three_d"),
+    ("tb_set_title_plan", "set_title_on_sheet_plan"),
+    ("tb_set_title_three_d", "set_title_on_sheet_three_d"),
 ]
+
+# The boxes of a SET's templates (`rls_settings.SET_TEMPLATES`): they offer `{Rooms:Parameter}`, and the sheet ones
+# `{Sheet_Counter}`.
+SET_BOXES = set(name for name, key in TEXTS if key.startswith("set_"))
+_SHEET_COUNTER_BOXES = set(["tb_set_sheet_number", "tb_set_sheet_name"])
 
 # The Title on Sheet templates, one per kind of view (`rls_task` fills them, `rls_write` writes them to the view's
 # Title on Sheet). Optional: an empty one leaves Revit's own title (the view name). They take `{Seq_Counter}` too.
@@ -131,7 +142,11 @@ def token_labels(parameters):
 
 def tokens_for(name, parameters):
     """The names a text box's token combo offers: the room parameters, and `Seq_Counter` first for a view name or
-    Title on Sheet box (the only templates it means anything in)."""
+    Title on Sheet box (the only templates it means anything in). A set's box offers `Sheet_Counter` (its sheet number
+    and name) and every parameter again as `Rooms:Parameter`."""
+    if name in SET_BOXES:
+        rooms = [ROOMS_PREFIX + p for p in parameters or []]
+        return ([SHEET_COUNTER] if name in _SHEET_COUNTER_BOXES else []) + list(parameters or []) + rooms
     return ([SEQ_COUNTER] if name in _SEQ_BOXES else []) + list(parameters or [])
 
 
@@ -156,6 +171,21 @@ def unknown_tokens(template, parameters, extra=()):
         return []
     known = set(p.strip().lower() for p in list(parameters) + list(extra))
     return [t for t in TOKEN.findall(template or "") if t.strip().lower() not in known]
+
+
+def unknown_set_tokens(template, parameters, sheet_counter):
+    """`unknown_tokens` for a set's template: `{Rooms:P}` is known when `P` is, and `{Sheet_Counter}` when
+    `sheet_counter` (the set's sheet number and name). `{Seq_Counter}` is let through here and judged by the caller."""
+    if not parameters:
+        return []
+    known = set(p.strip().lower() for p in list(parameters) + [SEQ_COUNTER] + ([SHEET_COUNTER] if sheet_counter else []))
+    out = []
+    for t in TOKEN.findall(template or ""):
+        inner = rooms_parameter(t)
+        name = inner if inner is not None else t
+        if name.strip().lower() not in known:
+            out.append(t)
+    return out
 
 
 def problems(settings, parameters, options=None):

@@ -51,7 +51,7 @@ pub const OVERLAP_PEN_MM: f64 = 5.0;
 /// absolute log edge-length ratios, so 1.0 is about 10% per edge over nine edges.
 pub const FIT_OK: f64 = 1.0;
 /// Two rotations whose shape costs differ by less than this are a tie that doors may break.
-const SHAPE_TIE: f64 = 0.15;
+pub(super) const SHAPE_TIE: f64 = 0.15;
 /// A turn angle differing by more than this is a different corner.
 const TURN_TOLERANCE_DEG: f64 = 25.0;
 /// What a mismatched turn adds to the cost: enough to rule a shift out on its own.
@@ -276,14 +276,16 @@ fn shape_cost(a: &[Edge], ta: &[f64], b: &[Edge], tb: &[f64], shift: usize) -> f
         .sum()
 }
 
-/// The shift with the lowest shape cost, and that cost.
-pub(super) fn best_shift(a: &[Pt], b: &[Pt]) -> (usize, f64) {
+/// The shape cost of every cyclic shift of `b`'s edges against `a`'s, in shift order.
+pub(super) fn shift_costs(a: &[Pt], b: &[Pt]) -> Vec<(usize, f64)> {
     let (ea, eb) = (edges(a), edges(b));
     let (ta, tb) = (turns(a), turns(b));
-    (0..ea.len())
-        .map(|s| (s, shape_cost(&ea, &ta, &eb, &tb, s)))
-        .min_by(|x, y| x.1.total_cmp(&y.1))
-        .unwrap_or((0, f64::MAX))
+    (0..ea.len()).map(|s| (s, shape_cost(&ea, &ta, &eb, &tb, s))).collect()
+}
+
+/// The shift with the lowest shape cost, and that cost.
+pub(super) fn best_shift(a: &[Pt], b: &[Pt]) -> (usize, f64) {
+    shift_costs(a, b).into_iter().min_by(|x, y| x.1.total_cmp(&y.1)).unwrap_or((0, f64::MAX))
 }
 
 /// The ring reflected across the x axis, still counter-clockwise.

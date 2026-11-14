@@ -166,3 +166,111 @@ fn test_solve_picks_the_sheet_whose_room_is_the_same_size() {
     );
     std::fs::remove_dir_all(projects.parent().unwrap()).ok();
 }
+
+/// A room layout sheet SET (`rls_set`): OFFICE 00.02 and WC 00.03 share a wall and make one; OFFICE and GARAGE 00.04
+/// do not. The library sheet is made here (the sample has none) with the OFFICE as its room, so the plan keeps that
+/// sheet's framing round both rooms.
+#[test]
+fn test_two_adjacent_rooms_make_a_set_and_two_apart_do_not() {
+    use crate::service::rls_set::{preview, SetRequest};
+    use crate::service::sheet_suggest;
+    use crate::sheets::SheetRecord;
+    let (state, projects) = booted("rls-set");
+    let ctx = sheet_suggest::context(&state, PROJECT).unwrap().expect("rooms");
+    let office = ctx.rooms().rooms.iter().find(|r| r.room.id == "2626834").expect("OFFICE 00.02");
+    let sheet: SheetRecord = serde_json::from_value(serde_json::json!({
+        "schema_version": 1, "id": "office", "taken_at": "", "revit_sheet_id": "1", "document_title": "D",
+        "sheet_number": "50H-00.02", "sheet_name": "OFFICE", "received_at": "",
+        "room": {"model_id": office.model_id, "room_id": "2626834"},
+        "room_summary": {"x_mm": 4500.0, "y_mm": 3700.0, "area_m2": 16.7, "items": 20},
+        "sheet": {"view_ports": [
+            {"vp_type": "floor plan", "view": {"view_scale": 50.0,
+                "bounding_box": {"min_x": -100000.0, "min_y": -100000.0, "max_x": 100000.0, "max_y": 100000.0}}},
+            {"vp_type": "elevation", "view": {"view_scale": 25.0}},
+            {"vp_type": "schedule", "bounding_box": {"min_x": 0.0, "min_y": 0.0, "max_x": 133.0, "max_y": 65.0}}
+        ]}
+    }))
+    .expect("a sheet record");
+    let ask = |ids: &[&str]| {
+        let request = SetRequest { room_ids: ids.iter().map(|s| s.to_string()).collect(), sheet_id: None };
+        preview(&state, PROJECT, &ctx, std::slice::from_ref(&sheet), &request).unwrap()
+    };
+
+    let set = ask(&["2626836", "2626834"]);
+    assert!(set.valid, "{:?}", set.findings);
+    assert_eq!(Some("2626834".to_string()), set.lead_room, "the larger room leads");
+    assert_eq!(Some("office".to_string()), set.sheet_id);
+    let views = set.views.expect("views");
+    assert_eq!(8, views.elevations.len(), "four per room");
+    assert!(
+        views.elevations.iter().all(|e| e.scale == 25.0),
+        "the elevations take the sheet's elevation scale"
+    );
+    assert_eq!(2, views.schedules.len());
+    assert!(set.rooms.iter().all(|r| r.height_mm > 2000.0), "{:?}", set.rooms);
+    assert!(views.plan.scale == 50.0 && views.plan.paper_mm.iter().all(|&mm| mm > 0.0));
+
+    let apart = ask(&["2626834", "2626844"]);
+    assert!(!apart.valid && apart.views.is_none());
+    assert!(apart.findings.iter().any(|f| f["kind"] == "not_adjacent"), "{:?}", apart.findings);
+
+    // The composer's layout becomes ONE task: every view but the OFFICE's west elevation, on two A1 sheets.
+    use crate::service::rls_set_task::{set_task, PlacedView, SetTaskRequest, SetViewKind, SheetLayout};
+    let at = |view: &str, x_mm: f64| PlacedView { view: view.to_string(), x_mm, y_mm: 20.0 };
+    let mut second: Vec<PlacedView> = Vec::new();
+    for (i, e) in views.elevations.iter().enumerate() {
+        let id = format!("elevation:{}:{}", e.room_id, e.marker_index);
+        if id != "elevation:2626834:0" {
+            second.push(at(&id, 20.0 + 90.0 * i as f64));
+        }
+    }
+    let request = SetTaskRequest {
+        room_ids: vec!["2626836".to_string(), "2626834".to_string()],
+        sheet_id: "office".to_string(),
+        sheet_size: "a1".to_string(),
+        overwrite_rls: false,
+        sheets: vec![
+            SheetLayout {
+                views: vec![
+                    at("plan", 20.0),
+                    at("schedule:2626834", 300.0),
+                    at("schedule:2626836", 500.0),
+                ],
+            },
+            SheetLayout { views: second },
+        ],
+        left_out: vec!["elevation:2626834:0".to_string()],
+    };
+    let new = set_task(&state, PROJECT, &ctx, std::slice::from_ref(&sheet), &request).expect("a set task");
+    assert_eq!("2626834", new.room.room_id, "the task's room is the lead");
+    let plan = new.rls_set.as_ref().expect("the set's plan");
+    assert_eq!(
+        vec!["2626834", "2626836"],
+        plan.rooms.iter().map(|r| r.room_id.as_str()).collect::<Vec<_>>()
+    );
+    assert_eq!(
+        vec![3, 4],
+        plan.markers.iter().map(|m| m.views.len()).collect::<Vec<_>>(),
+        "the left-out elevation is not made"
+    );
+    assert_eq!(2, plan.sheets.len());
+    let first = &plan.sheets[0].views[0];
+    assert_eq!(SetViewKind::Plan, first.kind);
+    assert_eq!(
+        [
+            20.0 + views.plan.paper_mm[0] / 2.0,
+            594.0 - (20.0 + views.plan.paper_mm[1] / 2.0)
+        ],
+        first.centre_mm,
+        "a centre from the bottom left"
+    );
+    assert!(plan.plan.is_some() && !plan.three_d, "the sheet has no 3D viewport to give");
+
+    let mut missing = request.clone();
+    missing.left_out.clear();
+    assert!(
+        matches!(set_task(&state, PROJECT, &ctx, std::slice::from_ref(&sheet), &missing), Err(crate::service::ServiceError::Invalid(m)) if m.contains("elevation:2626834:0")),
+        "a view neither placed nor left out refuses the layout"
+    );
+    std::fs::remove_dir_all(projects.parent().unwrap()).ok();
+}

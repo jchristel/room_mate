@@ -2,7 +2,7 @@
 
 import type { RuleKey } from "../library/types.js";
 
-export type TaskKind = "populate_room" | "create_rls" | "update_room";
+export type TaskKind = "populate_room" | "create_rls" | "update_room" | "create_rls_set";
 
 /** What an update changes: the items (add, remove, change, move) or only where they are. */
 export type UpdateMode = "items" | "locations";
@@ -50,6 +50,8 @@ export interface TaskSummary {
   updated_at: string;
   attempts: number;
   last_messages?: string[];
+  /** `create_rls_set`: every room of the set, the lead (also `room`) first. */
+  set_rooms?: TaskRoom[];
 }
 
 export interface TaskItem {
@@ -108,8 +110,10 @@ export interface TagRule {
   sample_count: number;
 }
 
-export interface Task extends Omit<TaskSummary, "items" | "sheets" | "tag_rules" | "findings" | "attempts" | "last_messages"> {
+export interface Task extends Omit<TaskSummary, "items" | "sheets" | "tag_rules" | "findings" | "attempts" | "last_messages" | "set_rooms"> {
   library_sheet_id?: string;
+  /** `create_rls_set`: the rooms (lead first), the paper and the sheets as laid out (`service::rls_set_task`). */
+  rls_set?: { sheet_size: string; lead_room: string; rooms: TaskRoom[]; sheets: { views: unknown[] }[] };
   items: TaskItem[];
   sheets: TaskSheet[];
   tag_rules: TagRule[];

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { canDismiss, canResend, countByState, findingText, modelsOf, needsAttention, newestFirst, shortTime } from "./model.js";
+import { canDismiss, canResend, countByState, findingText, modelsOf, needsAttention, newestFirst, roomsLabel, shortTime } from "./model.js";
 import type { TaskSummary } from "./types.js";
 
 const row = (id: string, state: TaskSummary["state"], model = "m", at = "2026-10-20T09:00:00Z"): TaskSummary => ({
@@ -63,5 +63,12 @@ describe("findings and times", () => {
 
   it("shortens a timestamp", () => {
     expect(shortTime("2026-10-20T09:10:22.430142Z")).toBe("2026-10-20 09:10");
+  });
+
+  it("names a set by its lead room and how many more", () => {
+    const room = (name: string) => ({ room_id: name, name });
+    expect(roomsLabel({ room: room("OFFICE") })).toBe("OFFICE");
+    expect(roomsLabel({ room: room("OFFICE"), set_rooms: [room("OFFICE"), room("WC")] })).toBe("OFFICE + 1 room");
+    expect(roomsLabel({ room: room("OFFICE"), set_rooms: [room("OFFICE"), room("WC"), room("HALL")] })).toBe("OFFICE + 2 rooms");
   });
 });

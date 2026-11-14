@@ -16,16 +16,16 @@ use serde_json::{json, Value};
 use super::blueprint_capture::{properties_of, FT_TO_MM};
 use super::blueprint_geometry::Pt;
 use super::blueprint_resolve::{resolve_in_room_with, EdgeMap};
-use super::elevation_facing::model_room_ring;
-use super::items::{assemble_items, ItemScope};
+use super::elevation_facing::model_room_ring_in;
 use super::placement;
 use super::rls_plan::{check_size, has_elevations, plan_crop, size_token, transfer, MarkerPlan, RlsPlan, RlsRequest};
+use super::rls_reads::RlsReads;
 use super::rls_tag_place::room_tag_head;
 use super::rls_tags::{plan_tags, type_code_of, RoomItem};
 use super::rls_three_d::{has_three_d, three_ds};
 use super::room_locator::RoomRef;
-use super::rooms::{assemble_rooms, RoomScope};
-use super::sheet_suggest::{distance, room_summary, Signature};
+use super::rooms::{assemble_rooms, RoomScope, RoomsResult};
+use super::sheet_suggest::{distance, room_summary_in, Signature};
 use super::ServiceError;
 use crate::assignments::{Assignment, Mapping};
 use crate::blueprints::{self, BlueprintError};
@@ -81,7 +81,12 @@ fn room_facts(state: &AppState, project: &str, room: &RoomRef) -> Result<Option<
     let Some(rooms) = assemble_rooms(state, &RoomScope { project: Some(project), ..Default::default() })? else {
         return Ok(None);
     };
-    Ok(rooms
+    Ok(room_facts_in(&rooms, room))
+}
+
+/// [`room_facts`] over the project's rooms already read.
+pub(super) fn room_facts_in(rooms: &RoomsResult, room: &RoomRef) -> Option<TaskRoom> {
+    rooms
         .rooms
         .iter()
         .find(|r| r.model_id == room.model_id && r.room.id == room.room_id)
@@ -94,7 +99,7 @@ fn room_facts(state: &AppState, project: &str, room: &RoomRef) -> Result<Option<
                 .map(|v| v.value.trim().to_string())
                 .filter(|n| !n.is_empty()),
             name: r.room.name.clone(),
-        }))
+        })
 }
 
 /// What a stored mapping asks of the resolver.
@@ -214,6 +219,7 @@ pub fn populate_from_assignment(
     };
     Ok(NewTask {
         rls: None,
+        rls_set: None,
         kind: TaskKind::PopulateRoom,
         update_mode: None,
         dry_run: false,
@@ -370,10 +376,9 @@ pub fn update_from_assignment(
 /// marked `nested`, whatever the project's `[ffe] nested_components` says: `rls_tags::plan_tags` keeps one only when
 /// the library has a rule for its type code, because a person tagged one of those (a shower rail nested in its
 /// shower) and a part nobody tagged (a handle) must never be offered.
-fn room_items(state: &AppState, project: &str, room: &RoomRef, parameter: &str) -> Result<Vec<RoomItem>, ServiceError> {
-    let to_model = project_to_model(state, project, &room.model_id)?;
-    let scope = ItemScope { project: Some(project), with_components: true, ..Default::default() };
-    let Some(ffe) = assemble_items(state, &scope)? else {
+fn room_items(reads: &RlsReads, room: &RoomRef, parameter: &str) -> Result<Vec<RoomItem>, ServiceError> {
+    let to_model = project_to_model(reads.state, reads.project, &room.model_id)?;
+    let Some(ffe) = reads.ffe()? else {
         return Ok(Vec::new());
     };
     let no_tier = crate::contract::PropertyMap::new();
@@ -420,11 +425,11 @@ fn sheet_for_rules(record: &sheets::SheetRecord) -> BlueprintSheet {
     }
 }
 
-/// Where the template's elevation markers and views go in this room (`service::rls_plan`), with a
-/// finding for whatever could not be placed.
 /// The template room's outline and this room's, either absent when the room is not on the server.
 type Rings = (Option<Vec<Pt>>, Option<Vec<Pt>>);
 
+/// Where the template's elevation markers and views go in this room (`service::rls_plan`), with a
+/// finding for whatever could not be placed.
 fn place_elevations(
     rings: &Rings,
     record: &sheets::SheetRecord,
@@ -459,29 +464,35 @@ fn place_elevations(
 
 /// The template room's outline and this room's, each in its own model's frame (the sheet's numbers are), read once
 /// for the elevations and the plan crop.
-fn template_and_target(
-    state: &AppState,
-    project: &str,
-    room: &RoomRef,
-    record: &sheets::SheetRecord,
-) -> Result<Rings, ServiceError> {
+fn template_and_target(reads: &RlsReads, room: &RoomRef, record: &sheets::SheetRecord) -> Result<Rings, ServiceError> {
+    let Some(rooms) = reads.rooms()? else {
+        return Ok((None, None));
+    };
+    let ring = |r: &SheetRoom| model_room_ring_in(reads.state, reads.project, rooms, r);
     let template = match &record.room {
-        Some(r) => model_room_ring(state, project, r)?,
+        Some(r) => ring(r)?,
         None => None,
     };
-    Ok((template, model_room_ring(state, project, &SheetRoom::from(room))?))
+    Ok((template, ring(&SheetRoom::from(room))?))
 }
 
 /// A warning, never a refusal, when the room the sheet was made for (by the figures it stored at push) is far from
 /// this one.
 fn room_size_finding(
-    state: &AppState,
-    project: &str,
+    reads: &RlsReads,
     room: &RoomRef,
     record: &sheets::SheetRecord,
     findings: &mut Vec<Value>,
 ) -> Result<(), ServiceError> {
-    match (record.room_summary, room_summary(state, project, room)?) {
+    // the item count reads the FF&E, so only when there is a stored summary to compare it with
+    let target = match (record.room_summary, reads.rooms()?) {
+        (Some(_), Some(rooms)) => match room_summary_in(rooms, room, 0) {
+            Some(_) => room_summary_in(rooms, room, reads.item_count(room)?),
+            None => None,
+        },
+        _ => None,
+    };
+    match (record.room_summary, target) {
         (Some(stored), Some(target)) => {
             let (_, d) = distance(&Signature::from(target), &Signature::from(stored));
             if d > RLS_ROOM_WARN_DISTANCE {
@@ -521,6 +532,20 @@ pub fn rls_from_sheet(
     phase: &str,
     request: &RlsRequest,
 ) -> Result<NewTask, ServiceError> {
+    rls_from_sheet_with(&RlsReads::new(state, project), projects_dir, sheet_id, room, phase, request)
+}
+
+/// [`rls_from_sheet`] over the project's rooms and FF&E read once (`rls_reads`): a request for many rooms makes
+/// every task from the same reads.
+pub fn rls_from_sheet_with(
+    reads: &RlsReads,
+    projects_dir: &std::path::Path,
+    sheet_id: &str,
+    room: &RoomRef,
+    phase: &str,
+    request: &RlsRequest,
+) -> Result<NewTask, ServiceError> {
+    let (state, project) = (reads.state, reads.project);
     let sheet_size = match request.sheet_size.as_deref().map(check_size).transpose() {
         Ok(size) => size,
         Err(reason) => return refuse(reason),
@@ -537,12 +562,12 @@ pub fn rls_from_sheet(
         let size = record.size_mm.as_ref()?;
         size_token(size.width_mm, size.height_mm).map(str::to_string)
     });
-    let Some(task_room) = room_facts(state, project, room)? else {
+    let Some(task_room) = reads.rooms()?.and_then(|rooms| room_facts_in(rooms, room)) else {
         return refuse("the room is not in the model");
     };
     let mut findings = Vec::new();
-    room_size_finding(state, project, room, &record, &mut findings)?;
-    let rings = template_and_target(state, project, room, &record)?;
+    room_size_finding(reads, room, &record, &mut findings)?;
+    let rings = template_and_target(reads, room, &record)?;
     let markers = place_elevations(&rings, &record, request, &mut findings);
     let plan_crop = match &rings {
         (Some(t), Some(g)) => plan_crop(&record.sheet, t, g),
@@ -562,7 +587,7 @@ pub fn rls_from_sheet(
     // The room's FF&E is read once, and only when something asks for it: the tags, or a 3D view to see past.
     let three_d_room = rings.1.as_ref().filter(|_| has_three_d(&record.sheet));
     let items = if request.tags.is_some() || three_d_room.is_some() {
-        room_items(state, project, room, &parameter)?
+        room_items(reads, room, &parameter)?
     } else {
         Vec::new()
     };
@@ -570,7 +595,7 @@ pub fn rls_from_sheet(
     let three_ds = three_d_room
         .map(|ring| three_ds(&record.sheet, ring, plan_crop.as_ref(), &items))
         .unwrap_or_default();
-    let room_tag = room_tag_head(state, project, room, &record, &tag_rules, &mut findings)?;
+    let room_tag = room_tag_head(rings.0.as_deref(), rings.1.as_deref(), &record, &tag_rules, &mut findings);
     let rls = (sheet_size.is_some()
         || !markers.is_empty()
         || tags.is_some()
@@ -580,6 +605,7 @@ pub fn rls_from_sheet(
     .then_some(RlsPlan { sheet_size, markers, tags, room_tag, plan_crop, three_ds });
     Ok(NewTask {
         rls,
+        rls_set: None,
         kind: TaskKind::CreateRls,
         update_mode: None,
         dry_run: false,

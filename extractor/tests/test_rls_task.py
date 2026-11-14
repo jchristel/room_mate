@@ -313,6 +313,15 @@ class ThreeD(unittest.TestCase):
         v = verdict(with_three_d(self.D, self.U), facts=facts)
         self.assertIn(rt.VIEW_EXISTS, codes(v["aborts"]))
 
+    def test_a_turned_plan_turns_the_3d_direction_and_up_with_it(self):
+        t = with_three_d(self.D, self.U)
+        t["rls"]["plan_crop"] = {"min": [0, 0], "max": [4000, 3000], "turn": {"angle_deg": 90.0, "by": "walls"}}
+        view = verdict(t)["plan"]["three_ds"][0]
+        for got, want in zip(view["forward"], [-203.2, 203.2, -101.6]):
+            self.assertAlmostEqual(want, got)
+        for got, want in zip(view["up"], [-71.8, 71.8, 287.4]):
+            self.assertAlmostEqual(want, got)
+
     def test_a_3d_viewport_without_a_direction_warns_and_makes_no_view(self):
         v = verdict(with_three_d({"x": 0, "y": 0, "z": 0}, self.U))
         self.assertEqual([], v["plan"]["three_ds"])
@@ -356,8 +365,17 @@ class PlanCrop(unittest.TestCase):
         t = task()
         t["rls"]["plan_crop"] = {"min": [1000, 2000], "max": [5000, 4000], "offsets_mm": {}}
         self.assertEqual(
-            {"centre": [3000.0, 3000.0], "size": [4000.0, 2000.0], "min": [1000.0, 2000.0], "max": [5000.0, 4000.0]},
+            {"centre": [3000.0, 3000.0], "size": [4000.0, 2000.0], "min": [1000.0, 2000.0], "max": [5000.0, 4000.0],
+             "turn_deg": 0.0},
             verdict(t)["plan"]["plan_crop"])
+
+    def test_a_turn_rides_the_crop_and_a_broken_one_is_no_turn(self):
+        t = task()
+        t["rls"]["plan_crop"] = {"min": [1000, 2000], "max": [5000, 4000], "turn": {"angle_deg": -45.0, "by": "walls"}}
+        self.assertEqual(-45.0, verdict(t)["plan"]["plan_crop"]["turn_deg"])
+        for broken in ("thirty", {"angle_deg": "x"}, {"angle_deg": float("nan")}, {"angle_deg": 1e9}):
+            t["rls"]["plan_crop"]["turn"] = broken
+            self.assertEqual(0.0, verdict(t)["plan"]["plan_crop"]["turn_deg"], broken)
 
     def test_no_crop_or_a_broken_one_means_the_writer_crops_round_the_room(self):
         self.assertIsNone(verdict()["plan"]["plan_crop"])

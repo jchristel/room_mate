@@ -88,6 +88,24 @@ def show(forms, model_name, settings, options):
         def on_token_title_schedule(self, sender, args):
             self._insert(sender, self.tb_title_schedule)
 
+        def on_token_set_sheet_number(self, sender, args):
+            self._insert(sender, self.tb_set_sheet_number)
+
+        def on_token_set_sheet_name(self, sender, args):
+            self._insert(sender, self.tb_set_sheet_name)
+
+        def on_token_set_view_name_plan(self, sender, args):
+            self._insert(sender, self.tb_set_view_name_plan)
+
+        def on_token_set_view_name_three_d(self, sender, args):
+            self._insert(sender, self.tb_set_view_name_three_d)
+
+        def on_token_set_title_plan(self, sender, args):
+            self._insert(sender, self.tb_set_title_plan)
+
+        def on_token_set_title_three_d(self, sender, args):
+            self._insert(sender, self.tb_set_title_three_d)
+
         def on_change(self, sender, args):
             self._status()
 

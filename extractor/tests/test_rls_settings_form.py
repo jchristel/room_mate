@@ -113,7 +113,17 @@ class Problems(unittest.TestCase):
         combos = dict((name, "x") for name, _o, _p in form.COMBOS)
         texts = dict((name, "{Number}") for name, _k in form.TEXTS)
         texts["tb_view_name_elevation"] = "{Number} ELEV {Seq_Counter}"
+        texts["tb_set_sheet_number"] = "{Number}-{Sheet_Counter}"
         self.assertEqual([], form.problems(form.to_settings({}, combos, texts), self.PARAMS))
+
+    def test_a_set_box_offers_every_room_and_the_sheet_counter_only_where_it_means_something(self):
+        self.assertEqual(["Sheet_Counter", "Number", "Rooms:Number"], form.tokens_for("tb_set_sheet_number", ["Number"]))
+        self.assertEqual(["Number", "Rooms:Number"], form.tokens_for("tb_set_view_name_plan", ["Number"]))
+        self.assertEqual(["Seq_Counter", "Number"], form.tokens_for("tb_view_name_plan", ["Number"]))
+
+    def test_a_set_template_knows_rooms_of_a_parameter_and_the_sheet_counter_in_sheet_names_only(self):
+        self.assertEqual([], form.unknown_set_tokens("{Rooms:number} {Sheet_Counter}", self.PARAMS, True))
+        self.assertEqual(["Sheet_Counter", "Rooms:Wing"], form.unknown_set_tokens("{Sheet_Counter} {Rooms:Wing}", self.PARAMS, False))
 
 
 class Xaml(unittest.TestCase):

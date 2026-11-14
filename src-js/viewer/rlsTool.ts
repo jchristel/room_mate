@@ -15,7 +15,8 @@ export interface RlsToolState {
   roomIds: string[];
   /** Replace a sheet that already exists (off, it is skipped with a warning). */
   overwrite: boolean;
-  /** `manual`: choose one sheet and click rooms. `auto`: the server's solver matches each room to a sheet. */
+  /** `manual`: choose one sheet and click rooms. `auto`: the server's solver matches each room to a sheet. `set`: the
+   *  rooms picked make ONE set of adjacent rooms, laid out by a person in the composer (`rlsSet.ts`). */
   mode: RlsMode;
   /** Auto: rooms that already have a task but are put back in the solver set by a person. */
   included: string[];
@@ -30,7 +31,7 @@ export interface RlsToolState {
   bands: Record<Category, boolean>;
 }
 
-export type RlsMode = "manual" | "auto";
+export type RlsMode = "manual" | "auto" | "set";
 export type Band = "green" | "yellow" | "red";
 export type Category = Band | "override";
 
