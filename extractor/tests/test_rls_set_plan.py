@@ -170,6 +170,14 @@ class Placing(unittest.TestCase):
         self.assertEqual([600.0, 300.0], plan["schedules"][1]["centre_mm"])
         self.assertEqual([133.0, 65.0], plan["schedules"][1]["size_mm"], "the schedule is placed by its corner")
 
+    def test_a_schedule_on_several_sheets_is_one_schedule_placed_on_each(self):
+        t = task()
+        t["rls_set"]["sheets"][1]["views"].append(
+            {"kind": "schedule", "room_id": "1", "centre_mm": [600.0, 150.0], "size_mm": [133.0, 65.0]})
+        office = verdict(t)["plan"]["schedules"][0]
+        self.assertEqual("00.02 SCHEDULE", office["name"], "one view, one name")
+        self.assertEqual([(0, [600.0, 400.0]), (1, [600.0, 150.0])], [(p["sheet"], p["centre_mm"]) for p in office["places"]])
+
     def test_detail_numbers_run_per_sheet(self):
         plan = verdict()["plan"]
         self.assertEqual(2, len(plan["sheets"][0]["detail_numbers"]["elevation"]))

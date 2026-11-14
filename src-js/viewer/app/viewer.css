@@ -753,6 +753,7 @@
   .rlsPort.elevation { border-left-color: var(--ink); }
   .rlsPort.three_d { border-left-color: var(--ok); }
   .rlsPort.out { opacity: 0.55; cursor: default; }
+  .rlsPort.again { border-style: dashed; }
   .rlsSheets { display: flex; gap: 0.5rem; overflow-x: auto; flex: 1; align-items: flex-start; }
   .rlsSheet { flex: none; width: 24rem; max-width: none; }
   .rlsSheet figcaption { display: flex; gap: 0.5rem; align-items: center; }

@@ -6,9 +6,9 @@
 // views left out. A first layout is made automatically, and a person moves views, adds and removes sheets, and leaves
 // views out. Saving queues ONE `create_rls_set` task for the set (`setTaskBody`).
 //
-// **One view, one sheet**, schedules included for now: a schedule on several sheets is a split, which comes with
-// schedule splitting. **Changing the paper size keeps every view where it is and at its size**; what no longer fits
-// is a finding, never moved for the person.
+// **One view, one sheet, except a schedule**, which may be placed WHOLE on several sheets (decided 2026-11-14: repeated,
+// never split), at most once on each. **Changing the paper size keeps every view where it is and at its size**; what no
+// longer fits is a finding, never moved for the person.
 
 /** The server's answer, as far as the composer reads it (`service::rls_set::SetPreview`). */
 export interface SetPreview {
@@ -163,19 +163,37 @@ export function autoLayout(ports: readonly Port[], size: PaperSize, leftOut: rea
 /** The sheet a view is on, or -1. */
 export const sheetOf = (l: Layout, port: string): number => l.sheets.findIndex((s) => s.some((p) => p.port === port));
 
-/** Put a view on a sheet at a point (its top left corner), taking it off any other: one view, one sheet. A view that
- *  was left out is put back. Whole millimetres, so a drag does not store float noise. */
-export function place(l: Layout, port: string, sheet: number, x: number, y: number): Layout {
+/** A schedule may be on several sheets, whole (the server's `rls_set_task` reads the same prefix). */
+export const isRepeatable = (port: string): boolean => port.startsWith("schedule:");
+
+/** Put a view on a sheet at a point (its top left corner). A view that was left out is put back. Whole millimetres, so
+ *  a drag does not store float noise.
+ *
+ *  `from` is the sheet it is dragged from, or undefined for a drag from the list. Any other view leaves every other
+ *  sheet (one view, one sheet). A schedule leaves only `from`: from the list it is placed AGAIN, as another copy,
+ *  and a sheet holds one copy of it at most, so placing it where it already is moves that copy. */
+export function place(l: Layout, port: string, sheet: number, x: number, y: number, from?: number): Layout {
   const at: Place = { port, x: Math.round(x), y: Math.round(y) };
+  const repeat = isRepeatable(port);
   const sheets = l.sheets.map((s, i) => {
-    const rest = s.filter((p) => p.port !== port);
+    const leaves = i === sheet || !repeat || i === from;
+    const rest = leaves ? s.filter((p) => p.port !== port) : s;
     return i === sheet ? [...rest, at] : rest;
   });
   return { sheets, leftOut: l.leftOut.filter((p) => p !== port) };
 }
 
-/** Take a view off its sheet; it waits in the list to be placed. */
-export const unplace = (l: Layout, port: string): Layout => ({ ...l, sheets: l.sheets.map((s) => s.filter((p) => p.port !== port)) });
+/** Take a view off its sheet, or off `sheet` alone (one copy of a schedule); a view on no sheet waits in the list. */
+export const unplace = (l: Layout, port: string, sheet?: number): Layout => ({
+  ...l,
+  sheets: l.sheets.map((s, i) => (sheet === undefined || i === sheet ? s.filter((p) => p.port !== port) : s)),
+});
+
+/** The schedules already on a sheet, which may be placed again on another. */
+export function placeAgain(l: Layout, ports: readonly Port[]): Port[] {
+  const on = new Set(l.sheets.flat().map((p) => p.port));
+  return ports.filter((p) => isRepeatable(p.id) && on.has(p.id));
+}
 
 /** Leave a view out of the set: it is not made. */
 export const leaveOut = (l: Layout, port: string): Layout => {

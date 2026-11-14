@@ -8,6 +8,7 @@ import {
   leaveOut,
   MARGIN_MM,
   place,
+  placeAgain,
   portsOf,
   putBack,
   removeSheet,
@@ -162,5 +163,23 @@ describe("the set composer", () => {
     expect(saveBlocked(layoutFindings(putBack(l, "c"), ports, "a3"))).toContain("not on a sheet");
     l = addSheet(l);
     expect(saveBlocked(layoutFindings(l, ports, "a3"))).toContain("Sheet 2 is empty");
+  });
+
+  it("places a schedule whole on several sheets, once on each, and moves or removes one copy at a time", () => {
+    const sched: Port = { id: "schedule:r", kind: "schedule", label: "s", w: 50, h: 30, estimate: true };
+    const ports = [box("a", 50, 50), sched];
+    let l = addSheet(autoLayout(ports, "a3"));
+    expect(placeAgain(l, ports).map((p) => p.id)).toEqual(["schedule:r"]);
+    l = place(l, "schedule:r", 1, 40, 40); // from the list: a second copy
+    expect(l.sheets.map((s) => s.filter((p) => p.port === "schedule:r").length)).toEqual([1, 1]);
+    l = place(l, "schedule:r", 1, 60, 60); // again on the same sheet: that copy moves, no third
+    expect(l.sheets[1]).toEqual([{ port: "schedule:r", x: 60, y: 60 }]);
+    l = place(l, "schedule:r", 0, 200, 200, 1); // dragged from sheet 2 onto sheet 1: it leaves sheet 2 only
+    expect(l.sheets.map((s) => s.filter((p) => p.port === "schedule:r").length)).toEqual([1, 0]);
+    l = place(l, "schedule:r", 1, 40, 40);
+    expect(unplace(l, "schedule:r", 0).sheets.map((s) => s.length)).toEqual([1, 1]);
+    // any other view is still one view, one sheet
+    expect(place(l, "a", 1, 100, 100).sheets[0]?.some((p) => p.port === "a")).toBe(false);
+    expect(setTaskBody(["r"], "s", "a3", false, l).sheets.map((s) => s.views.map((v) => v.view))).toEqual([["a", "schedule:r"], ["schedule:r"]]);
   });
 });

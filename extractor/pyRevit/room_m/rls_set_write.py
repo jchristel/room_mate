@@ -176,8 +176,9 @@ class RlsSetWriter(RlsWriter):
         self._level_z = lead_z
 
     def _set_schedule(self, schedule, base_name, notes):
-        """A room's schedule: the base duplicated, its first filter the room's number, its upper left corner where the
-        task's centre and estimated size put it (Revit decides its real size)."""
+        """A room's schedule: the base duplicated, its first filter the room's number, and placed WHOLE on each sheet the
+        layout put it on, its upper left corner where the task's centre and estimated size say (Revit decides its real
+        size). Never split (decided 2026-11-14)."""
         base = self.facts.schedule(base_name)
         room = schedule["room"]
         copy = self._step(
@@ -189,17 +190,20 @@ class RlsSetWriter(RlsWriter):
             lambda: set_first_filter_value_without_transaction_wrapper(copy, str(room.Number)),
         )
         self._title_on_sheet(copy, schedule.get("title"), schedule["name"], notes)
-        sheet, centre = self._place_on(schedule, None)
-        size = schedule.get("size_mm") or [0.0, 0.0]
-        if centre:
-            at = (_ft(centre[0] - size[0] / 2.0), _ft(centre[1] + size[1] / 2.0))
-        else:
-            at = (0.0, 0.0)
-            notes.append("{}: no place on the set's sheets: put at the sheet's origin".format(schedule["name"]))
-        self._step(
-            "RoomMate: place schedule {}".format(schedule["name"]),
-            lambda: place_schedule_on_sheet_without_transaction_wrapper(self.doc, sheet, copy, XYZ(at[0], at[1], 0.0)),
-        )
+        # the same schedule, whole, on every sheet the layout put it on (a schedule may be placed more than once)
+        for place in schedule.get("places") or [schedule]:
+            sheet, centre = self._place_on(place, None)
+            size = place.get("size_mm") or [0.0, 0.0]
+            if centre:
+                at = (_ft(centre[0] - size[0] / 2.0), _ft(centre[1] + size[1] / 2.0))
+            else:
+                at = (0.0, 0.0)
+                notes.append("{}: no place on the set's sheets: put at the sheet's origin".format(schedule["name"]))
+            self._step(
+                "RoomMate: place schedule {}".format(schedule["name"]),
+                lambda sheet=sheet, at=at: place_schedule_on_sheet_without_transaction_wrapper(
+                    self.doc, sheet, copy, XYZ(at[0], at[1], 0.0)),
+            )
 
     def _room_tags(self, plan, plan_view, notes):
         """Tag every room of the set in the plan where Revit puts a room tag (no rule: the head is left to Revit). A

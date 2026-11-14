@@ -90,11 +90,13 @@ def _first(sheet, vp_type):
 
 
 def _sheet_of_views(set_plan):
-    """`{(kind, room_id, marker_index): (sheet index, centre_mm)}` for every viewport the task places."""
+    """`{(kind, room_id, marker_index): [(sheet index, centre_mm, size_mm)]}` for every viewport the task places, in
+    sheet order. Only a schedule has more than one: it may be shown whole on several sheets."""
     out = {}
     for i, sheet in enumerate(set_plan.get("sheets") or []):
         for v in sheet.get("views") or []:
-            out[(v.get("kind"), v.get("room_id"), v.get("marker_index"))] = (i, v.get("centre_mm"), v.get("size_mm"))
+            out.setdefault((v.get("kind"), v.get("room_id"), v.get("marker_index")), []).append(
+                (i, v.get("centre_mm"), v.get("size_mm")))
     return out
 
 
@@ -140,7 +142,8 @@ def build(task, settings, rooms):
     label_of = dict(((r.get("room_id")), (r.get("number") or r.get("name") or r.get("room_id"))) for r, _h, _v in rooms)
     values_of = dict((r.get("room_id"), values) for r, _h, values in rooms)
     handle_of = dict((r.get("room_id"), handle) for r, handle, _v in rooms)
-    where = _sheet_of_views(set_plan)
+    where_all = _sheet_of_views(set_plan)
+    where = dict((key, places[0]) for key, places in where_all.items())
 
     size = str(set_plan.get("sheet_size") or "").strip().lower()
     title_block = (s.get("sheet_sizes") or {}).get(size)
@@ -244,7 +247,10 @@ def build(task, settings, rooms):
     for room_id in set_plan.get("schedules") or []:
         values = values_of.get(room_id) or {}
         at = where.get(("schedule", room_id, None))
+        places = where_all.get(("schedule", room_id, None)) or []
         schedules.append({
+            # every sheet it is shown on, whole: one schedule view, placed once per sheet
+            "places": [{"sheet": p[0], "centre_mm": p[1], "size_mm": p[2]} for p in places],
             "room_id": room_id,
             "room": handle_of.get(room_id),
             "name": namer.fill("schedule view name logic", (s.get("view_name_schedule") or "").strip(),

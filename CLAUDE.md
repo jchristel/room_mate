@@ -719,12 +719,13 @@ checked before anything is made, then one transaction group per task (`duHast...
   finding); a schedule per room and one 3D view at the template's paper size, marked `estimate` (rows and projection are Revit's). The lead room,
   whose parameters will fill the set's own names on the plug-in side, is the LARGEST. **The composer is the RLS tool's `set` mode**
   (`viewer/rlsSet.ts` rules, `app/RlsSetPanel.tsx`): rooms clicked on the plan, a first layout in rows, then a person drags views between
-  sheets and the list, adds and removes (empty) sheets and leaves views out. One view, one sheet (schedules too until splitting). A paper
+  sheets and the list, adds and removes (empty) sheets and leaves views out. One view, one sheet, EXCEPT a schedule, which may be
+  placed whole on several sheets, once on each ("Place again"; decided 2026-11-14: repeated, never split). A paper
   change moves nothing; what no longer fits is a finding. **A view too big for the paper at all** (the plan of a large set at
   1:50) is its own finding (`too_big`), red and first, whether placed or waiting, naming the smallest A size that holds it or saying none does. The drawable area is the sheet less `MARGIN_MM` until the title block's is known.
   **Save queues ONE `create_rls_set` task** (`service::rls_set_task`, 2026-11-14): the request sends only WHERE (view ids at their top
   left corner); the server re-runs the preview from the same rooms and sheet, so every crop, line and size in the task is its own. A view
-  unknown, placed twice, or neither placed nor left out, and an empty sheet, refuse the task (the layout IS the task); past the paper is
+  unknown, placed twice (a schedule: twice on one sheet), or neither placed nor left out, and an empty sheet, refuse the task (the layout IS the task); past the paper is
   a finding. The task's `room` is the lead and `rls_set.rooms` all of them, lead first; each viewport is its CENTRE in mm from the
   paper's bottom left, y up. One live set per room: two live set tasks may not share ANY room (`tasks::overlaps`), not only the lead.
   **The plug-in makes it** (2026-11-14): the Tasks button's RLS handler plans a set with `rls_set_plan` (routed by kind from

@@ -17,6 +17,7 @@ import {
   MARGIN_MM,
   PAPER_MM,
   place,
+  placeAgain,
   portsOf,
   putBack,
   removeSheet,
@@ -110,6 +111,7 @@ export function RlsSetPanel({
   const byId = new Map(ports.map((p) => [p.id, p]));
   const findings = layout ? layoutFindings(layout, ports, size) : [];
   const waiting = layout ? unplaced(layout, ports) : [];
+  const again = layout ? placeAgain(layout, ports) : [];
   const bigIds = new Set(findings.filter((f) => f.code === "too_big").flatMap((f) => f.ports));
   const leftOut = layout ? layout.leftOut.flatMap((id) => byId.get(id) ?? []) : [];
   const lead = preview?.lead_room ? name(preview.lead_room) : null;
@@ -131,14 +133,15 @@ export function RlsSetPanel({
 
   /** Drop at a client point: onto a sheet (the view's top left corner is the point less where it was grabbed), or
    *  onto the list (taken off). Anywhere else, nothing changes. */
-  const dropAt = (port: string, clientX: number, clientY: number, grabX: number, grabY: number) => {
+  const dropAt = (port: string, from: number, clientX: number, clientY: number, grabX: number, grabY: number) => {
     if (!layout) return;
     const el = document.elementFromPoint(clientX, clientY);
-    if (el?.closest(".rlsPorts")) return setLayout(unplace(layout, port));
+    // back onto the list: this copy comes off (a schedule on other sheets stays there)
+    if (el?.closest(".rlsPorts")) return setLayout(unplace(layout, port, from));
     const svg = el?.closest("svg[data-sheet]") as SVGSVGElement | null;
     if (!svg) return;
     const at = toPaper(svg, clientX, clientY);
-    if (at) setLayout(place(layout, port, Number(svg.dataset.sheet), at.x - grabX, at.y - grabY));
+    if (at) setLayout(place(layout, port, Number(svg.dataset.sheet), at.x - grabX, at.y - grabY, from));
   };
 
   return (
@@ -249,6 +252,18 @@ export function RlsSetPanel({
                 </button>
               </div>
             ))}
+            {again.length > 0 ? <strong title="A schedule may be on several sheets, whole: drag it onto another sheet">Place again</strong> : null}
+            {again.map((p) => (
+              <div
+                key={`again-${p.id}`}
+                className={`rlsPort ${p.kind} again`}
+                draggable
+                onDragStart={(e) => e.dataTransfer.setData("text/x-rls-port", p.id)}
+                title="Drag onto another sheet: the whole schedule is shown there too"
+              >
+                <span>{portText(p)}</span>
+              </div>
+            ))}
             {leftOut.length > 0 ? <strong>Left out</strong> : null}
             {leftOut.map((p) => (
               <div key={p.id} className={`rlsPort ${p.kind} out`}>
@@ -275,7 +290,7 @@ export function RlsSetPanel({
                 onGrab={(d) => setDrag(d)}
                 onMove={(x, y) => setDrag((d) => (d ? { ...d, x, y, moved: d.moved || Math.hypot(x - d.startX, y - d.startY) > DRAG_FROM_MM } : d))}
                 onDrop={(clientX, clientY) => {
-                  if (drag?.moved) dropAt(drag.port, clientX, clientY, drag.grabX, drag.grabY);
+                  if (drag?.moved) dropAt(drag.port, drag.sheet, clientX, clientY, drag.grabX, drag.grabY);
                   setDrag(null);
                 }}
                 onListDrop={(port, x, y) => {

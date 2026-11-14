@@ -4,7 +4,9 @@
 //! **The views are the server's, the layout is the person's.** The request names the rooms, the library sheet and,
 //! per sheet, the composer's view ids at a point on the paper. The preview is worked out again here from the same
 //! rooms and sheet, so the crop, the elevation lines and every size in the task are the server's numbers and a page
-//! cannot send geometry of its own; the page only says where. A view id the preview does not have, one placed twice,
+//! cannot send geometry of its own; the page only says where. A schedule may be on several sheets, whole, once on each
+//! (decided 2026-11-14: repeated, never split); the task names it once in `schedules` and once per copy in `sheets`.
+//! A view id the preview does not have, any other view placed twice,
 //! one neither placed nor left out, and an empty sheet are refusals: the layout IS the task (Revit cannot change it
 //! underneath), so an ambiguous one is not queued. A view that runs past the paper is a finding, as in the composer:
 //! a person may mean it, and the title block's drawable area is not known here either.
@@ -376,13 +378,20 @@ fn check_layout(
             return refuse(format!("sheet {} is empty: remove it or put a view on it", i + 1));
         }
         let mut out = Vec::new();
+        let mut on_this: Vec<&str> = Vec::new();
         for v in &sheet.views {
             let Some(o) = offered.get(&v.view) else {
                 return refuse(format!("{:?} is not a view of this set", v.view));
             };
-            if placed.contains(&v.view) || request.left_out.contains(&v.view) {
+            // a schedule may be on several sheets, whole (decided 2026-11-14), but once on each; any other view once
+            let repeatable = o.kind == SetViewKind::Schedule;
+            if on_this.contains(&v.view.as_str()) {
+                return refuse(format!("{:?} is on sheet {} twice", v.view, i + 1));
+            }
+            if (!repeatable && placed.contains(&v.view)) || request.left_out.contains(&v.view) {
                 return refuse(format!("{:?} is on more than one sheet, or placed and left out", v.view));
             }
+            on_this.push(&v.view);
             if !(v.x_mm.is_finite() && v.y_mm.is_finite()) {
                 return refuse(format!("{:?} has no position", v.view));
             }
@@ -393,7 +402,9 @@ fn check_layout(
                     format!("{} runs past the edge of the paper on sheet {}", v.view, i + 1),
                 ));
             }
-            placed.push(v.view.clone());
+            if !placed.contains(&v.view) {
+                placed.push(v.view.clone());
+            }
             out.push(SetSheetView {
                 kind: o.kind,
                 room_id: o.room_id.clone(),
@@ -500,6 +511,56 @@ mod tests {
         // left out is enough: the elevation is not made
         let ok = check_layout(&o, &request(vec![vec![("plan", 15.0, 15.0)]], &["elevation:r:0"]), paper, &mut f);
         assert_eq!(ok.unwrap().placed, vec!["plan".to_string()]);
+    }
+
+    #[test]
+    fn a_schedule_may_be_on_several_sheets_once_on_each_and_nothing_else_may() {
+        let mut o = offer();
+        o.insert(
+            "schedule:r".to_string(),
+            Offered {
+                kind: SetViewKind::Schedule,
+                room_id: Some("r".to_string()),
+                marker_index: None,
+                size_mm: [100.0, 40.0],
+            },
+        );
+        let mut f = Vec::new();
+        let paper = [420.0, 297.0];
+        let r = request(
+            vec![
+                vec![("plan", 15.0, 15.0), ("schedule:r", 200.0, 15.0)],
+                vec![("elevation:r:0", 15.0, 15.0), ("schedule:r", 200.0, 15.0)],
+            ],
+            &[],
+        );
+        let c = check_layout(&o, &r, paper, &mut f).unwrap();
+        assert_eq!(3, c.placed.len(), "the schedule is made once");
+        assert_eq!(
+            2,
+            c.sheets.iter().flat_map(|s| &s.views).filter(|v| v.kind == SetViewKind::Schedule).count()
+        );
+        let twice = request(
+            vec![vec![
+                ("plan", 15.0, 15.0),
+                ("schedule:r", 200.0, 15.0),
+                ("schedule:r", 200.0, 100.0),
+            ]],
+            &["elevation:r:0"],
+        );
+        assert!(
+            matches!(check_layout(&o, &twice, paper, &mut f), Err(ServiceError::Invalid(m)) if m.contains("twice"))
+        );
+        let plan_twice = request(
+            vec![
+                vec![("plan", 15.0, 15.0), ("schedule:r", 200.0, 15.0)],
+                vec![("plan", 15.0, 15.0)],
+            ],
+            &["elevation:r:0"],
+        );
+        assert!(
+            matches!(check_layout(&o, &plan_twice, paper, &mut f), Err(ServiceError::Invalid(m)) if m.contains("more than one sheet"))
+        );
     }
 
     #[test]
