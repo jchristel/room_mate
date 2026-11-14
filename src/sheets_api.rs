@@ -128,15 +128,8 @@ pub async fn http_suggest_sheets(
     Query(params): Query<SuggestParams>,
 ) -> Result<Json<Suggestions>, (StatusCode, String)> {
     let projects = projects_dir(&state)?;
-    let mut records = sheets::load_all(&projects, &project_id).map_err(to_http)?;
     // A sheet bound to a blueprint that is not in use is not offered (plan decision 27).
-    let retired: std::collections::HashSet<String> = crate::blueprints::list(&projects, &project_id)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|b| !b.in_use)
-        .map(|b| b.id)
-        .collect();
-    records.retain(|r| r.blueprint.as_deref().is_none_or(|b| !retired.contains(b)));
+    let records = sheets::load_in_use(&projects, &project_id).map_err(to_http)?;
     let room = match qualify_room(&state, &project_id, &params.room_id, params.model_id.as_deref()) {
         Ok(Some(room)) => room,
         Ok(None) => return Err((StatusCode::NOT_FOUND, "no such room in this project".to_string())),
@@ -171,14 +164,7 @@ pub async fn http_solve_sheets(
     Json(body): Json<SolveBody>,
 ) -> Result<Json<Vec<Solved>>, (StatusCode, String)> {
     let projects = projects_dir(&state)?;
-    let mut records = sheets::load_all(&projects, &project_id).map_err(to_http)?;
-    let retired: std::collections::HashSet<String> = crate::blueprints::list(&projects, &project_id)
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|b| !b.in_use)
-        .map(|b| b.id)
-        .collect();
-    records.retain(|r| r.blueprint.as_deref().is_none_or(|b| !retired.contains(b)));
+    let records = sheets::load_in_use(&projects, &project_id).map_err(to_http)?;
     match sheet_suggest::context(&state, &project_id) {
         Ok(Some(ctx)) => Ok(Json(sheet_suggest::solve(&ctx, &body.room_ids, &records))),
         Ok(None) => Err((StatusCode::NOT_FOUND, "this project has no rooms".to_string())),

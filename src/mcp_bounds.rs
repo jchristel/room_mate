@@ -125,6 +125,11 @@ pub const TOOL_KINDS: &[(&str, Kind)] = &[
     ("resolve_blueprint", Kind::Document),
     ("resolve_project_settings", Kind::Document),
     ("suggest_sheets", Kind::Document),
+    ("solve_sheets", Kind::Document),
+    ("preview_rls", Kind::Document),
+    ("preview_rls_set", Kind::Document),
+    ("solve_blueprint", Kind::Document),
+    ("get_blueprint_bundle", Kind::Document),
     ("upload_reference", Kind::Document),
 ];
 

@@ -525,7 +525,7 @@ get wrong:
 ## Room tasks: what a Revit session is told, kept as a record
 
 Built (server side): the task store (`tasks`), making tasks (`service::task_build`), the HTTP and MCP
-surface (`tasks_api`; MCP reads `list_tasks`, `get_task`) and the task list page at `/tasks/` (`src-js/tasks`:
+surface (`tasks_api`; MCP reads `list_tasks`, `get_task`, `preview_rls`, `preview_rls_set`) and the task list page at `/tasks/` (`src-js/tasks`:
 filters, a task's items, sheets, findings and attempts, dismiss, resend, and a panel that makes populate and update
 tasks; it reads the list again every few seconds to show what a session did). the main viewer's
 "Room tasks" colouring (`viewer/taskStatus.ts`, a choice in the zone's colour picker: a room draws in the state

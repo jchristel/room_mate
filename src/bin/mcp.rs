@@ -7,13 +7,17 @@
 //! `get_reference_snapshot`, `get_doors`, `get_windows`, `get_ffe`, `get_spaces`,
 //! `get_ceilings`, `get_floors`, `build_report`, `list_report_columns`,
 //! `list_saved_reports`, `get_saved_report`, `list_blueprints`, `get_blueprint`,
-//! `capture_blueprint`, `resolve_blueprint`, `list_sheets`, `get_sheet`, `get_sheet_elevations`, `suggest_sheets`, `list_assignments`, `list_tasks`, `get_task`, `list_tag_rules`, `get_tag_rule` --
+//! `capture_blueprint`, `resolve_blueprint`, `solve_blueprint`, `get_blueprint_bundle`, `list_sheets`, `get_sheet`,
+//! `get_sheet_elevations`, `suggest_sheets`, `solve_sheets`, `list_assignments`, `list_tasks`, `get_task`,
+//! `preview_rls`, `preview_rls_set`, `list_tag_rules`, `get_tag_rule` --
 //! plus three settings *reads* off `settings_api`'s transport-agnostic core
 //! (`list_project_settings`, `get_project_settings`, `resolve_project_settings`)
-//! and the one forwarded mutation (`upload_reference`, below). Forty-two in
-//! total, and "one per existing HTTP read route" is now literally true -- it was
-//! not while `/api/settings/resolve/{id}` had no tool, which is the kind of
-//! quiet overclaim `scripts/weekly_review.py` exists to catch. Keep this list
+//! and the one forwarded mutation (`upload_reference`, below). Forty-nine in
+//! total (`mcp_bounds::TOOL_KINDS` is the list a test holds the router to; this count had drifted to "forty-two"). "One per existing HTTP read route" was untrue twice: while `/api/settings/resolve/{id}` had no tool,
+//! and until 2026-11-14, when five reads that answer a POST and store nothing (the two RLS previews, the two
+//! solves, a blueprint's bundle) had none, which is the kind of quiet overclaim `scripts/weekly_review.py` exists
+//! to catch. **One read is left out on purpose**: `POST .../blueprints/reshape` answers the blueprint page's box
+//! editor with a draft's items re-anchored, a step inside an edit and never a question a model asks. Keep this list
 //! and STRATEGY-MCP.md's in step when adding one. Each tool is a thin adapter over
 //! `roommate::service` -- parse params, call one service function, serialize
 //! the result -- exactly like the Axum handlers in `roommate::handlers`, just a
@@ -194,6 +198,51 @@ struct SuggestSheetsParams {
     model_id: Option<String>,
     /// The room to find a sheet for.
     room_id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct RoomIdsParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The rooms, by room id (each looked up among the project's rooms; one whose id is in several models is reported, not guessed).
+    room_ids: Vec<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct PreviewRlsSetParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The rooms of the set, by room id: they must be one group of adjacent rooms in one model.
+    room_ids: Vec<String>,
+    /// The library sheet to start from (its scales and plan framing). Omit it for the best match.
+    #[serde(default)]
+    sheet_id: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct PreviewRlsParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The library sheet to copy, as returned by `list_sheets` or `suggest_sheets`.
+    sheet_id: String,
+    /// The room to make the sheet for.
+    room_id: String,
+    /// `a0` to `a3`. Omit it for the library sheet's own size.
+    #[serde(default)]
+    sheet_size: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+struct SolveBlueprintParams {
+    /// The project id, as returned by `list_projects`.
+    project_id: String,
+    /// The blueprint id, as returned by `list_blueprints`.
+    blueprint_id: String,
+    /// The revision to try. Omit it for the current one.
+    #[serde(default)]
+    revision: Option<u32>,
+    /// The rooms to try it in, by room id (at most 500).
+    room_ids: Vec<String>,
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
@@ -1987,7 +2036,7 @@ impl RoommateMcp {
 
     /// Room tasks, as a Revit session sees them -- see `tasks::list`.
     #[tool(
-        description = "List the project's ROOM TASKS: work the server holds for a Revit session. A task is a RECORD, unlike an assignment: it holds what Revit is told as it was when the task was made. Each row has `id`, `kind` (`populate_room`: place a blueprint's items in the room and, if `create_rls`, its sheets; `create_rls`: make room layout sheets from a library sheet and place nothing), `state` (`queued`, `in_progress` once a Revit session has been handed it, then `completed`, `completed_with_warnings`, `failed` or `aborted` as that session reports, or `dismissed` by a person), `model_id` (the Revit document the task is for), `room` ({room_id, number, name}), `phase`, `overwrite_layout`, `create_rls`, `overwrite_rls`, `blueprint` ({id, name, revision}) for a populate task, counts of `items`, `sheets`, `tag_rules` and `findings`, `attempts` and `last_messages` (what the last session said, for why a task failed or aborted). Optional `model_id` and `state` narrow the list. Read one in full with get_task. Making, dismissing and resending tasks, and the Revit session's asking and reporting, are HTTP-only (POST /projects/{id}/tasks, /tasks/{task}/dismiss, /tasks/{task}/resend, /roomtasks, /roomtasks/report)."
+        description = "List the project's ROOM TASKS: work the server holds for a Revit session. A task is a RECORD, unlike an assignment: it holds what Revit is told as it was when the task was made. Each row has `id`, `kind` (`populate_room`: place a blueprint's items in the room and, if `create_rls`, its sheets; `create_rls`: make room layout sheets from a library sheet and place nothing; `update_room`: bring a room populated earlier back in line with its blueprint, a dry run unless turned off; `create_rls_set`: the sheets of a SET of adjacent rooms as a person laid them out, its `room` the lead room and `set_rooms` every room, lead first), `state` (`queued`, `in_progress` once a Revit session has been handed it, then `completed`, `completed_with_warnings`, `failed` or `aborted` as that session reports, or `dismissed` by a person), `model_id` (the Revit document the task is for), `room` ({room_id, number, name}), `phase`, `overwrite_layout`, `create_rls`, `overwrite_rls`, `blueprint` ({id, name, revision}) for a populate task, counts of `items`, `sheets` (for a set, the sheets it makes), `tag_rules` and `findings`, `attempts` and `last_messages` (what the last session said, for why a task failed or aborted). Optional `model_id` and `state` narrow the list. Read one in full with get_task. Making, dismissing and resending tasks, and the Revit session's asking and reporting, are HTTP-only (POST /projects/{id}/tasks, /tasks/{task}/dismiss, /tasks/{task}/resend, /roomtasks, /roomtasks/report)."
     )]
     fn list_tasks(&self, Parameters(p): Parameters<ListTasksParams>) -> Result<CallToolResult, McpError> {
         let dir = self.projects_dir()?;
@@ -2005,7 +2054,7 @@ impl RoommateMcp {
 
     /// One task in full -- see `tasks::load`.
     #[tool(
-        description = "Read one room task in full. `items` are the family instances to place, in the target MODEL's own frame, millimetres: `x_mm`, `y_mm` (centre), `facing_x`/`facing_y` (unit vector), `size_mm` (along the facing, then across), `family_name`, `type_name`, `category`, `placement_type` (`free` or `wall_device`), `host` and the instance and type `properties` as exported. `sheets` are the room layout sheet layouts to make (as exported by duHast: viewports with sheet positions and types; no tags: the tag rules for them are in `tag_rules`), with the number, name and id of the SOURCE sheet, which are not for the new sheets. `findings` is what the resolver said the room changes about the layout and any warning from making the task. `attempts` lists each go by a Revit session with its status and messages."
+        description = "Read one room task in full. `items` are the family instances to place, in the target MODEL's own frame, millimetres: `x_mm`, `y_mm` (centre), `facing_x`/`facing_y` (unit vector), `size_mm` (along the facing, then across), `family_name`, `type_name`, `category`, `placement_type` (`free` or `wall_device`), `host` and the instance and type `properties` as exported. `sheets` are the room layout sheet layouts to make (as exported by duHast: viewports with sheet positions and types; no tags: the tag rules for them are in `tag_rules`), with the number, name and id of the SOURCE sheet, which are not for the new sheets. `findings` is what the resolver said the room changes about the layout and any warning from making the task. `attempts` lists each go by a Revit session with its status and messages. A `create_rls` task carries `rls`, where everything goes in the room (the same answer as preview_rls). A `create_rls_set` task carries `rls_set` instead: `rooms` (lead first), `lead_room`, `sheet_size` and `paper_mm`, the `plan` (crop and scale), each room's `markers` with the elevations made, the rooms with a `schedules` row, whether the `three_d` view is made, and `sheets`: per sheet its viewports (`kind`, `room_id`, `marker_index`, `centre_mm` from the paper's bottom left with y up, `size_mm`); a schedule may appear on several sheets, whole. Its `sheets` (top level) holds the one library sheet it was laid out from."
     )]
     fn get_task(&self, Parameters(p): Parameters<TaskParams>) -> Result<CallToolResult, McpError> {
         let dir = self.projects_dir()?;
@@ -2071,7 +2120,8 @@ impl RoommateMcp {
     )]
     fn suggest_sheets(&self, Parameters(p): Parameters<SuggestSheetsParams>) -> Result<CallToolResult, McpError> {
         let dir = self.projects_dir()?;
-        let records = roommate::sheets::load_all(&dir, &p.project_id).map_err(sheets_to_mcp_error)?;
+        // the library a person is offered, as the HTTP route reads it: not the sheets of a blueprint not in use
+        let records = roommate::sheets::load_in_use(&dir, &p.project_id).map_err(sheets_to_mcp_error)?;
         let room = roommate::service::blueprint_capture::qualify_room(
             &self.state,
             &p.project_id,
@@ -2085,6 +2135,98 @@ impl RoommateMcp {
         {
             None => Err(McpError::invalid_params("no such room in this project".to_string(), None)),
             Some(result) => json_result(&result),
+        }
+    }
+
+    /// The closest library sheet for each of many rooms -- see `service::sheet_suggest::solve`.
+    #[tool(
+        description = "For each of MANY rooms at once, its three closest library sheets, as suggest_sheets ranks them for one room (area, proportions and FF&E count weighed equally, from the rooms and FF&E as they are today). Each row is `room_id`, `room_name` and either `choices` (`sheet_id`, `sheet_number`, `sheet_name`, `room_name`, `fit`: 100 * exp(-distance), a scale to read and not a probability) or a `reason` (no such room, the id is in several models, no sheet can be ranked). The rooms and FF&E are read once for the whole list. Offers and never applies: this is the viewer's RLS auto mode, where a person reviews each match. Sheets bound to a blueprint that is not in use are left out."
+    )]
+    fn solve_sheets(&self, Parameters(p): Parameters<RoomIdsParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let records = roommate::sheets::load_in_use(&dir, &p.project_id).map_err(sheets_to_mcp_error)?;
+        match roommate::service::sheet_suggest::context(&self.state, &p.project_id).map_err(to_mcp_error)? {
+            None => Err(McpError::invalid_params("this project has no rooms".to_string(), None)),
+            Some(ctx) => json_result(&roommate::service::sheet_suggest::solve(&ctx, &p.room_ids, &records)),
+        }
+    }
+
+    /// What a room layout sheet task for one room would say -- see `task_build::rls_from_sheet`.
+    #[tool(
+        description = "Preview a create-RLS task for ONE room from ONE library sheet, storing nothing: exactly what the task would carry. `room` is the room as the task names it. `rls` is where everything goes IN THIS ROOM, in the room's MODEL frame, millimetres: `sheet_size`; `markers`, each elevation marker's `location` and its `views` (`line_start`/`line_end`, `looks`, `depth_mm`, `depth_to_wall_mm`, the template `view_id`), carried over by pairing the template room's walls with this room's; `plan_crop` (the template crop's offsets from its room, and a `turn` when the room is at an angle to the template's); `three_ds` (each 3D view's camera, the room edges whose walls are hidden and the items seen through); `room_tag` (the tag's head); and `tags`, which items each view tags and where, and the ones no rule tags. `findings` says what could not be carried over (a different wall count, a room much unlike the template's). Reads the project's FF&E for the tags, so it takes seconds on a large project. Making the task is HTTP-only (POST /projects/{id}/tasks)."
+    )]
+    fn preview_rls(&self, Parameters(p): Parameters<PreviewRlsParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let room = roommate::service::blueprint_capture::qualify_room(&self.state, &p.project_id, &p.room_id, None)
+            .map_err(to_mcp_error)?
+            .ok_or_else(|| McpError::invalid_params("no such room in this project".to_string(), None))?;
+        let request = roommate::service::rls_plan::RlsRequest {
+            sheet_size: p.sheet_size,
+            depths: Vec::new(),
+            overwrite_rls: false,
+            tags: Some(Default::default()),
+        };
+        let new = roommate::service::task_build::rls_from_sheet(
+            &self.state,
+            &dir,
+            &p.project_id,
+            &p.sheet_id,
+            &room,
+            "preview",
+            &request,
+        )
+        .map_err(to_mcp_error)?;
+        json_result(&serde_json::json!({ "room": new.room, "rls": new.rls, "findings": new.findings }))
+    }
+
+    /// What a room layout sheet SET of adjacent rooms would be -- see `service::rls_set::preview`.
+    #[tool(
+        description = "Preview a room layout sheet SET (multi-room RLS): several ADJACENT rooms on shared sheets, storing nothing. `valid` is false when the rooms do not make a set (unknown, in several models, or not one group of rooms that share walls by the server's adjacency), and `findings` say why. `rooms` gives each room's `name`, `number`, `area_m2` and clear `height_mm` with `height_from` (`ceiling`, `room_property` or `default` 2700). `lead_room` is the largest: its parameters name the set's sheets, plan and 3D view. `suggestions` are the three library sheets closest to the set measured as ONE room (the rectangle round all its rooms, their summed area and items), with a `fit` out of 100; `sheet_id` is the one used. `views`, on that sheet's scales, in the rooms' MODEL frame, millimetres: one `plan` round every room (its `crop`, turned to the rooms' walls together, `scale` and `paper_mm`), four `elevations` per room square to its own walls (`marker`, `line_start`/`line_end`, `looks`, `depth_mm`, `height_mm`, `paper_mm`), a `schedules` row per room and one `three_d`, both sized as on the template and marked `estimate`. Nothing is placed on a sheet: a person lays the views out in the viewer's RLS set mode, which queues one create_rls_set task (HTTP-only)."
+    )]
+    fn preview_rls_set(&self, Parameters(p): Parameters<PreviewRlsSetParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let records = roommate::sheets::load_in_use(&dir, &p.project_id).map_err(sheets_to_mcp_error)?;
+        let Some(ctx) = roommate::service::sheet_suggest::context(&self.state, &p.project_id).map_err(to_mcp_error)?
+        else {
+            return Err(McpError::invalid_params("this project has no rooms".to_string(), None));
+        };
+        let request = roommate::service::rls_set::SetRequest { room_ids: p.room_ids, sheet_id: p.sheet_id };
+        let preview = roommate::service::rls_set::preview(&self.state, &p.project_id, &ctx, &records, &request)
+            .map_err(to_mcp_error)?;
+        json_result(&preview)
+    }
+
+    /// How one blueprint does in each of several rooms -- see `service::blueprint_solve`.
+    #[tool(
+        description = "Try ONE blueprint revision in each of SEVERAL rooms at once, best fit by shape and doors, storing nothing. Each row is one room: `room_id`, `model_id`, `room_name`, a `verdict` (`clear`: fits by shape and the room changes nothing about the layout; `check`: items were placed and there is something to look at; `cannot`: nothing placed, for a shape that does not fit, a different wall count or a room not found) and its `reason` in a sentence, then the fit used (`fit`, `shift`, `cost`, `door_gap_mm`) and counts: `placed` of `items`, `outside` and `overlap` (what the room changes), and `doors_disagree`. resolve_blueprint gives one room's placements in full. Advice, never a gate: the viewer's batch assign shows it before a person assigns. A mapping chosen by hand is a decision about one room and is not tried here (use resolve_blueprint). At most 500 rooms; the rooms and doors are read once for the list."
+    )]
+    fn solve_blueprint(&self, Parameters(p): Parameters<SolveBlueprintParams>) -> Result<CallToolResult, McpError> {
+        const MAX_ROOMS: usize = 500;
+        if p.room_ids.len() > MAX_ROOMS {
+            return Err(McpError::invalid_params(format!("at most {MAX_ROOMS} rooms at a time"), None));
+        }
+        let dir = self.projects_dir()?;
+        let blueprint =
+            roommate::blueprints::load(&dir, &p.project_id, &p.blueprint_id).map_err(blueprints_to_mcp_error)?;
+        let number = p.revision.unwrap_or(blueprint.current_revision);
+        let revision = blueprint
+            .revision(number)
+            .ok_or_else(|| McpError::invalid_params(format!("the blueprint has no revision {number}"), None))?;
+        let rows =
+            roommate::service::blueprint_solve::solve_rooms(&self.state, &p.project_id, &revision.content, &p.room_ids)
+                .map_err(to_mcp_error)?;
+        json_result(&rows)
+    }
+
+    /// A blueprint's bundle -- see `blueprint_bundle::export`.
+    #[tool(
+        description = "Read one blueprint's BUNDLE: what travels with it when it is exported to another project or file, beside the blueprint itself (read that with get_blueprint). `sheets` are the library sheets bound to it, as exported from Revit; `rules` are the tag rules bound to it, with their samples; `type_code_parameter` names the type parameter the rules' type codes were read from. list_sheets and list_tag_rules show everything in the project."
+    )]
+    fn get_blueprint_bundle(&self, Parameters(p): Parameters<BlueprintParams>) -> Result<CallToolResult, McpError> {
+        match roommate::blueprint_bundle::export(&self.state, &p.project_id, &p.blueprint_id) {
+            Ok(bundle) => json_result(&bundle),
+            Err((status, msg)) if status.is_client_error() => Err(McpError::invalid_params(msg, None)),
+            Err((_, msg)) => Err(McpError::internal_error(msg, None)),
         }
     }
 
