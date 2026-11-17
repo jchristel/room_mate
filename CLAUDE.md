@@ -618,7 +618,11 @@ type code, or one for an item seen the other way. A chosen tag there is still pl
 kind to its handler through `task_dispatch.HANDLER_OF`: populate and update tasks place the items (`_apply_group`, `apply_write`), then
 `create_rls` tasks make the sheets (`_rls_group`, below). **A new kind of task is a line in that table and a function, not another button.**
 A kind nobody handles, a handler that raises and any task never reached are reported failed (`_free_tasks`), so the server never holds a
-claimed task `in_progress` for a run that ended. **Every step is logged** (`room_m/task_log.py`: `RoomMate\RoomMate.log` in the application data,
+claimed task `in_progress` for a run that ended. That claim-dispatch-free sequence is `room_m/task_session.py` (pure, tested), shared with
+**`room_mate.tasks_unattended(doc, project_id, proceed_with_warnings, say, model_id)`**, the same run for a batch flow (Revit Batch Processor): every queued
+task of `model_id` (default `doc.Title`; a batch run's local or detached copy may carry another title) is claimed, nobody is asked (`task_session.Unattended`: warned tasks abort unless told to proceed, RLS settings that need
+attention abort the create-RLS tasks and are never edited), the server address is read from `doc` for the run, and saving is the caller's.
+The handlers take a prompts object (`_Asking` for the button), never `forms`. **Not run in Revit.** **Every step is logged** (`room_m/task_log.py`: `RoomMate\RoomMate.log` in the application data,
 written line by line so the last one says where a run that died silently stopped; one open-append-close per line with no `logging` module or duHast logger (both left a run's log empty on a machine; it says why when it cannot start); it never raises, and does nothing until `tasks_entry` starts it). The sheet handler (`room_m/rls_task.py`
 plans, `room_m/rls_write.py` writes) makes room layout sheets from `create_rls` tasks, **and has run in Revit end to end (2026-11-01)**; the item-placing handler (`apply_write`) has not. Order: the model's RLS settings first (extensible
 storage, `rls` key; missing or incomplete ones open the settings window, still incomplete = stop), then the claim, then the WHOLE list is

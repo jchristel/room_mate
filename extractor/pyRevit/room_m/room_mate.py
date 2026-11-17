@@ -875,16 +875,39 @@ def rls_settings_entry(doc, uiapp, output, forms):
     return return_value
 
 
-def _run_claimed_tasks(project, tasks, facts, writer, forms, output, noun, planner=None):
-    """Run a claimed list through `room_m.apply_run.run` with the window's question, the server
-    report and the console line wired in. Shared by both handlers of the Tasks button, which differ
-    only in the planner and writer they hand over and in what the warnings are about (`noun`).
+class _Asking(object):
+    """The Tasks button's answers to a run's questions (`room_m.task_session`): a pyRevit dialog for warned
+    tasks, the RLS settings window for settings that need attention, the output window for each line.
+    `task_session.Unattended` is the same three for a run nobody watches."""
+
+    def __init__(self, forms, output):
+        self.forms = forms
+        self.output = output
+
+    def say(self, line):
+        try:
+            self.output.print_md(line)
+        except Exception:
+            pass
+
+    def ask_proceed(self, noun, lines):
+        message = "Some {} have warnings:\n\n".format(noun) + "\n".join(lines) + "\n\nProceed with them, or abort those tasks?"
+        return self.forms.alert(message, title="Roommate - warnings", options=["Proceed", "Abort those tasks"]) == "Proceed"
+
+    def fix_rls_settings(self, doc, problems):
+        self.forms.alert(
+            "The RLS settings of this model need attention:\n\n{}\n\nThe settings window opens next.".format(
+                "\n".join(problems)),
+            title="Roommate - RLS settings")
+        return _edit_rls_settings(doc, self.forms, Result())
+
+
+def _run_claimed_tasks(project, tasks, facts, writer, prompts, noun, planner=None):
+    """Run a claimed list through `room_m.apply_run.run` with the prompts' question, the server
+    report and the console line wired in. Shared by both task handlers, which differ only in the
+    planner and writer they hand over and in what the warnings are about (`noun`).
     Returns the reports sent."""
     from room_m.apply_run import run
-
-    def ask_proceed(lines):
-        message = "Some {} have warnings:\n\n".format(noun) + "\n".join(lines) + "\n\nProceed with them, or abort those tasks?"
-        return forms.alert(message, title="Roommate - warnings", options=["Proceed", "Abort those tasks"]) == "Proceed"
 
     def send(reports):
         ok, status, text, outcomes = report_tasks(project["id"], reports)
@@ -893,13 +916,8 @@ def _run_claimed_tasks(project, tasks, facts, writer, forms, output, noun, plann
         bad = [o.get("error") or "not recorded" for o in outcomes if not o.get("recorded")]
         return (not bad), "; ".join(bad)
 
-    def say(line):
-        try:
-            output.print_md(line)
-        except Exception:
-            pass
-
-    sent, _ = run(tasks, facts, writer, ask_proceed, send, say, planner=planner, log=task_log.info)
+    sent, _ = run(tasks, facts, writer, lambda lines: prompts.ask_proceed(noun, lines), send, prompts.say,
+                  planner=planner, log=task_log.info)
     return sent
 
 
@@ -915,7 +933,7 @@ def _free_tasks(project, tasks, status, message):
     return reports
 
 
-def _apply_group(project, selected_doc, tasks, forms, output):
+def _apply_group(project, selected_doc, tasks, prompts):
     """The `apply` handler: place the items of populate and update tasks (`room_m.apply_write`).
     Returns the reports sent."""
     from room_m.apply_facts import RevitFacts
@@ -924,7 +942,7 @@ def _apply_group(project, selected_doc, tasks, forms, output):
     task_log.step("apply: reading the model for {} task(s)".format(len(tasks)))
     facts = RevitFacts(selected_doc)
     writer = TaskWriter(selected_doc, facts)
-    return _run_claimed_tasks(project, tasks, facts, writer, forms, output, "tasks")
+    return _run_claimed_tasks(project, tasks, facts, writer, prompts, "tasks")
 
 
 def _settings_state(settings, options):
@@ -935,27 +953,24 @@ def _settings_state(settings, options):
     return todo, errors, warnings
 
 
-def _rls_group(project, selected_doc, tasks, forms, output):
+def _rls_group(project, selected_doc, tasks, prompts):
     """The `rls` handler: make a room layout sheet for each create_rls task, and the sheets of each create_rls_set task.
 
-    The model's RLS settings come first (extensible storage). Missing or incomplete ones open the
-    settings window; if they are still incomplete the tasks are reported aborted, never left claimed.
-    Returns the reports sent."""
+    The model's RLS settings come first (extensible storage). Missing or incomplete ones are put to the
+    prompts (the Tasks button opens the settings window; an unattended run edits nothing); if they are
+    still incomplete the tasks are reported aborted, never left claimed. Returns the reports sent."""
     from room_m import rls_task
     from room_m.rls_write import RlsFacts, RlsWriter
 
     task_log.step("rls: reading the model's RLS settings")
-    return_value = Result()
     settings = project_settings.get_section(project_settings.read_text(selected_doc), rls_settings.PROJECT_KEY) or {}
     options = rls_settings.collect_options(selected_doc)
     todo, errors, warnings = _settings_state(settings, options)
     if todo or errors:
-        forms.alert(
-            "The RLS settings of this model need attention:\n\n{}\n\nThe settings window opens next.".format(
-                "\n".join(todo + errors)),
-            title="Roommate - RLS settings")
-        settings = _edit_rls_settings(selected_doc, forms, return_value) or {}
-        todo, errors, warnings = _settings_state(settings, rls_settings.collect_options(selected_doc))
+        fixed = prompts.fix_rls_settings(selected_doc, todo + errors)
+        if fixed is not None:
+            settings = fixed
+            todo, errors, warnings = _settings_state(settings, rls_settings.collect_options(selected_doc))
         if todo or errors:
             message = "RLS settings are not usable ({})".format("; ".join(todo + errors))
             task_log.warning("rls: {}; {} task(s) aborted".format(message, len(tasks)))
@@ -978,7 +993,7 @@ def _rls_group(project, selected_doc, tasks, forms, output):
         return single(verdict)
 
     return _run_claimed_tasks(
-        project, tasks, facts, writer, forms, output, "sheets",
+        project, tasks, facts, writer, prompts, "sheets",
         planner=lambda claimed: rls_task.plan_tasks(claimed, settings, facts))
 
 
@@ -987,6 +1002,34 @@ _GROUP_HANDLERS = {
     task_dispatch.APPLY: _apply_group,
     task_dispatch.RLS: _rls_group,
 }
+
+
+def _run_session(project, doc, model_id, claim, prompts, return_value):
+    """Claim, run each group with `prompts`, free what is left (`room_m.task_session.run`), and say what happened
+    on `return_value`. Shared by the Tasks button and `tasks_unattended`. Returns the session's outcome."""
+    from room_m import task_session
+
+    def log(level, line):
+        getattr(task_log, level)(line)
+
+    handlers = dict(
+        (name, (lambda fn: lambda group: fn(project, doc, group, prompts))(fn))
+        for name, fn in _GROUP_HANDLERS.items())
+    outcome = task_session.run(
+        claim, handlers, lambda tasks, status, message: _free_tasks(project, tasks, status, message), log=log)
+    claimed = outcome["claimed"]
+    if claimed:
+        return_value.append_message("{} task(s) claimed for '{}': {}".format(
+            len(claimed), model_id, task_dispatch.count_by_kind(claimed)))
+    if outcome["unhandled"]:
+        return_value.update_sep(False, "{} task(s) of a kind this plug-in does not know were reported failed.".format(
+            outcome["unhandled"]))
+    for line in outcome["errors"]:
+        return_value.update_sep(False, line)
+    failed = [r for r in outcome["reports"] if r.get("status") in ("failed", "aborted")]
+    if claimed:
+        return_value.append_message("{} report(s) sent, {} failed or aborted".format(len(outcome["reports"]), len(failed)))
+    return outcome
 
 
 def _room_level_names(doc):
@@ -1060,9 +1103,6 @@ def tasks_entry(doc, uiapp, output, forms):
     :rtype: Result
     """
     return_value = Result()
-    claimed = []
-    project = None
-    reported = set()
     try:
         log_path = task_log.start("Tasks")
         report_build(return_value, output)
@@ -1084,49 +1124,102 @@ def tasks_entry(doc, uiapp, output, forms):
         task_log.info("model '{}', project '{}', {} task(s) chosen".format(
             selected_doc.Title, project["id"], len(choice["task_ids"])))
 
-        task_log.step("claiming the chosen tasks")
-        ok, status, text, claimed = claim_tasks(
-            project["id"], selected_doc.Title, kinds=task_dispatch.claim_kinds(), task_ids=choice["task_ids"])
-        if not ok:
-            task_log.error("claim failed: {} {}".format(status, text))
-            run_report.server_failure("Asking the server for tasks", status, text, return_value)
-            return return_value
-        if not claimed:
+        def claim():
+            return claim_tasks(
+                project["id"], selected_doc.Title, kinds=task_dispatch.claim_kinds(), task_ids=choice["task_ids"])
+
+        outcome = _run_session(project, selected_doc, selected_doc.Title, claim, _Asking(forms, output), return_value)
+        if outcome["claim_error"]:
+            run_report.server_failure(
+                "Asking the server for tasks", outcome["claim_status"], outcome["claim_text"], return_value)
+        elif not outcome["claimed"]:
             forms.alert("None of the chosen tasks is still queued for model '{}' (another session may have taken them).".format(
                 selected_doc.Title), title="Roommate - nothing to do")
             return_value.append_message("None of the chosen tasks was still queued for '{}'".format(selected_doc.Title))
-            return return_value
-        summary = task_dispatch.count_by_kind(claimed)
-        task_log.info("claimed {}".format(summary))
-        return_value.append_message("{} task(s) claimed for '{}': {}".format(len(claimed), selected_doc.Title, summary))
-
-        groups, unhandled = task_dispatch.split(claimed)
-        for freed in _free_tasks(project, unhandled, "failed", "this plug-in has no handler for this kind of task"):
-            reported.add(freed["task_id"])
-        if unhandled:
-            return_value.update_sep(False, "{} task(s) of a kind this plug-in does not know were reported failed.".format(len(unhandled)))
-
-        for handler, group in groups:
-            task_log.step("{}: {} task(s)".format(handler, len(group)))
-            try:
-                sent = _GROUP_HANDLERS[handler](project, selected_doc, group, forms, output)
-            except Exception as e:
-                task_log.exception("{} failed".format(handler))
-                return_value.update_sep(False, "{} failed with exception: {}".format(handler, e))
-                sent = []
-            reported.update(r["task_id"] for r in sent)
-            failed = [r for r in sent if r["status"] in ("failed", "aborted")]
-            return_value.append_message("{}: {} report(s) sent, {} failed or aborted".format(handler, len(sent), len(failed)))
     except Exception as e:
         task_log.exception("Tasks failed")
         return_value.update_sep(False, "Tasks failed with exception: {} (the log has the steps)".format(e))
     finally:
-        # whatever happened, a claimed task nobody reported is freed rather than left in progress
-        stranded = [t for t in claimed if t.get("id") not in reported]
-        if stranded and project is not None:
-            task_log.warning("{} claimed task(s) were never reported; reporting them failed".format(len(stranded)))
-            _free_tasks(project, stranded, "failed", "the session ended before this task was reached")
         task_log.info("run ended")
+    return return_value
+
+
+def tasks_unattended(doc, project_id, proceed_with_warnings=False, say=None, model_id=None):
+    """Run EVERY queued task the server holds for `doc` with nobody watching: the Tasks button for a batch flow
+    that opens one model after another (Revit Batch Processor; a sample flow is in the SampleCode repository).
+
+    The same run as the button (`_run_session`: claim, items before sheets, the whole list checked first, one
+    transaction group per task, every claimed task reported, nothing left `in_progress`), with three differences:
+
+    - **Nothing is chosen.** The project is `project_id`, and the claim takes every queued task of every kind
+      this plug-in handles for the model `model_id`, by default `doc.Title`, the id every push uses. A batch
+      run may open a copy under another title (a new local file, a detached copy), which finds nothing: pass
+      the id the model was pushed under (usually the central file's name). The run says which id it asked for.
+    - **Nobody is asked** (`room_m.task_session.Unattended`): warned tasks run only with `proceed_with_warnings`,
+      else they are reported aborted; RLS settings that need attention abort the create-RLS tasks and are not
+      edited.
+    - **The server address comes from `doc`'s own settings**, then `ROOMMATE_SERVER` and `server.json` as usual
+      (`room_m.server_config`). In pyRevit the model's address is read from the active document, which a batch
+      run does not have, so the reader is pointed at `doc` for the run and put back after.
+
+    Saving is the caller's: the model is changed and not saved. `say(line)` prints a line (plain `print` when
+    absent). Returns duHast's `Result`; `result.result` holds one dict, `{"model_id", "claimed", "reports",
+    "written"}` (`written`: how many tasks completed, with or without warnings), so a flow knows whether to save.
+    Never raises.
+
+    **Not yet run in Revit.**
+    """
+    from room_m import task_session
+
+    return_value = Result()
+    sink = say or run_report._print
+    prompts = task_session.Unattended(proceed_with_warnings, sink)
+    try:
+        model_id = model_id or doc.Title
+        report_build(return_value)
+        for line in return_value.message_as_list():
+            sink(line)
+        run_report.begin(return_value, sink=sink, title="Tasks (unattended)")
+        server_config.set_project_reader(lambda: project_settings.server_of(project_settings.read_text(doc)))
+        run_report.say("Server: {}".format(server_config.describe()))
+        run_report.say("Model id: '{}', project '{}'".format(model_id, project_id))
+
+        ok, status, payload = fetch_projects()
+        if not ok:
+            run_report.server_failure("Reading the server's projects", status, payload, return_value)
+            return return_value
+        project = next((p for p in payload or [] if p.get("id") == project_id), None)
+        if project is None:
+            _fail(return_value, "The server has no project '{}' (it has: {})".format(
+                project_id, ", ".join(p.get("id") or "?" for p in payload or []) or "none"))
+            return return_value
+
+        def claim():
+            return claim_tasks(project_id, model_id, kinds=task_dispatch.claim_kinds())
+
+        outcome = _run_session(project, doc, model_id, claim, prompts, return_value)
+        if outcome["claim_error"]:
+            run_report.server_failure(
+                "Asking the server for tasks", outcome["claim_status"], outcome["claim_text"], return_value)
+        elif not outcome["claimed"]:
+            run_report.say("Nothing queued for model '{}' in project '{}'".format(model_id, project_id))
+        written = [r for r in outcome["reports"] if r.get("status") in ("completed", "completed_with_warnings")]
+        return_value.result.append({
+            "model_id": model_id,
+            "claimed": len(outcome["claimed"]),
+            "reports": outcome["reports"],
+            "written": len(written),
+        })
+    except Exception as e:
+        task_log.exception("unattended tasks failed")
+        return_value.update_sep(False, "Tasks failed with exception: {} (the log has the steps)".format(e))
+    finally:
+        server_config.set_project_reader(project_settings.server_of_active_document)
+        task_log.info("run ended")
+        try:
+            run_report.finish(return_value, "unattended tasks for '{}'".format(model_id))
+        except Exception:
+            pass
     return return_value
 
 
