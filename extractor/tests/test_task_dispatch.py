@@ -63,7 +63,8 @@ class Wiring(unittest.TestCase):
     def test_the_entry_claims_every_kind_and_frees_what_it_never_reached(self):
         text = self.source("room_mate.py")
         self.assertIn("kinds=task_dispatch.claim_kinds()", text)
-        self.assertIn("the session ended before this task was reached", text)
+        # what it never reached is freed by the shared session (room_m.task_session, tested there)
+        self.assertIn("task_session.run(", text)
 
 
 if __name__ == "__main__":
