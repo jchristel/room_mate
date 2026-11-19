@@ -31,7 +31,7 @@ import {
   type Port,
   type SetPreview,
 } from "../rlsSet.js";
-import type { RlsMode, RlsToolState } from "../rlsTool.js";
+import { planHidden, type RlsMode, type RlsToolState } from "../rlsTool.js";
 import { makeRlsSetTask, previewSet, type LibrarySheet } from "./rlsData.js";
 import { patchZoneRls, setZoneRlsMode } from "./store.js";
 
@@ -184,7 +184,27 @@ export function RlsSetPanel({
             </button>
           ))}
         </span>
-        <button className={`chip${folded ? "" : " on"}`} disabled={!layout} title="Show or fold away the sheets, to give the plan room" onClick={() => setFolded(!folded)}>
+        <button
+          className={`chip${planHidden(tool) ? "" : " on"}`}
+          disabled={!layout}
+          title="Show or fold away the plan, to give the sheets the whole zone"
+          onClick={() => {
+            setFolded(false);
+            patchZoneRls(zoneId, { ...tool, planCollapsed: !tool.planCollapsed });
+          }}
+        >
+          Plan {planHidden(tool) ? "▸" : "▾"}
+        </button>
+        <button
+          className={`chip${folded ? "" : " on"}`}
+          disabled={!layout}
+          title="Show or fold away the sheets, to give the plan room"
+          onClick={() => {
+            // folding the sheets away with the plan folded too would leave nothing: the plan comes back
+            if (!folded && tool.planCollapsed) patchZoneRls(zoneId, { ...tool, planCollapsed: false });
+            setFolded(!folded);
+          }}
+        >
           Sheets {folded ? "▸" : "▾"}
         </button>
         <button className="chip" disabled={!layout} title="Throw this layout away and lay the views out again" onClick={() => setLayout(autoLayout(ports, size))}>

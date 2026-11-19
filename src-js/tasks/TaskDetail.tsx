@@ -2,6 +2,8 @@
 
 import { KIND_TEXT, STATE_TEXT, UPDATE_MODE_TEXT, canDismiss, canResend, findingText, needsAttention, shortTime } from "./model.js";
 import type { Task } from "./types.js";
+import { SheetPreview } from "../library/SheetPreview.js";
+import { taskSheetPreviews } from "./sheetPreviews.js";
 
 export interface DetailProps {
   task: Task;
@@ -16,6 +18,7 @@ export function TaskDetail({ task, busy, onDismiss, onResend }: DetailProps) {
   const t = task;
   const populate = t.kind === "populate_room";
   const update = t.kind === "update_room";
+  const previews = taskSheetPreviews(t);
   return (
     <div className="detail">
       <div className="toolbar">
@@ -88,6 +91,25 @@ export function TaskDetail({ task, busy, onDismiss, onResend }: DetailProps) {
           {shortTime(t.created_at)} · last change {shortTime(t.updated_at)}
         </dd>
       </dl>
+
+      {previews.length > 0 ? (
+        <>
+          <h3>{previews.length === 1 ? "Sheet preview" : `Sheet previews (${previews.length})`}</h3>
+          <p className="hint">
+            {t.rls_set
+              ? "The sheets as the set lays them out. Schedule and 3D sizes are estimates: Revit decides them."
+              : "The template's viewports on the paper the task asks for. The elevations and the plan's framing follow this room, so the views' contents differ."}
+          </p>
+          <div className="sheet-previews">
+            {previews.map((p, i) => (
+              <section key={i}>
+                <div className="sub">{p.title}</div>
+                <SheetPreview record={p.record} />
+              </section>
+            ))}
+          </div>
+        </>
+      ) : null}
 
       <h3>Findings</h3>
       {t.findings.length === 0 ? <p className="hint">None.</p> : null}

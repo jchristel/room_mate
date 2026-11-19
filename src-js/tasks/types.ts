@@ -68,11 +68,32 @@ export interface TaskItem {
   size_mm: [number, number];
 }
 
+/** A viewport of a set sheet: its box centre from the paper's bottom left (y up) and its size, mm. */
+export interface SetSheetView {
+  kind: "plan" | "elevation" | "schedule" | "three_d";
+  room_id?: string;
+  marker_index?: number;
+  centre_mm: [number, number];
+  size_mm: [number, number];
+}
+
+export interface RlsSetPlan {
+  sheet_size: string;
+  /** The paper, landscape, mm. */
+  paper_mm?: [number, number];
+  lead_room: string;
+  rooms: TaskRoom[];
+  plan?: { scale: number } & Record<string, unknown>;
+  markers?: { room_id: string; views: { marker_index: number; scale: number }[] }[];
+  sheets: { views: SetSheetView[] }[];
+}
+
 export interface TaskSheet {
   revit_sheet_id: string;
   document_title: string;
   sheet_number: string;
   sheet_name?: string;
+  size_mm?: { width_mm: number; height_mm: number };
   sheet: { view_ports?: unknown[] } & Record<string, unknown>;
 }
 
@@ -113,7 +134,9 @@ export interface TagRule {
 export interface Task extends Omit<TaskSummary, "items" | "sheets" | "tag_rules" | "findings" | "attempts" | "last_messages" | "set_rooms"> {
   library_sheet_id?: string;
   /** `create_rls_set`: the rooms (lead first), the paper and the sheets as laid out (`service::rls_set_task`). */
-  rls_set?: { sheet_size: string; lead_room: string; rooms: TaskRoom[]; sheets: { views: unknown[] }[] };
+  rls_set?: RlsSetPlan;
+  /** `create_rls`: what the server worked out for this room; only the paper size is read here. */
+  rls?: { sheet_size?: string } & Record<string, unknown>;
   items: TaskItem[];
   sheets: TaskSheet[];
   tag_rules: TagRule[];
