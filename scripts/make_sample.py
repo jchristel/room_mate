@@ -39,7 +39,7 @@ MODEL = "Building_BF_Framing_jan.r.christel"
 
 # The snapshots the sample keeps, by entity folder ("" is rooms). Two points in time, so the milestone
 # comparison has something to compare: an earlier set (what was pushed in August and September) and the
-# current one (all seven entities, pushed 2026-10-30). Names are the files' own.
+# current one (all seven entities, pushed 2026-11-19 in one run). Names are the files' own.
 EARLIER = {
     "": "2026-08-23T00-44-17.490000Z.json",
     "doors": "2026-08-23T00-44-17.490000Z.json",
@@ -47,7 +47,7 @@ EARLIER = {
     "ffe": "2026-09-05T12-57-49.149000Z.json",
 }
 CURRENT = {
-    entity: "2026-10-30T08-52-45.876000Z.json"
+    entity: "2026-11-19T09-33-52.288000Z.json"
     for entity in ("", "doors", "windows", "ffe", "spaces", "ceilings", "floors")
 }
 
@@ -89,7 +89,7 @@ def milestones_block():
         "# has no spaces, ceilings or floors (they were not exported yet), which the comparison reports as added.\n"
         '[[milestones]]\nname = "Earlier push"\ndate = "2026-09-05"\n\n[milestones.reference_snapshots]\n\n'
         + attachments(EARLIER)
-        + '[[milestones]]\nname = "Current push"\ndate = "2026-10-30"\n\n[milestones.reference_snapshots]\n\n'
+        + '[[milestones]]\nname = "Current push"\ndate = "2026-11-19"\n\n[milestones.reference_snapshots]\n\n'
         + attachments(CURRENT)
     )
 
