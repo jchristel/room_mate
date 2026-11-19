@@ -274,3 +274,62 @@ fn test_two_adjacent_rooms_make_a_set_and_two_apart_do_not() {
     );
     std::fs::remove_dir_all(projects.parent().unwrap()).ok();
 }
+
+/// A library sheet carries its views to another room against the outline STORED with it, so a sheet with no room
+/// link (the Sheets button) or whose room is not in this project (an import) still transfers. The stored outline
+/// gives the same ring the link did; without either, the reason says which is missing.
+#[test]
+fn test_a_sheet_s_stored_outline_stands_in_for_its_room() {
+    use crate::service::elevation_facing::{
+        model_room_ring, template_ring, SHEET_NAMES_NO_ROOM, SHEET_ROOM_NOT_ON_SERVER,
+    };
+    use crate::sheets::{SheetRecord, SheetRoom};
+    let (state, projects) = booted("outline");
+    let rooms = assemble_rooms(&state, &RoomScope { project: Some(PROJECT), ..Default::default() })
+        .unwrap()
+        .unwrap();
+    let office = rooms.rooms.iter().find(|r| r.room.id == "2626834").expect("OFFICE 00.02");
+    let link = SheetRoom { model_id: office.model_id.clone(), room_id: "2626834".into() };
+    let linked_ring = model_room_ring(&state, PROJECT, &link).unwrap().expect("the office's outline");
+    let record = |room: Option<&SheetRoom>, outline: &[[f64; 2]]| -> SheetRecord {
+        serde_json::from_value(serde_json::json!({
+            "schema_version": 1, "id": "s", "taken_at": "", "revit_sheet_id": "1", "document_title": "D",
+            "sheet_number": "1", "sheet_name": "", "received_at": "", "sheet": {},
+            "room": room, "room_outline": outline,
+        }))
+        .expect("a sheet record")
+    };
+    let stored: Vec<[f64; 2]> = linked_ring.iter().map(|&(x, y)| [x, y]).collect();
+    let reversed: Vec<[f64; 2]> = stored.iter().rev().copied().collect();
+
+    let from_link = template_ring(&state, PROJECT, Some(&rooms), &record(Some(&link), &[])).unwrap();
+    assert_eq!(Ok(linked_ring.clone()), from_link);
+    let from_outline = template_ring(&state, PROJECT, None, &record(None, &reversed)).unwrap();
+    assert_eq!(
+        Ok(linked_ring.clone()),
+        from_outline.map(|r| rotate_to(&r, linked_ring[0])),
+        "turned counter-clockwise"
+    );
+
+    assert_eq!(
+        Err(SHEET_NAMES_NO_ROOM),
+        template_ring(&state, PROJECT, Some(&rooms), &record(None, &[])).unwrap()
+    );
+    let gone = SheetRoom { model_id: office.model_id.clone(), room_id: "no-such-room".into() };
+    assert_eq!(
+        Err(SHEET_ROOM_NOT_ON_SERVER),
+        template_ring(&state, PROJECT, Some(&rooms), &record(Some(&gone), &[])).unwrap()
+    );
+    assert_eq!(
+        Ok(linked_ring),
+        template_ring(&state, PROJECT, Some(&rooms), &record(Some(&gone), &stored)).unwrap(),
+        "the stored outline wins over a link that no longer resolves"
+    );
+    std::fs::remove_dir_all(projects.parent().unwrap()).ok();
+}
+
+/// `ring` started at `first` (a reversed ring is the same ring from another vertex).
+fn rotate_to(ring: &[(f64, f64)], first: (f64, f64)) -> Vec<(f64, f64)> {
+    let at = ring.iter().position(|&p| p == first).unwrap_or(0);
+    ring[at..].iter().chain(&ring[..at]).copied().collect()
+}

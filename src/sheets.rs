@@ -44,6 +44,7 @@ const MAX_PENDING: usize = 20;
 const MAX_SHEET_BYTES: usize = 5_000_000;
 const MAX_TEXT_CHARS: usize = 500;
 const MAX_ROOM_LABELS: usize = 200;
+const MAX_OUTLINE_POINTS: usize = 5_000;
 
 /// The room a sheet was made for. A reference, not validated against the model.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,6 +97,13 @@ pub struct PendingSheet {
     /// The sheet's paper size, when the extractor measured one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_mm: Option<SheetSize>,
+    /// The outer outline of the ONE room the sheet was made for, as it was when the sheet was pushed: mm, in the
+    /// sheet's own model frame (the frame its views are in). What carries the sheet's views to another room (the
+    /// elevations, the plan crop and its turn) needs only this, so a sheet with no room link, one whose room was
+    /// redrawn since, or one copied into another project still transfers. Empty for a sheet covering several rooms
+    /// (their views are not against one room's walls) and for one pushed before it was stored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub room_outline: Vec<[f64; 2]>,
     /// The rooms the person said the sheet covers when they exported it ("number name"), a label
     /// only: the figures in `room_summary` already cover all of them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -137,6 +145,13 @@ pub struct SheetRecord {
     /// The sheet's paper size, when the extractor measured one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_mm: Option<SheetSize>,
+    /// The outer outline of the ONE room the sheet was made for, as it was when the sheet was pushed: mm, in the
+    /// sheet's own model frame (the frame its views are in). What carries the sheet's views to another room (the
+    /// elevations, the plan crop and its turn) needs only this, so a sheet with no room link, one whose room was
+    /// redrawn since, or one copied into another project still transfers. Empty for a sheet covering several rooms
+    /// (their views are not against one room's walls) and for one pushed before it was stored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub room_outline: Vec<[f64; 2]>,
     /// The rooms the person said the sheet covers when they exported it ("number name"), a label
     /// only: the figures in `room_summary` already cover all of them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -230,6 +245,10 @@ pub struct PushedSheet {
     pub room_summary: Option<RoomSummary>,
     #[serde(default)]
     pub size_mm: Option<SheetSize>,
+    /// The outline of the one room the sheet covers, measured by the extractor (mm, the sheet's model frame). When
+    /// it sends a `room` and no outline, the server reads it from the rooms it holds instead.
+    #[serde(default)]
+    pub room_outline: Vec<[f64; 2]>,
     #[serde(default)]
     pub rooms: Vec<String>,
     pub sheet: Value,
@@ -468,8 +487,27 @@ fn check_room(room: &Option<SheetRoom>) -> Result<(), SheetError> {
     Ok(())
 }
 
+/// A room outline is a ring or nothing: fewer than three points, a coordinate that is not a number, or more points
+/// than any room has is a broken export, refused rather than stored to fail a task later.
+fn check_outline(number: &str, outline: &[[f64; 2]]) -> Result<(), SheetError> {
+    if outline.is_empty() {
+        return Ok(());
+    }
+    if outline.len() < 3 || outline.len() > MAX_OUTLINE_POINTS {
+        return bad(format!(
+            "sheet {number:?}: a room outline has 3 to {MAX_OUTLINE_POINTS} points, not {}",
+            outline.len()
+        ));
+    }
+    if outline.iter().flatten().any(|v| !v.is_finite()) {
+        return bad(format!("sheet {number:?}: a room outline coordinate is not a number"));
+    }
+    Ok(())
+}
+
 fn check_pushed(p: &PushedSheet) -> Result<PushedSheet, SheetError> {
     check_room(&p.room)?;
+    check_outline(&p.sheet_number, &p.room_outline)?;
     if !p.sheet.is_object() {
         return bad(format!("sheet {:?}: the exported data must be an object", p.sheet_number));
     }
@@ -487,6 +525,7 @@ fn check_pushed(p: &PushedSheet) -> Result<PushedSheet, SheetError> {
         phase: p.phase.clone().map(|s| s.trim().to_string()).filter(|s| !s.is_empty()),
         room_summary: p.room_summary,
         size_mm: p.size_mm,
+        room_outline: p.room_outline.clone(),
         rooms: p
             .rooms
             .iter()
@@ -523,9 +562,12 @@ fn refresh_record(record: &mut SheetRecord, p: PushedSheet, received_at: String)
     record.sheet_name = p.sheet_name;
     record.sheet = p.sheet;
     record.received_at = received_at;
+    // The outline goes with the figures: a push that measured the room(s) again says what they are now, and a sheet
+    // that went from one room to several loses its outline rather than keeping the old room's.
     if p.room.is_some() {
         record.room = p.room;
         record.room_summary = p.room_summary;
+        record.room_outline = p.room_outline.clone();
     }
     if p.blueprint.is_some() {
         record.blueprint = p.blueprint;
@@ -535,6 +577,7 @@ fn refresh_record(record: &mut SheetRecord, p: PushedSheet, received_at: String)
     }
     if p.room_summary.is_some() {
         record.room_summary = p.room_summary;
+        record.room_outline = p.room_outline;
         record.rooms = p.rooms;
     }
     if p.size_mm.is_some() {
@@ -590,6 +633,7 @@ pub fn push(projects_dir: &Path, project: &str, request: PushRequest) -> Result<
                     phase: p.phase,
                     room_summary: p.room_summary,
                     size_mm: p.size_mm,
+                    room_outline: p.room_outline,
                     rooms: p.rooms,
                     room_key: None,
                     received_at,
@@ -630,6 +674,7 @@ pub fn push(projects_dir: &Path, project: &str, request: PushRequest) -> Result<
                     phase: p.phase,
                     room_summary: p.room_summary,
                     size_mm: p.size_mm,
+                    room_outline: p.room_outline,
                     rooms: p.rooms,
                     sheet: p.sheet,
                 });
@@ -680,6 +725,7 @@ pub fn accept(
     if accepted.room.is_some() {
         record.room = accepted.room;
         record.room_summary = accepted.room_summary;
+        record.room_outline = accepted.room_outline.clone();
     }
     if accepted.blueprint.is_some() {
         record.blueprint = accepted.blueprint;
@@ -689,6 +735,7 @@ pub fn accept(
     }
     if accepted.room_summary.is_some() {
         record.room_summary = accepted.room_summary;
+        record.room_outline = accepted.room_outline;
         record.rooms = accepted.rooms;
     }
     if accepted.size_mm.is_some() {
@@ -759,6 +806,7 @@ mod tests {
             phase: None,
             room_summary: None,
             size_mm: None,
+            room_outline: Vec::new(),
             rooms: Vec::new(),
             sheet: json!({ "view_ports": [{}, {}, {}] }),
         }
@@ -793,6 +841,41 @@ mod tests {
         again.room_summary = Some(summary(8));
         push_one(&dir, again);
         assert_eq!(load(&dir, "p1", &pushed.id).unwrap().room_summary, Some(summary(8)));
+    }
+
+    /// The outline of a one-room sheet is stored with its figures, kept by a bare re-push, and goes when a re-push
+    /// measures the sheet again without one (it now covers several rooms).
+    #[test]
+    fn test_a_room_outline_travels_with_the_figures() {
+        let dir = temp_dir("outline");
+        let ring = vec![[0.0, 0.0], [4000.0, 0.0], [4000.0, 3000.0], [0.0, 3000.0]];
+        let mut s = sheet("1", "Doc", "RLS-01");
+        s.room_summary = Some(summary(5));
+        s.room_outline = ring.clone();
+        let pushed = push_one(&dir, s);
+        assert_eq!(load(&dir, "p1", &pushed.id).unwrap().room_outline, ring);
+
+        push_one(&dir, sheet("1", "Doc", "RLS-01"));
+        assert_eq!(load(&dir, "p1", &pushed.id).unwrap().room_outline, ring);
+
+        let mut several = sheet("1", "Doc", "RLS-01");
+        several.room_summary = Some(summary(9));
+        push_one(&dir, several);
+        assert!(load(&dir, "p1", &pushed.id).unwrap().room_outline.is_empty());
+    }
+
+    #[test]
+    fn test_a_broken_outline_is_refused() {
+        let dir = temp_dir("outline-bad");
+        let mut short = sheet("1", "Doc", "RLS-01");
+        short.room_outline = vec![[0.0, 0.0], [1.0, 1.0]];
+        assert!(matches!(
+            push(&dir, "p1", PushRequest { sheets: vec![short] }),
+            Err(SheetError::Invalid(_))
+        ));
+        let mut nan = sheet("1", "Doc", "RLS-01");
+        nan.room_outline = vec![[0.0, 0.0], [1.0, f64::NAN], [1.0, 1.0]];
+        assert!(matches!(push(&dir, "p1", PushRequest { sheets: vec![nan] }), Err(SheetError::Invalid(_))));
     }
 
     fn push_one(dir: &Path, s: PushedSheet) -> PushOutcome {

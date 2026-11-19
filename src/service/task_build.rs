@@ -16,7 +16,7 @@ use serde_json::{json, Value};
 use super::blueprint_capture::{properties_of, FT_TO_MM};
 use super::blueprint_geometry::Pt;
 use super::blueprint_resolve::{resolve_in_room_with, EdgeMap};
-use super::elevation_facing::model_room_ring_in;
+use super::elevation_facing::{model_room_ring_in, template_ring};
 use super::placement;
 use super::rls_plan::{check_size, has_elevations, plan_crop, size_token, transfer, MarkerPlan, RlsPlan, RlsRequest};
 use super::rls_reads::RlsReads;
@@ -421,12 +421,14 @@ fn sheet_for_rules(record: &sheets::SheetRecord) -> BlueprintSheet {
         sheet_number: record.sheet_number.clone(),
         sheet_name: record.sheet_name.clone(),
         size_mm: record.size_mm,
+        room_summary: None,
+        room_outline: Vec::new(),
         sheet: record.sheet.clone(),
     }
 }
 
-/// The template room's outline and this room's, either absent when the room is not on the server.
-type Rings = (Option<Vec<Pt>>, Option<Vec<Pt>>);
+/// The template room's outline (or why there is none) and this room's (absent when it is not on the server).
+type Rings = (Result<Vec<Pt>, &'static str>, Option<Vec<Pt>>);
 
 /// Where the template's elevation markers and views go in this room (`service::rls_plan`), with a
 /// finding for whatever could not be placed.
@@ -439,15 +441,14 @@ fn place_elevations(
     let mut markers = Vec::new();
     if has_elevations(&record.sheet) {
         match rings {
-            (Some(t), Some(g)) => {
+            (Ok(t), Some(g)) => {
                 let (placed, notes) = transfer(&record.sheet, t, g, request);
                 markers = placed;
                 findings.extend(notes.into_iter().map(|n| finding("elevation_not_placed", n)));
             }
-            (None, _) => findings.push(finding(
-                "elevation_not_placed",
-                "the elevations were not placed: the room the sheet was made for is not on the server".to_string(),
-            )),
+            (Err(why), _) => {
+                findings.push(finding("elevation_not_placed", format!("the elevations were not placed: {why}")))
+            }
             _ => {}
         }
     }
@@ -465,15 +466,13 @@ fn place_elevations(
 /// The template room's outline and this room's, each in its own model's frame (the sheet's numbers are), read once
 /// for the elevations and the plan crop.
 fn template_and_target(reads: &RlsReads, room: &RoomRef, record: &sheets::SheetRecord) -> Result<Rings, ServiceError> {
-    let Some(rooms) = reads.rooms()? else {
-        return Ok((None, None));
-    };
-    let ring = |r: &SheetRoom| model_room_ring_in(reads.state, reads.project, rooms, r);
-    let template = match &record.room {
-        Some(r) => ring(r)?,
+    let rooms = reads.rooms()?;
+    let template = template_ring(reads.state, reads.project, rooms, record)?;
+    let target = match rooms {
+        Some(rooms) => model_room_ring_in(reads.state, reads.project, rooms, &SheetRoom::from(room))?,
         None => None,
     };
-    Ok((template, ring(&SheetRoom::from(room))?))
+    Ok((template, target))
 }
 
 /// A warning, never a refusal, when the room the sheet was made for (by the figures it stored at push) is far from
@@ -570,7 +569,7 @@ pub fn rls_from_sheet_with(
     let rings = template_and_target(reads, room, &record)?;
     let markers = place_elevations(&rings, &record, request, &mut findings);
     let plan_crop = match &rings {
-        (Some(t), Some(g)) => plan_crop(&record.sheet, t, g),
+        (Ok(t), Some(g)) => plan_crop(&record.sheet, t, g),
         _ => None,
     };
     // No items are placed: the rules for every element are carried, for the plug-in to apply to
@@ -595,7 +594,7 @@ pub fn rls_from_sheet_with(
     let three_ds = three_d_room
         .map(|ring| three_ds(&record.sheet, ring, plan_crop.as_ref(), &items))
         .unwrap_or_default();
-    let room_tag = room_tag_head(rings.0.as_deref(), rings.1.as_deref(), &record, &tag_rules, &mut findings);
+    let room_tag = room_tag_head(rings.0.as_deref().ok(), rings.1.as_deref(), &record, &tag_rules, &mut findings);
     let rls = (sheet_size.is_some()
         || !markers.is_empty()
         || tags.is_some()
@@ -625,6 +624,8 @@ pub fn rls_from_sheet_with(
             sheet_number: record.sheet_number,
             sheet_name: record.sheet_name,
             size_mm: record.size_mm,
+            room_summary: None,
+            room_outline: Vec::new(),
             sheet: record.sheet,
         }],
         findings,

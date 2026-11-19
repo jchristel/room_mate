@@ -277,23 +277,53 @@ fn sheet_marker_location(sheet: &Value, view_id: i64) -> Option<[f64; 3]> {
 /// elevations (and their markers) with a finding in place of the walls.
 pub fn for_sheet(state: &AppState, project: &str, record: &SheetRecord) -> Result<Elevations, ServiceError> {
     let mut out = Elevations { room: record.room.clone(), ..Default::default() };
-    let ring = match &record.room {
-        None => {
-            out.findings.push("the sheet has no room, so there are no walls to face".into());
+    let rooms = match (record.room_outline.is_empty(), &record.room) {
+        (true, Some(_)) => assemble_rooms(state, &RoomScope { project: Some(project), ..Default::default() })?,
+        _ => None,
+    };
+    let ring = match template_ring(state, project, rooms.as_ref(), record)? {
+        Ok(r) => r,
+        Err(why) => {
+            out.findings.push(why.into());
             Vec::new()
         }
-        Some(room) => match model_room_ring(state, project, room)? {
-            Some(r) => r,
-            None => {
-                out.findings.push("the sheet's room is not on the server".into());
-                Vec::new()
-            }
-        },
     };
     let (markers, elevations) = read_sheet(&record.sheet, &ring);
     out.markers = markers;
     out.elevations = elevations;
     Ok(out)
+}
+
+/// Why a sheet has no room to carry its views from: the sheet names none (pushed before outlines were stored and
+/// covering several rooms or none), or the one it names is not among the project's rooms.
+pub const SHEET_NAMES_NO_ROOM: &str = "the sheet stores no outline of the room it was made for (push it again with its room ticked; a sheet covering several rooms has none)";
+pub const SHEET_ROOM_NOT_ON_SERVER: &str = "the room the sheet was made for is not on the server, and the sheet stores no outline of it (push the sheet again)";
+
+/// The outline of the room a library sheet was made for, in the sheet's model frame, counter-clockwise, at the
+/// fine tolerance: the outline STORED with the sheet first (it is the room the views were drawn against, wherever
+/// the sheet is now), else the room it links to, read from `rooms` (the project's rooms; `None` when there are
+/// none). `Err` says why there is neither.
+pub fn template_ring(
+    state: &AppState,
+    project: &str,
+    rooms: Option<&RoomsResult>,
+    record: &SheetRecord,
+) -> Result<Result<Vec<Pt>, &'static str>, ServiceError> {
+    if record.room_outline.len() >= 3 {
+        let mut ring: Vec<Pt> = record.room_outline.iter().map(|p| (p[0], p[1])).collect();
+        if signed_area(&ring) < 0.0 {
+            ring.reverse();
+        }
+        return Ok(Ok(simplify(&ring, FINE_TOLERANCE_MM)));
+    }
+    let Some(room) = &record.room else {
+        return Ok(Err(SHEET_NAMES_NO_ROOM));
+    };
+    let found = match rooms {
+        Some(rooms) => model_room_ring_in(state, project, rooms, room)?,
+        None => None,
+    };
+    Ok(found.ok_or(SHEET_ROOM_NOT_ON_SERVER))
 }
 
 /// A sheet's room as a ring in the TARGET MODEL's frame (the sheet is read in model coordinates),

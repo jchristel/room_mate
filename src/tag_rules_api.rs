@@ -418,6 +418,7 @@ mod tests {
             phase: None,
             room_summary: None,
             size_mm: None,
+            room_outline: Vec::new(),
             rooms: vec![],
             sheet: json!({ "view_ports": [] }),
         };

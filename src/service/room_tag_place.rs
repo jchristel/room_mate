@@ -66,7 +66,9 @@ pub fn head_in(b: &Boundary, template: Option<&[Pt]>, target: &[Pt], scale: f64)
     let (es, index) = match b.of {
         BoundaryOf::Wall => {
             let Some(template) = template else {
-                return Err("the room the sheet was made for is not on the server".to_string());
+                return Err(
+                    "the room tag was not placed: the sheet has no outline of the room it was made for".to_string()
+                );
             };
             let (tc, gc) = (coarse_outline(template), coarse_outline(target));
             if tc.len() != gc.len() || tc.len() < 3 {
@@ -137,7 +139,7 @@ mod tests {
             (0.0, 3000.0),
         ];
         assert!(head_in(&b, Some(&template), &l, 50.0).unwrap_err().contains("edges"));
-        assert!(head_in(&b, None, &target, 50.0).unwrap_err().contains("not on the server"));
+        assert!(head_in(&b, None, &target, 50.0).unwrap_err().contains("no outline of the room"));
     }
 
     #[test]

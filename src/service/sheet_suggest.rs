@@ -451,6 +451,7 @@ mod tests {
             phase: None,
             room_summary: None,
             size_mm: None,
+            room_outline: Vec::new(),
             rooms: Vec::new(),
             room_key: None,
             received_at: String::new(),

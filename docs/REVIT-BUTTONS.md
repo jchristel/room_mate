@@ -22,7 +22,7 @@ Pushes a room and its room layout sheets to the server as a blueprint. Choose th
 
 ### <img src="../extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/Sheets.pushbutton/Icon.png" alt="" width="40" align="absmiddle"> Sheets
 
-Sends the sheets you choose to the server's sheet library. A filter, "Check all matched" and a matching rule help choose the sheets and the rooms each one covers. The rooms only supply the size, area and item count the sheet is ranked on later; none is linked to it. A progress bar and one readable line per sheet report the result.
+Sends the sheets you choose to the server's sheet library. A filter, "Check all matched" and a matching rule help choose the sheets and the rooms each one covers. The rooms supply the size, area and item count the sheet is ranked on later; none is linked to it. **Tick the one room a sheet was made for**: its outline is stored with the sheet, and that is what carries the sheet's elevations, plan crop and turn to another room (a sheet with several rooms ticked, or none, carries none of them). A progress bar and one readable line per sheet report the result.
 
 ### <img src="../extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/Tasks.pushbutton/Icon.png" alt="" width="40" align="absmiddle"> Tasks
 

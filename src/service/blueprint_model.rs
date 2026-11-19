@@ -203,6 +203,13 @@ pub struct BlueprintSheet {
     /// The paper size the extractor measured from the title block, when it did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub size_mm: Option<crate::sheets::SheetSize>,
+    /// The figures and the outline of the room the sheet was made for, as the library holds them. Only an exported
+    /// bundle fills them: imported into another project the blueprint's room is not there to read again, and
+    /// without the outline the sheet's views could not be carried to another room. A Revit push leaves them out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub room_summary: Option<crate::sheets::RoomSummary>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub room_outline: Vec<[f64; 2]>,
     /// The sheet as duHast exports it (viewports with sheet positions and types, schedules),
     /// opaque to the server like a library sheet's body.
     pub sheet: serde_json::Value,
