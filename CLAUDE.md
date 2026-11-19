@@ -527,7 +527,8 @@ get wrong:
 Built (server side): the task store (`tasks`), making tasks (`service::task_build`), the HTTP and MCP
 surface (`tasks_api`; MCP reads `list_tasks`, `get_task`, `preview_rls`, `preview_rls_set`) and the task list page at `/tasks/` (`src-js/tasks`:
 filters, a task's items, sheets, findings and attempts, dismiss, resend, and a panel that makes populate and update
-tasks; it reads the list again every few seconds to show what a session did). the main viewer's
+tasks; it reads the list again every few seconds to show what a session did; a task's sheets are previewed with the library's
+`SheetPreview`, a set's from its own layout and a create-RLS task's as the template on the asked paper, `tasks/sheetPreviews.ts`). the main viewer's
 "Room tasks" colouring (`viewer/taskStatus.ts`, a choice in the zone's colour picker: a room draws in the state
 of its newest task that is not dismissed; a task's number must agree with the room's, because a viewer room names no
 model; read only while a zone uses it, every 8 s; not in the SVG export). The Revit side has its checking
@@ -723,7 +724,10 @@ checked before anything is made, then one transaction group per task (`duHast...
   finding); a schedule per room and one 3D view at the template's paper size, marked `estimate` (rows and projection are Revit's). The lead room,
   whose parameters will fill the set's own names on the plug-in side, is the LARGEST. **The composer is the RLS tool's `set` mode**
   (`viewer/rlsSet.ts` rules, `app/RlsSetPanel.tsx`): rooms clicked on the plan, a first layout in rows, then a person drags views between
-  sheets and the list, adds and removes (empty) sheets and leaves views out. One view, one sheet, EXCEPT a schedule, which may be
+  sheets and the list, adds and removes (empty) sheets and leaves views out. **Plan** folds the zone's plan away
+  (`RlsToolState.planCollapsed`, `planHidden`: set mode with rooms only, so a save brings the plan back) and each sheet takes the
+  composer's height. That needed `#root` at the viewport height: at `100%` it sized to its content, which only filled the screen
+  while the plan canvas held its size. One view, one sheet, EXCEPT a schedule, which may be
   placed whole on several sheets, once on each ("Place again"; decided 2026-11-14: repeated, never split). A paper
   change moves nothing; what no longer fits is a finding. **A view too big for the paper at all** (the plan of a large set at
   1:50) is its own finding (`too_big`), red and first, whether placed or waiting, naming the smallest A size that holds it or saying none does. The drawable area is the sheet less `MARGIN_MM` until the title block's is known.
