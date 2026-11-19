@@ -763,6 +763,15 @@
   .rlsSheet .port.dragging rect { fill-opacity: 0.6; }
   .rlsSheet .port.tooBig rect { stroke: var(--danger, #c0392b); stroke-width: 2.5; }
   .rlsPort.tooBig { border-color: var(--danger, #c0392b); color: var(--danger, #c0392b); }
+  /* The plan folded away (RLS set, "Plan"): the zone is the bar, the findings and the composer, which takes what is
+     left. Each sheet is as TALL as the composer and as wide as its paper makes it (the SVG's viewBox gives the
+     width), side by side, scrolling sideways. The canvas stays mounted, so the plan comes back as it was. */
+  .zone.plan-collapsed { display: flex; flex-direction: column; }
+  .zone.plan-collapsed .zone-canvas { display: none; }
+  .zone.plan-collapsed .rlsComposer { flex: 1; min-height: 0; max-height: none; }
+  .zone.plan-collapsed .rlsSheets { align-items: stretch; min-height: 0; }
+  .zone.plan-collapsed .rlsSheet { width: auto; height: 100%; display: flex; flex-direction: column; margin: 0; }
+  .zone.plan-collapsed .rlsSheet svg { flex: 1; min-height: 0; height: 100%; width: auto; align-self: flex-start; }
   /* A handle is a short line with a wide, round, non-scaling stroke: a dot that stays one size on screen. */
   .bp-handle { stroke: var(--accent); stroke-width: 13px; stroke-linecap: round; vector-effect: non-scaling-stroke;
                pointer-events: stroke; cursor: grab; touch-action: none; }
@@ -897,12 +906,17 @@
      unconstrained, the zone grows to its content instead of filling the
      viewport, and the plan is drawn at several times the panel's height with
      the page scrolling under it. Same rows, same `minmax(0, 1fr)` column, for
-     the same reasons stated on `body`. */
+     the same reasons stated on `body`. The height is the VIEWPORT's, not
+     `100%`: #root sits in body's first row, which is `auto`, so a percentage
+     resolved against its own content and the page filled the screen only
+     because the plan canvas held its size. Fold the plan away (RLS set,
+     "Plan") and the whole page shrank to its content. */
   #root {
     display: grid;
     grid-template-rows: auto 1fr auto;
     grid-template-columns: minmax(0, 1fr);
-    height: 100%;
+    height: 100vh;
+    height: 100dvh;
     min-height: 0;
   }
 

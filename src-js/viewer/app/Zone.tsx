@@ -46,6 +46,7 @@ import { useViewer } from "./useViewer.js";
 import { wirePlanGestures } from "./gestures.js";
 import { register, unregister, type ZoneHandle } from "./zoneRegistry.js";
 import type { Room } from "../../renderer/types.js";
+import { planHidden } from "../rlsTool.js";
 
 /** Above this many rooms, show a busy panel while the plan is built.
  *
@@ -302,7 +303,7 @@ export function Zone({ zone }: { zone: ZoneRow }) {
   }, [payload, levelId]);
 
   return (
-    <div className="zone">
+    <div className={`zone${planHidden(zone.rls) ? " plan-collapsed" : ""}`}>
       <div className="zone-toolbar">
         {/* On the toolbar's bottom rule, not a row of its own: a row that came
             and went would resize the canvas under it, and the plan would jump

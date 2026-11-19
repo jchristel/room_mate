@@ -8,7 +8,8 @@ half (`min_rectangle`, `combine`) is tested on CPython (`extractor/tests/test_ro
 Revit half (`read_room`) only collects what duHast offers.
 
 **Several rooms on one sheet** are one figure: the rectangle is the smallest one enclosing every
-room's outline, the area and the item count are sums.
+room's outline, the area and the item count are sums. **One room** also sends its outline
+(`single_outline`), which is what the server carries the sheet's views to another room against.
 """
 
 import math
@@ -93,6 +94,19 @@ def combine(rooms):
         "area_m2": round(area / SQ_MM_PER_SQ_M, 3),
         "items": items,
     }
+
+
+def single_outline(rooms):
+    """The outline of the ONE room a sheet covers, as the server stores it (`room_outline`: `[[x_mm, y_mm]]`,
+    the document's own frame, 0.1 mm), or None for none or several rooms. The server carries a sheet's views to
+    another room against this outline, so a sheet needs no room linked to it; several rooms are not one room's
+    walls, so they send none."""
+    if len(rooms) != 1:
+        return None
+    outline = rooms[0].get("outline") or []
+    if len(outline) < 3:
+        return None
+    return [[round(float(x), 1), round(float(y), 1)] for x, y in outline]
 
 
 def room_label(room):

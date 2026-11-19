@@ -835,6 +835,14 @@ scale are read: see Tag rules).** Rules that are expensive to get wrong:
   and sends it as `room_summary`, with the labels in `rooms` and the paper size measured from the title block's bounding box in
   `size_mm` (mm as measured, never snapped to A0..A3). A sheet from a blueprint may still carry a `room` link; the library page no
   longer sets one. **Not run in Revit.**
+- **A sheet stores the outline of the ONE room it was made for** (`room_outline`, 2026-11-19: mm, the sheet's model frame), and every
+  transfer reads that, not the room: the elevations, the plan crop and its turn, a bound room tag (`elevation_facing::template_ring`,
+  stored outline first, else the `room` link read live). Without it a Sheets-button sheet (no link) and any sheet in another project
+  than its room's (an import) placed no elevations and turned nothing. The Sheets button sends it when one room is ticked
+  (`room_figures.single_outline`; several rooms send none); a linked push without one gets it from the server's rooms, and a blueprint
+  bundle carries it (and the room summary), so an exported blueprint's sheets transfer in the project they are imported into. A
+  re-push that measures the rooms again replaces it, so a sheet that now covers several rooms loses it. Sheets pushed before keep none
+  until pushed again.
 - **`suggest` offers and never applies, and only for sheet creation mode.** Area, proportions
   and item count are weighed equally, each as a log-ratio, worked out from today's rooms and
   FF&E and never stored. Proportions is the smallest enclosing rectangle's long over short

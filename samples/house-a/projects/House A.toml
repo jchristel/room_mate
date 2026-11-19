@@ -101,30 +101,30 @@ date = "2026-09-05"
 [milestones.floor_attachments]
 [[milestones]]
 name = "Current push"
-date = "2026-10-30"
+date = "2026-11-19"
 
 [milestones.reference_snapshots]
 
 [milestones.attachments]
-"Building_BF_Framing_jan.r.christel" = "2026-10-30T08:52:45.876000Z"
+"Building_BF_Framing_jan.r.christel" = "2026-11-19T09:33:52.288000Z"
 
 [milestones.door_attachments]
-"Building_BF_Framing_jan.r.christel" = "2026-10-30T08:52:45.876000Z"
+"Building_BF_Framing_jan.r.christel" = "2026-11-19T09:33:52.288000Z"
 
 [milestones.window_attachments]
-"Building_BF_Framing_jan.r.christel" = "2026-10-30T08:52:45.876000Z"
+"Building_BF_Framing_jan.r.christel" = "2026-11-19T09:33:52.288000Z"
 
 [milestones.ffe_attachments]
-"Building_BF_Framing_jan.r.christel" = "2026-10-30T08:52:45.876000Z"
+"Building_BF_Framing_jan.r.christel" = "2026-11-19T09:33:52.288000Z"
 
 [milestones.space_attachments]
-"Building_BF_Framing_jan.r.christel" = "2026-10-30T08:52:45.876000Z"
+"Building_BF_Framing_jan.r.christel" = "2026-11-19T09:33:52.288000Z"
 
 [milestones.ceiling_attachments]
-"Building_BF_Framing_jan.r.christel" = "2026-10-30T08:52:45.876000Z"
+"Building_BF_Framing_jan.r.christel" = "2026-11-19T09:33:52.288000Z"
 
 [milestones.floor_attachments]
-"Building_BF_Framing_jan.r.christel" = "2026-10-30T08:52:45.876000Z"
+"Building_BF_Framing_jan.r.christel" = "2026-11-19T09:33:52.288000Z"
 [appearance.rooms]
 line = "#f0c800"
 fill = "#f60404"

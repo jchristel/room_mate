@@ -99,12 +99,15 @@ def read_sheet(doc, entry, room=None, phase_name=None, rooms=None, type_code_par
     if size is not None:
         pushed["size_mm"] = size
     if rooms:
-        # The rooms this sheet covers are said by the person; their figures travel with the
-        # sheet, and no room is linked to it.
+        # The rooms this sheet covers are said by the person; their figures (and one room's
+        # outline) travel with the sheet, and no room is linked to it.
         read = [room_figures.read_room(doc, r) for r in rooms]
         figure = room_figures.combine(read)
         if figure is not None:
             pushed["room_summary"] = figure
+        outline = room_figures.single_outline(read)
+        if outline is not None:
+            pushed["room_outline"] = outline
         pushed["rooms"] = [room_figures.room_label(r) for r in rooms]
     return pushed
 

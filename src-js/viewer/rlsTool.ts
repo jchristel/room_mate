@@ -29,6 +29,8 @@ export interface RlsToolState {
   solved: Record<string, Solved>;
   /** Auto: which categories "Make" queues. */
   bands: Record<Category, boolean>;
+  /** Set: the zone's plan folded away so the sheets of the composer get the whole zone (`planHidden`). */
+  planCollapsed: boolean;
 }
 
 export type RlsMode = "manual" | "auto" | "set";
@@ -62,7 +64,12 @@ export const newRlsTool = (): RlsToolState => ({
   overrides: {},
   solved: {},
   bands: { green: true, yellow: false, red: false, override: true },
+  planCollapsed: false,
 });
+
+/** Whether the zone's plan is folded away for the set composer. Only while there are rooms to lay out: with none the
+ *  plan is where the next set is picked, so it comes back by itself (after a save, or the last room taken off). */
+export const planHidden = (s: RlsToolState | null): boolean => !!s && s.mode === "set" && s.planCollapsed && s.roomIds.length > 0;
 
 export const bandOf = (fit: number): Band => (fit >= GREEN_FROM ? "green" : fit >= YELLOW_FROM ? "yellow" : "red");
 

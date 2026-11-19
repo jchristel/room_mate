@@ -310,6 +310,8 @@ pub fn set_task(
             sheet_number: template.sheet_number.clone(),
             sheet_name: template.sheet_name.clone(),
             size_mm: template.size_mm,
+            room_summary: None,
+            room_outline: Vec::new(),
             sheet: template.sheet.clone(),
         }],
         rls: None,

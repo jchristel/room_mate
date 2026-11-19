@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { chooseSheet, madeText, newRlsTool, pickRoom, roomsText, whyNot } from "./rlsTool.js";
+import { chooseSheet, madeText, newRlsTool, pickRoom, planHidden, roomsText, whyNot } from "./rlsTool.js";
 
 describe("the RLS tool", () => {
   it("adds a room on one click and takes it off on the next", () => {
@@ -85,5 +85,16 @@ describe("RLS auto mode", () => {
     s = { ...s, bands: { green: false, yellow: true, red: false, override: false } };
     expect([...autoBatches(s, ["a", "b", "c", "d"])]).toEqual([["s1", ["c"]]]);
     expect(autoBatches(setOverride(s, "c", NO_SHEET), ["c"]).size).toBe(0);
+  });
+});
+
+describe("the set composer's plan", () => {
+  it("folds away only in set mode and only while there are rooms to lay out", () => {
+    const folded = { ...newRlsTool(), mode: "set" as const, planCollapsed: true, roomIds: ["r1"] };
+    expect(planHidden(folded)).toBe(true);
+    expect(planHidden({ ...folded, roomIds: [] })).toBe(false);
+    expect(planHidden({ ...folded, mode: "manual" })).toBe(false);
+    expect(planHidden({ ...folded, planCollapsed: false })).toBe(false);
+    expect(planHidden(null)).toBe(false);
   });
 });

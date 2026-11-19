@@ -43,6 +43,16 @@ class RoomFigures(unittest.TestCase):
     def test_no_outline_gives_none(self):
         self.assertIsNone(f.combine([{"outline": [], "items": 3}]))
 
+    def test_one_room_sends_its_outline(self):
+        got = f.single_outline([{"outline": [(0.04, 0), (4000, 0), (4000, 3000.06)], "items": 1}])
+        self.assertEqual(got, [[0.0, 0.0], [4000.0, 0.0], [4000.0, 3000.1]])
+
+    def test_several_rooms_or_none_send_no_outline(self):
+        two = [{"outline": rect(0, 0, 1, 1)}, {"outline": rect(1, 0, 2, 1)}]
+        self.assertIsNone(f.single_outline(two))
+        self.assertIsNone(f.single_outline([]))
+        self.assertIsNone(f.single_outline([{"outline": [(0, 0), (1, 1)]}]))
+
     def test_label(self):
         self.assertEqual(f.room_label({"number": "1.01", "name": "Bedroom"}), "1.01 Bedroom")
 

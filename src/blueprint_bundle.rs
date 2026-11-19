@@ -83,6 +83,7 @@ pub fn bind_to_library(
 ) -> Result<usize, (StatusCode, String)> {
     let projects = projects_dir(state)?;
     let summary = room.and_then(|r| crate::sheets_api::summary_of(state, project, r));
+    let outline = room.map(|r| crate::sheets_api::outline_of(state, project, r)).unwrap_or_default();
     let pushed: Vec<PushedSheet> = sheets
         .iter()
         .map(|s| PushedSheet {
@@ -93,8 +94,10 @@ pub fn bind_to_library(
             room: room.cloned(),
             blueprint: Some(blueprint.to_string()),
             phase: None,
-            room_summary: summary,
+            // the room as the server holds it now; else what the bundle carried (an import from another project)
+            room_summary: summary.or(s.room_summary),
             size_mm: s.size_mm,
+            room_outline: if outline.is_empty() { s.room_outline.clone() } else { outline.clone() },
             rooms: Vec::new(),
             sheet: s.sheet.clone(),
         })
@@ -225,6 +228,8 @@ pub fn export(state: &Shared, project: &str, blueprint: &str) -> Result<Bundle, 
                 sheet_number: r.sheet_number.clone(),
                 sheet_name: r.sheet_name.clone(),
                 size_mm: r.size_mm,
+                room_summary: r.room_summary,
+                room_outline: r.room_outline.clone(),
                 sheet: r.sheet.clone(),
             })
             .collect(),
@@ -366,6 +371,8 @@ mod tests {
             sheet_number: number.into(),
             sheet_name: String::new(),
             size_mm: None,
+            room_summary: None,
+            room_outline: Vec::new(),
             sheet: json!({ "view_ports": [] }),
         }
     }
@@ -607,6 +614,7 @@ mod tests {
             phase: None,
             room_summary: None,
             size_mm: None,
+            room_outline: Vec::new(),
             rooms: vec![],
             sheet: json!({ "view_ports": [] }),
         };
@@ -662,6 +670,7 @@ mod tests {
             phase: None,
             room_summary: None,
             size_mm: None,
+            room_outline: Vec::new(),
             rooms: vec![],
             sheet: json!({ "view_ports": [] }),
         };

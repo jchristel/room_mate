@@ -12,6 +12,8 @@ export function SheetPreview({ record }: { record: Pick<SheetRecord, "size_mm" |
   if (!preview) return <p className="hint">Nothing to draw: the export has no viewport outlines and the paper size was not measured.</p>;
   const used = KINDS.filter((k) => preview.boxes.some((b) => b.kind === k));
   const fontSize = Math.max(preview.width, preview.height) / 45;
+  // a label shrinks to fit its own box (monospace: a character is about 0.6 of the size wide), never grows past the sheet's
+  const fit = (label: string, w: number, h: number) => Math.min(fontSize, (w * 0.9) / (Math.max(label.length, 1) * 0.6), h * 0.45);
   return (
     <figure className="preview">
       <svg viewBox={`-5 -5 ${preview.width + 10} ${preview.height + 10}`} role="img" aria-label="Sheet preview">
@@ -19,7 +21,7 @@ export function SheetPreview({ record }: { record: Pick<SheetRecord, "size_mm" |
         {preview.boxes.map((b, i) => (
           <g key={i} className={`port ${b.kind}`}>
             <rect x={b.x} y={b.y} width={b.w} height={b.h} />
-            <text x={b.x + b.w / 2} y={b.y + b.h / 2} fontSize={fontSize} textAnchor="middle" dominantBaseline="central">
+            <text x={b.x + b.w / 2} y={b.y + b.h / 2} fontSize={fit(b.label, b.w, b.h)} textAnchor="middle" dominantBaseline="central">
               {b.label}
             </text>
           </g>

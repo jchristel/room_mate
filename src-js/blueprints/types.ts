@@ -102,7 +102,7 @@ export interface SourceRoom {
 /** A blueprint's sheets and tag rules, which it does not hold itself: they live in the sheet library and the
  *  tag rules, bound to it (plan decision 27). This is what Export puts beside the room and Import takes back in. */
 export interface Bundle {
-  sheets: { revit_sheet_id: string; document_title: string; sheet_number: string; sheet_name?: string; size_mm?: { width_mm: number; height_mm: number }; sheet: unknown }[];
+  sheets: { revit_sheet_id: string; document_title: string; sheet_number: string; sheet_name?: string; size_mm?: { width_mm: number; height_mm: number }; room_summary?: unknown; room_outline?: [number, number][]; sheet: unknown }[];
   type_code_parameter?: string;
   /** Tag rules with their samples, opaque to this page. */
   rules?: unknown;

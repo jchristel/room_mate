@@ -58,9 +58,21 @@ pub(crate) fn summary_of(state: &Shared, project: &str, room: &SheetRoom) -> Opt
     }
 }
 
+/// The outline of the room as the server holds it now, in the sheet's model frame (what a sheet stores as
+/// `room_outline`). Empty when the room is not on the server; the sheet is still stored.
+pub(crate) fn outline_of(state: &Shared, project: &str, room: &SheetRoom) -> Vec<[f64; 2]> {
+    match elevation_facing::model_room_ring(state, project, room) {
+        Ok(ring) => ring.unwrap_or_default().into_iter().map(|(x, y)| [x, y]).collect(),
+        Err(e) => {
+            tracing::warn!("room outline for a sheet push failed: {e}");
+            Vec::new()
+        }
+    }
+}
+
 /// The extractor's push. 200 with what happened to each sheet: created, updated, or stashed
-/// as pending because its number changed. Each sheet that names a room also stores a summary of
-/// it, read from the rooms and FF&E pushed already.
+/// as pending because its number changed. Each sheet that names a room also stores a summary and the
+/// outline of it, read from the rooms and FF&E pushed already, when the extractor sent none.
 pub async fn http_push_sheets(
     State(state): State<Shared>,
     UrlPath(project_id): UrlPath<String>,
@@ -74,6 +86,11 @@ pub async fn http_push_sheets(
         {
             let key = (room.model_id.clone(), room.room_id.clone());
             sheet.room_summary = *seen.entry(key).or_insert_with(|| summary_of(&state, &project_id, room));
+        }
+        if sheet.room_outline.is_empty()
+            && let Some(room) = &sheet.room
+        {
+            sheet.room_outline = outline_of(&state, &project_id, room);
         }
     }
     sheets::push(&projects_dir(&state)?, &project_id, request).map(Json).map_err(to_http)
