@@ -3,7 +3,7 @@
 import { KIND_TEXT, STATE_TEXT, UPDATE_MODE_TEXT, canDismiss, canResend, findingText, needsAttention, shortTime } from "./model.js";
 import type { Task } from "./types.js";
 import { SheetPreview } from "../library/SheetPreview.js";
-import { taskSheetPreviews } from "./sheetPreviews.js";
+import { sheetStatus, taskSheetPreviews } from "./sheetPreviews.js";
 
 export interface DetailProps {
   task: Task;
@@ -19,6 +19,7 @@ export function TaskDetail({ task, busy, onDismiss, onResend }: DetailProps) {
   const populate = t.kind === "populate_room";
   const update = t.kind === "update_room";
   const previews = taskSheetPreviews(t);
+  const fit = sheetStatus(t);
   return (
     <div className="detail">
       <div className="toolbar">
@@ -98,8 +99,13 @@ export function TaskDetail({ task, busy, onDismiss, onResend }: DetailProps) {
           <p className="hint">
             {t.rls_set
               ? "The sheets as the set lays them out. Schedule and 3D sizes are estimates: Revit decides them."
-              : "The template's viewports on the paper the task asks for. The elevations and the plan's framing follow this room, so the views' contents differ."}
+              : "The template's viewports on the paper the task asks for, where the template puts them. The plan, the elevations and the 3D views are sized for this room; schedules keep the template's size, which Revit decides."}
           </p>
+          {fit.state === "clipping" ? (
+            <p className="banner error">
+              ⚠ {fit.clipped} viewport{fit.clipped === 1 ? "" : "s"} past the sheet's edge (outlined in red). Revit will place {fit.clipped === 1 ? "it" : "them"} there.
+            </p>
+          ) : null}
           <div className="sheet-previews">
             {previews.map((p, i) => (
               <section key={i}>

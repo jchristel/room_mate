@@ -9,17 +9,20 @@
 // A task is a RECORD (plan decision 21): it holds what Revit is told as of when it was made. The
 // resolver is not asked again here.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import * as api from "./api.js";
 import { persistSelection, seedProjectId } from "./common.js";
 import { MakeTasks } from "./MakeTasks.js";
 import { TaskDetail } from "./TaskDetail.js";
 import { TaskList } from "./TaskList.js";
+import { sheetStatus, type SheetStatus } from "./sheetPreviews.js";
 import type { AssignmentRow, Made, ProjectRow, Task, TaskState, TaskSummary } from "./types.js";
 
 const message = (e: unknown): string => String((e as Error).message ?? e);
 const POLL_MS = 8000;
+/** Full tasks read at once to look at their sheets. */
+const LOOK_AT_ONCE = 4;
 
 export function App() {
   const [projects, setProjects] = useState<ProjectRow[]>([]);
@@ -28,6 +31,9 @@ export function App() {
   const [selected, setSelected] = useState<Task | null>(null);
   const [model, setModel] = useState("");
   const [states, setStates] = useState<ReadonlySet<TaskState>>(new Set());
+  const [onlyWarnings, setOnlyWarnings] = useState(false);
+  // What each queued sheet task looks like against its paper, keyed by task and stamped with the `updated_at` it was read at.
+  const [status, setStatus] = useState<ReadonlyMap<string, SheetStatus & { at: string }>>(new Map());
   const [making, setMaking] = useState(false);
   const [assignments, setAssignments] = useState<AssignmentRow[]>([]);
   const [busy, setBusy] = useState(false);
@@ -60,11 +66,40 @@ export function App() {
     setSelected(null);
     setMaking(false);
     setModel("");
+    setStatus(new Map());
     if (!projectId) return;
     void refresh(projectId);
     const timer = window.setInterval(() => void refresh(projectId), POLL_MS);
     return () => window.clearInterval(timer);
   }, [projectId, refresh]);
+
+  // Look at the sheets of every queued task that makes some: a list row has no viewports, so the whole task is read
+  // once per version (a task is a record, and `updated_at` moves when it does) and judged by `sheetStatus`. A read
+  // already under way is not started again by the next poll, and one that finishes after a project change is dropped.
+  const looking = useRef(new Set<string>());
+  const current = useRef<string | null>(null);
+  current.current = projectId;
+  useEffect(() => {
+    if (!projectId || !rows) return;
+    const queue = rows.filter(
+      (r) => r.state === "queued" && (r.kind === "create_rls" || r.kind === "create_rls_set") && status.get(r.id)?.at !== r.updated_at && !looking.current.has(`${projectId}/${r.id}@${r.updated_at}`),
+    );
+    for (const r of queue) looking.current.add(`${projectId}/${r.id}@${r.updated_at}`);
+    const worker = async () => {
+      for (let r = queue.shift(); r; r = queue.shift()) {
+        const key = `${projectId}/${r.id}@${r.updated_at}`;
+        try {
+          const s = sheetStatus(await api.getTask(projectId, r.id));
+          if (current.current === projectId) setStatus((cur) => new Map(cur).set(r.id, { ...s, at: r.updated_at }));
+        } catch {
+          // a task that cannot be read now is looked at again on the next poll
+        } finally {
+          looking.current.delete(key);
+        }
+      }
+    };
+    for (let i = 0, n = Math.min(LOOK_AT_ONCE, queue.length); i < n; i += 1) void worker();
+  }, [projectId, rows, status]);
 
   // What the make panel offers, read when it opens.
   useEffect(() => {
@@ -150,6 +185,9 @@ export function App() {
           selectedId={selected?.id ?? null}
           model={model}
           states={states}
+          status={status}
+          onlyWarnings={onlyWarnings}
+          onOnlyWarnings={setOnlyWarnings}
           onModel={setModel}
           onToggleState={toggleState}
           onSelect={(id) => void open(id)}

@@ -19,8 +19,10 @@ export function SheetPreview({ record }: { record: Pick<SheetRecord, "size_mm" |
       <svg viewBox={`-5 -5 ${preview.width + 10} ${preview.height + 10}`} role="img" aria-label="Sheet preview">
         <rect className="paper" x={0} y={0} width={preview.width} height={preview.height} />
         {preview.boxes.map((b, i) => (
-          <g key={i} className={`port ${b.kind}`}>
+          <g key={i} className={`port ${b.kind}${b.clipped ? " clipped" : ""}`}>
             <rect x={b.x} y={b.y} width={b.w} height={b.h} />
+            {b.crop ? <rect className="view-crop" x={b.crop.x} y={b.crop.y} width={b.crop.w} height={b.crop.h} /> : null}
+            {b.annotation ? <rect className="annotation-crop" x={b.annotation.x} y={b.annotation.y} width={b.annotation.w} height={b.annotation.h} /> : null}
             <text x={b.x + b.w / 2} y={b.y + b.h / 2} fontSize={fit(b.label, b.w, b.h)} textAnchor="middle" dominantBaseline="central">
               {b.label}
             </text>
@@ -46,6 +48,8 @@ export function SheetPreview({ record }: { record: Pick<SheetRecord, "size_mm" |
       </svg>
       <figcaption className="hint">
         {preview.measured ? `${Math.round(preview.width)} x ${Math.round(preview.height)} mm` : "Paper size not measured: outline drawn round the viewports"}
+        {preview.boxes.some((b) => b.annotation) ? " · dashed: view crop (short) and annotation crop (long), centred in the box" : ""}
+        {preview.boxes.some((b) => b.clipped) ? " · red outline: past the paper's edge" : ""}
         {" · "}
         {used.map((k) => (
           <span key={k} className={`key ${k}`}>

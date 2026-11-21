@@ -34,6 +34,8 @@ button.danger { color: var(--accent); }
 
 .chips { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.5rem 0; }
 .chip { font-size: 0.66rem; padding: 0.1rem 0.45rem; }
+.chip.warning.on { border-color: var(--danger, #c0392b); }
+.warn-icon { color: var(--danger, #c0392b); }
 .left ul { list-style: none; margin: 0.5rem 0; padding: 0; display: grid; gap: 0.25rem; }
 .left li button { width: 100%; text-align: left; display: grid; gap: 0.1rem; background: transparent; border: 1px solid transparent; padding: 0.3rem 0.5rem; }
 .left li button span { opacity: 0.7; font-size: 0.7rem; }
@@ -73,6 +75,9 @@ th { opacity: 0.65; font-weight: 400; }
 .preview svg { width: 100%; height: auto; display: block; background: var(--paper); }
 .preview .paper { fill: none; stroke: var(--ink); stroke-width: 0.8; }
 .preview .port rect { stroke-width: 0.6; stroke: var(--ink); fill-opacity: 0.35; }
+.preview g.port rect.view-crop { fill: none; stroke-dasharray: 1.5 1.5; stroke-width: 0.5; }
+.preview g.port rect.annotation-crop { fill: none; stroke-dasharray: 5 2; stroke-width: 0.5; }
+.preview .port.clipped rect:first-child { stroke: var(--danger, #c0392b); stroke-width: 1.4; }
 .preview .port text { fill: var(--ink); font-family: var(--mono); pointer-events: none; }
 .preview .port.plan rect, .preview .key.plan::before { fill: var(--accent); background: var(--accent); }
 .preview .port.elevation rect, .preview .key.elevation::before { fill: var(--ink); background: var(--ink); }
