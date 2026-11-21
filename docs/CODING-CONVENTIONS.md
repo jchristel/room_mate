@@ -149,12 +149,12 @@ helper is duplicated per module is unchanged.)
 
 ## Dependency direction is the seam
 - `service/` is transport-agnostic: it never imports `axum`, `rmcp`, or
-  `reqwest`. `handlers` (HTTP) and `bin/mcp.rs` (MCP) are thin adapters — each
+  `reqwest`. `handlers` (HTTP) and `bin/mcp/` (MCP) are thin adapters — each
   extracts its own input form, calls exactly one `service` function, and
   translates the result to its wire format.
 - Neither binary's transport crate leaks into the other: `main.rs` never
-  imports `rmcp`/`reqwest`, `mcp.rs` never imports `axum`. (An HTTP *client* in
-  `mcp.rs` is fine — the rule is about server frameworks.)
+  imports `rmcp`/`reqwest`, `bin/mcp/` never imports `axum`. (An HTTP *client* in
+  `bin/mcp/` is fine — the rule is about server frameworks.)
 - `bootstrap` (settings files → a running `AppState`) is shared verbatim by
   both binaries so they can't drift on how the store is picked or data is seeded.
 

@@ -299,13 +299,13 @@ def check_paths(findings: Findings) -> None:
 # --------------------------------------------------------------------------
 
 def check_mcp_parity(findings: Findings) -> None:
-    """Every HTTP *read* route should have an MCP tool, per `bin/mcp.rs`'s claim.
+    """Every HTTP *read* route should have an MCP tool, per `bin/mcp/`'s claim.
 
     Mutating routes are deliberately absent from MCP (ingest, activate, settings
     writes) and are filtered out here rather than reported every week.
     """
     main = (ROOT / "src/main.rs").read_text(encoding="utf-8")
-    mcp = (ROOT / "src/bin/mcp.rs").read_text(encoding="utf-8")
+    mcp = "\n".join(p.read_text(encoding="utf-8") for p in sorted((ROOT / "src/bin/mcp").glob("*.rs")))
 
     routes: list[str] = []
     for m in re.finditer(r'\.route\(\s*"([^"]+)"\s*,\s*(.+?)\)\s*(?:\.layer|\n)', main, re.S):
@@ -370,7 +370,7 @@ def check_mcp_parity(findings: Findings) -> None:
         elif tool is None:
             hits.append(f"{route:<58} no MCP tool (known gap -- is it still intended?)")
         elif f"fn {tool}(" not in mcp:
-            hits.append(f"{route:<58} maps to `{tool}`, which is gone from bin/mcp.rs")
+            hits.append(f"{route:<58} maps to `{tool}`, which is gone from bin/mcp/")
 
     numbers = {
         "Fourteen": 14, "Fifteen": 15, "Sixteen": 16, "Seventeen": 17, "Eighteen": 18,
@@ -379,7 +379,7 @@ def check_mcp_parity(findings: Findings) -> None:
     if claimed:
         said = numbers.get(claimed.group(1).capitalize())
         if said and said != tool_count:
-            hits.append(f"bin/mcp.rs header says {claimed.group(1)} tools; {tool_count} `#[tool(` found")
+            hits.append(f"bin/mcp/main.rs header says {claimed.group(1)} tools; {tool_count} `#[tool(` found")
 
     findings.add(
         "HTTP read routes without an MCP tool",
