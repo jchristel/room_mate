@@ -4,6 +4,9 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 
 import { App } from "./App.js";
+import "../ui/base.css";
+import "../ui/list-page.css";
+import "../ui/sheet/preview.css";
 import "./style.css";
 
 const root = document.getElementById("root");

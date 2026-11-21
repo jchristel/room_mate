@@ -10,7 +10,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { apiGet, apiSend } from "./common.js";
+import { apiGet, apiSend } from "../ui/common.js";
 import type {
   ComparisonResponse,
   Milestone,

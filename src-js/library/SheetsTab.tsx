@@ -9,11 +9,13 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import * as api from "./api.js";
 import { boundText, filterSheets, sheetNeedsAttention, sheetReasons, shortTime, sizeText, suggestionText, summaryText } from "./model.js";
-import { MultiPanel, MultiToggle, useSelection } from "./Selection.js";
-import { SheetPreview } from "./SheetPreview.js";
+import { Chip, Chips, ListPane, Row, RowList, SearchBox } from "../ui/ListPane.js";
+import { MultiPanel, MultiToggle, useSelection } from "../ui/Selection.js";
+import { matchesAll } from "../ui/match.js";
+import { SheetPreview } from "../ui/sheet/SheetPreview.js";
 import type { RoomRow, SheetRecord, SheetSummary, Suggestions } from "./types.js";
+import { message } from "../ui/api.js";
 
-const message = (e: unknown): string => String((e as Error).message ?? e);
 const POLL_MS = 8000;
 
 export interface TabProps {
@@ -99,56 +101,59 @@ export function SheetsTab({ project, rooms, onError, onNotice }: TabProps) {
 
   return (
     <div className="page">
-      <aside className="left" aria-label="Sheets">
-        <div className="actions">
-          <button
-            type="button"
-            onClick={() => {
-              setSuggesting(true);
-              setRecord(null);
-            }}
-          >
-            Suggest for a room
-          </button>
-          <MultiToggle selection={selection} />
-        </div>
-        <input type="search" placeholder="Filter: number, name, room" value={text} onChange={(e) => setText(e.target.value)} aria-label="Filter sheets" />
-        {attention > 0 ? (
-          <label className="filter">
-            <input type="checkbox" checked={onlyAttention} onChange={(e) => setOnlyAttention(e.target.checked)} /> Needs attention ({attention})
-          </label>
-        ) : null}
+      <ListPane
+        label="Sheets"
+        actions={
+          <>
+            <button
+              type="button"
+              onClick={() => {
+                setSuggesting(true);
+                setRecord(null);
+              }}
+            >
+              Suggest for a room
+            </button>
+            <MultiToggle selection={selection} />
+          </>
+        }
+        search={<SearchBox value={text} onChange={setText} placeholder="Filter: number, name, room" label="Filter sheets" />}
+        filters={
+          <Chips label="Filters">
+            <Chip kind="attention" on={onlyAttention} onClick={() => setOnlyAttention(!onlyAttention)}>
+              needs attention {attention}
+            </Chip>
+          </Chips>
+        }
+      >
         {rows === null ? <p className="hint">Reading the sheets…</p> : null}
         {rows?.length === 0 ? <p className="hint">The library is empty. Export sheets from Revit with the Sheets button.</p> : null}
         {rows && rows.length > 0 && shown.length === 0 ? <p className="hint">No sheet matches.</p> : null}
-        <ul>
+        <RowList>
           {shown.map((s) => (
-            <li key={s.id}>
-              <button
-                type="button"
-                className={isOn(s.id) ? "on" : ""}
-                aria-pressed={isOn(s.id)}
-                onClick={() => (selection.multi ? selection.toggle(s.id) : void open(s.id))}
-              >
-                <b>
-                  {s.sheet_number} {s.sheet_name}
-                  {sheetNeedsAttention(s) ? (
-                    <i className="badge attention" title={sheetReasons(s).join("; ")}>
-                      needs attention
-                    </i>
-                  ) : null}
-                </b>
-                <span>
-                  {s.document_title} · {sizeText(s.size_mm)} · {s.viewports} viewport{s.viewports === 1 ? "" : "s"} · {boundText(s.blueprint, names)}
-                </span>
-              </button>
-            </li>
+            <Row key={s.id} on={isOn(s.id)} onClick={() => (selection.multi ? selection.toggle(s.id) : void open(s.id))}>
+              <b>
+                {s.sheet_number} {s.sheet_name}
+                {sheetNeedsAttention(s) ? (
+                  <i className="badge attention" title={sheetReasons(s).join("; ")}>
+                    needs attention
+                  </i>
+                ) : null}
+              </b>
+              <span>
+                {s.document_title} · {sizeText(s.size_mm)} · {s.viewports} viewport{s.viewports === 1 ? "" : "s"} · {boundText(s.blueprint, names)}
+              </span>
+            </Row>
           ))}
-        </ul>
-      </aside>
+        </RowList>
+      </ListPane>
       <main>
         {selection.multi ? (
-          <MultiPanel noun="sheet" shown={shown.length} ticked={ticked.length} busy={busy} onAll={() => selection.set(shown.map((s) => s.id))} onNone={() => selection.set([])} onDelete={() => void removeTicked()} />
+          <MultiPanel noun="sheet" shown={shown.length} ticked={ticked.length} busy={busy} onAll={() => selection.set(shown.map((s) => s.id))} onNone={() => selection.set([])}>
+            <button type="button" className="danger" disabled={busy || ticked.length === 0} onClick={() => void removeTicked()}>
+              Delete {ticked.length}
+            </button>
+          </MultiPanel>
         ) : suggesting ? (
           <Suggest project={project} rooms={rooms} onError={onError} />
         ) : record ? (
@@ -283,8 +288,7 @@ function Suggest({ project, rooms, onError }: { project: string; rooms: readonly
   const [filter, setFilter] = useState("");
   const [answer, setAnswer] = useState<Suggestions | null>(null);
   const [busy, setBusy] = useState(false);
-  const f = filter.trim().toLowerCase();
-  const options = rooms.filter((r) => !f || r.name.toLowerCase().includes(f)).slice(0, 200);
+  const options = rooms.filter((r) => matchesAll(r.name, filter)).slice(0, 200);
 
   const ask = async () => {
     setBusy(true);
@@ -306,7 +310,7 @@ function Suggest({ project, rooms, onError }: { project: string; rooms: readonly
       <p className="hint">
         Ranks the library by how close the room figures of each sheet are to this one: area, proportions and item count, weighed equally. It offers; nothing is applied.
       </p>
-      <input type="search" placeholder="Filter rooms" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter rooms" />
+      <SearchBox value={filter} onChange={setFilter} placeholder="Filter rooms" label="Filter rooms" />
       <div className="actions">
         <select value={roomId} onChange={(e) => setRoomId(e.target.value)} aria-label="Room">
           <option value="">Choose a room…</option>

@@ -16,6 +16,8 @@
   --fill-hover: #d4c9a8;
   --accent: #b4541f;
   --error: #c98c86;
+  /* a warning or an error a person must act on: text, borders and strokes. --error is the soft fill behind one. */
+  --danger: #c0392b;
   --ok: #5a7a4f;
   --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, monospace;
 }

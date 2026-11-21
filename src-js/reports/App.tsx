@@ -21,7 +21,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { CheckReport } from "./checks.js";
-import { apiGet, persistSelection, seedProjectId } from "./common.js";
+import { apiGet, persistSelection, seedProjectId } from "../ui/common.js";
 import { CHECKS } from "./checkRows.js";
 import { ENTITIES } from "./reportTypes.js";
 import { typeIdFor } from "./savedReports.js";

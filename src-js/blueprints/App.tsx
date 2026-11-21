@@ -21,7 +21,8 @@ import * as api from "./api.js";
 import { Assign } from "./Assign.js";
 import { BlueprintList } from "./BlueprintList.js";
 import { Canvas } from "./Canvas.js";
-import { attentionReasons, persistSelection, seedProjectId } from "./common.js";
+import { persistSelection, seedProjectId } from "../ui/common.js";
+import { attentionReasons } from "./common.js";
 import { alignEdge, dominantAngle, rotatePoint } from "./boxEdit.js";
 import { sameItems } from "./draft.js";
 import { fileNameFor, toFile, type Imported } from "./exchange.js";
@@ -31,10 +32,10 @@ import { ImportBlueprint } from "./ImportBlueprint.js";
 import { Inspector } from "./Inspector.js";
 import { Timeline } from "./Timeline.js";
 import type { Blueprint, BlueprintDoor, BlueprintItem, BlueprintSummary, Outline, PendingRevision, ProjectRow } from "./types.js";
+import { message } from "../ui/api.js";
 
 type Panel = "none" | "import";
 
-const message = (e: unknown): string => String((e as Error).message ?? e);
 
 export function App() {
   const [projects, setProjects] = useState<ProjectRow[]>([]);

@@ -7,6 +7,8 @@
 import { useMemo, useState } from "react";
 
 import * as api from "./api.js";
+import { SearchBox } from "../ui/ListPane.js";
+import { matchesAll } from "../ui/match.js";
 import { UPDATE_MODE_TEXT } from "./model.js";
 import type { AssignmentRow, Made, UpdateMode } from "./types.js";
 
@@ -33,13 +35,12 @@ export function MakeTasks({ project, assignments, onMade, onClose }: MakeProps) 
   const [error, setError] = useState<string | null>(null);
   const [made, setMade] = useState<Made[] | null>(null);
 
-  const f = filter.trim().toLowerCase();
   const subjects = useMemo(
     () =>
       assignments
-        .filter((a) => !a.blueprint_missing && (!f || a.room_name.toLowerCase().includes(f) || (a.blueprint_name ?? "").toLowerCase().includes(f)))
+        .filter((a) => !a.blueprint_missing && matchesAll(`${a.room_name} ${a.blueprint_name ?? ""}`, filter))
         .map((a) => ({ id: a.id, label: a.room_name, sub: `${a.blueprint_name ?? "?"} r${a.revision}` })),
-    [assignments, f],
+    [assignments, filter],
   );
 
   const toggle = (id: string) =>
@@ -131,7 +132,7 @@ export function MakeTasks({ project, assignments, onMade, onClose }: MakeProps) 
       ) : null}
 
       <h3>Assignments</h3>
-      <input type="search" placeholder="Filter by name" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter" />
+      <SearchBox value={filter} onChange={setFilter} placeholder="Filter by name" label="Filter" />
       {subjects.length === 0 ? <p className="hint">No assignments. Assign a blueprint to rooms on the blueprints page first.</p> : null}
       <ul className="picks">
         {subjects.map((s) => (

@@ -1,12 +1,13 @@
-// The four helpers this page takes from static/common.js, typed.
+// What every page of the app shares: the four helpers it takes from static/common.js, typed.
 //
-// **Reused, not ported.** common.js is a classic script the viewer loads; this
-// page loads it the same way (index.html), so the project-selection rule and
-// the API error convention keep exactly one definition.
+// **Reused, not ported.** common.js is a classic script each page loads (index.html), so the project-selection rule
+// and the API error convention keep exactly one definition. Exposed as typed exports rather than `declare function`
+// globals so only the files that import this see them: the renderer bundle shares the tsconfig and has no business
+// with any of it.
 //
-// Duplicated from src-js/settings/common.ts rather than hoisted to a shared
-// module, per the house rule on shared helpers: two pages, two small copies,
-// no third module for either to depend on.
+// **One copy, in `src-js/ui/`** (2026-11-22). Each page used to carry its own copy of this and of its API helpers, on
+// the rule that two small copies beat a module two pages depend on. At five pages the copies drifted and every new page
+// started with another one; what the pages hold in common lives here now, and a page keeps only what is its own.
 
 export interface SendResult {
   ok: boolean;

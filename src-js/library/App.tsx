@@ -9,14 +9,14 @@
 import { useCallback, useEffect, useState } from "react";
 
 import * as api from "./api.js";
-import { persistSelection, seedProjectId } from "./common.js";
+import { persistSelection, seedProjectId } from "../ui/common.js";
 import { RulesTab } from "./RulesTab.js";
 import { SheetsTab } from "./SheetsTab.js";
 import type { ProjectRow, RoomRow } from "./types.js";
+import { message } from "../ui/api.js";
 
 type Tab = "sheets" | "rules";
 
-const message = (e: unknown): string => String((e as Error).message ?? e);
 const tabFromHash = (): Tab => (window.location.hash === "#rules" ? "rules" : "sheets");
 
 export function App() {

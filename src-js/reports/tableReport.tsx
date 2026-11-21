@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { apiGet, apiSend } from "./common.js";
+import { apiGet, apiSend } from "../ui/common.js";
 import { downloadCsv } from "./csv.js";
 import { entityById, ROOM_COLUMNS } from "./reportTypes.js";
 import { fromWire, group, toWire, type Group } from "./filter.js";

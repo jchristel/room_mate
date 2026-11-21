@@ -12,15 +12,16 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import * as api from "./api.js";
-import { persistSelection, seedProjectId } from "./common.js";
+import { persistSelection, seedProjectId } from "../ui/common.js";
 import { MakeTasks } from "./MakeTasks.js";
 import { TaskDetail } from "./TaskDetail.js";
 import { TaskList } from "./TaskList.js";
-import { canDismiss, canResend, roomsLabel } from "./model.js";
+import { MultiPanel, useSelection } from "../ui/Selection.js";
+import { canDismiss, canResend, roomsLabel, shownTasks } from "./model.js";
 import { sheetStatus, type SheetStatus } from "./sheetPreviews.js";
-import type { AssignmentRow, Made, ProjectRow, Task, TaskState, TaskSummary, ViewportMovesBody } from "./types.js";
+import type { AssignmentRow, Made, ProjectRow, Task, TaskState, TaskSummary, ViewportMovesBody, CameraAimsBody } from "./types.js";
+import { message } from "../ui/api.js";
 
-const message = (e: unknown): string => String((e as Error).message ?? e);
 const POLL_MS = 8000;
 /** Full tasks read at once to look at their sheets. */
 const LOOK_AT_ONCE = 4;
@@ -33,11 +34,11 @@ export function App() {
   const [model, setModel] = useState("");
   const [states, setStates] = useState<ReadonlySet<TaskState>>(new Set());
   const [onlyWarnings, setOnlyWarnings] = useState(false);
+  const [filter, setFilter] = useState("");
   // What each queued sheet task looks like against its paper, keyed by task and stamped with the `updated_at` it was read at.
   const [status, setStatus] = useState<ReadonlyMap<string, SheetStatus & { at: string }>>(new Map());
   const [making, setMaking] = useState(false);
-  const [multi, setMulti] = useState(false);
-  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
+  const selection = useSelection();
   const [assignments, setAssignments] = useState<AssignmentRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -146,7 +147,7 @@ export function App() {
   const actOnPicked = async (what: "dismiss" | "resend") => {
     if (!projectId) return;
     const can = what === "dismiss" ? canDismiss : canResend;
-    const todo = (rows ?? []).filter((t) => picked.has(t.id) && can(t.state));
+    const todo = (rows ?? []).filter((t) => selection.picked.has(t.id) && can(t.state));
     if (todo.length === 0) return;
     if (what === "dismiss" && todo.some((t) => t.state === "in_progress") && !window.confirm("A Revit session was handed at least one of these tasks. Dismiss them anyway? A late report from that session will be refused.")) return;
     setBusy(true);
@@ -163,17 +164,20 @@ export function App() {
   };
 
   // Only what is still in the list counts: a task can leave it between polls.
-  const ticked = (rows ?? []).filter((t) => picked.has(t.id));
+  const ticked = (rows ?? []).filter((t) => selection.picked.has(t.id));
+  const shown = shownTasks(rows ?? [], { model, states, onlyWarnings, text: filter, warns: (id) => status.get(id)?.state === "clipping" });
 
-  const pick = (ids: readonly string[], on: boolean) =>
-    setPicked((cur) => {
-      const n = new Set(cur);
-      for (const id of ids) {
-        if (on) n.add(id);
-        else n.delete(id);
-      }
-      return n;
-    });
+  const aimCameras = async (body: CameraAimsBody) => {
+    if (!projectId || !selected) return;
+    setBusy(true);
+    const r = await api.aimCameras(projectId, selected.id, body);
+    setBusy(false);
+    if (!r.ok) return setError(r.error);
+    setError(null);
+    setNotice("Directions saved.");
+    setSelected(r.value);
+    void refresh(projectId);
+  };
 
   const moveViewports = async (body: ViewportMovesBody) => {
     if (!projectId || !selected) return;
@@ -210,7 +214,7 @@ export function App() {
           value={projectId ?? ""}
           onChange={(e) => {
             setProjectId(e.target.value);
-            setPicked(new Set());
+            selection.set([]);
             persistSelection(e.target.value);
           }}
         >
@@ -240,17 +244,12 @@ export function App() {
           onModel={setModel}
           onToggleState={toggleState}
           onSelect={(id) => void open(id)}
-          multi={multi}
-          picked={picked}
-          onMulti={(on) => {
-            setMulti(on);
-            setPicked(new Set());
-            setMaking(false);
-          }}
-          onPick={pick}
+          selection={selection}
+          shown={shown}
+          filter={filter}
+          onFilter={setFilter}
           onMake={() => {
-            setMulti(false);
-            setPicked(new Set());
+            selection.setMulti(false);
             setMaking(true);
             setSelected(null);
             setNotice(null);
@@ -259,29 +258,27 @@ export function App() {
         <main>
           {error ? <p className="banner error">{error}</p> : null}
           {notice && !error ? <p className="banner">{notice}</p> : null}
-          {multi ? (
-            <div className="detail">
-              <div className="toolbar">
-                <strong>
-                  {ticked.length} task{ticked.length === 1 ? "" : "s"} selected
-                </strong>
-                <span className="spacer" />
-                <button type="button" disabled={busy || ticked.length === 0} onClick={() => setPicked(new Set())}>
-                  Clear
-                </button>
-                <button type="button" disabled={busy || ticked.every((t) => !canResend(t.state))} onClick={() => void actOnPicked("resend")}>
-                  Resend {ticked.filter((t) => canResend(t.state)).length}
-                </button>
-                <button type="button" className="danger" disabled={busy || ticked.every((t) => !canDismiss(t.state))} onClick={() => void actOnPicked("dismiss")}>
-                  Dismiss {ticked.filter((t) => canDismiss(t.state)).length}
-                </button>
-              </div>
-              <p className="hint">Tick tasks on the left. A task an action does not apply to (resending one already queued, dismissing one already dismissed) is skipped. Switch "Select several" off to see one task.</p>
-            </div>
+          {selection.multi ? (
+            <MultiPanel
+              noun="task"
+              shown={shown.length}
+              ticked={ticked.length}
+              busy={busy}
+              onAll={() => selection.set(shown.map((t) => t.id))}
+              onNone={() => selection.set([])}
+              hint='Tick tasks on the left. A task an action does not apply to (resending one already queued, dismissing one already dismissed) is skipped. Switch "Select several" off to see one task.'
+            >
+              <button type="button" disabled={busy || ticked.every((t) => !canResend(t.state))} onClick={() => void actOnPicked("resend")}>
+                Resend {ticked.filter((t) => canResend(t.state)).length}
+              </button>
+              <button type="button" className="danger" disabled={busy || ticked.every((t) => !canDismiss(t.state))} onClick={() => void actOnPicked("dismiss")}>
+                Dismiss {ticked.filter((t) => canDismiss(t.state)).length}
+              </button>
+            </MultiPanel>
           ) : making && projectId ? (
             <MakeTasks project={projectId} assignments={assignments} onMade={made} onClose={() => setMaking(false)} />
           ) : selected ? (
-            <TaskDetail task={selected} busy={busy} onDismiss={() => void act("dismiss")} onResend={() => void act("resend")} onMoveViewports={(b) => void moveViewports(b)} />
+            <TaskDetail task={selected} busy={busy} onDismiss={() => void act("dismiss")} onResend={() => void act("resend")} onMoveViewports={(b) => void moveViewports(b)} onAimCameras={(b) => void aimCameras(b)} />
           ) : (
             <p className="hint empty">Choose a task on the left, or make some.</p>
           )}

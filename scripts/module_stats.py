@@ -243,6 +243,7 @@ MODULES = {
     "p_blueprints": sorted(glob.glob("src-js/blueprints/*.ts")) + sorted(glob.glob("src-js/blueprints/*.tsx")),
     "p_library": sorted(glob.glob("src-js/library/*.ts")) + sorted(glob.glob("src-js/library/*.tsx")),
     "p_tasks": sorted(glob.glob("src-js/tasks/*.ts")) + sorted(glob.glob("src-js/tasks/*.tsx")),
+    "p_ui": sorted(glob.glob("src-js/ui/*.ts")) + sorted(glob.glob("src-js/ui/*.tsx")) + sorted(glob.glob("src-js/ui/sheet/*.ts")) + sorted(glob.glob("src-js/ui/sheet/*.tsx")),
     "js_text": ["src-js/renderer/labelPlacement.ts", "src-js/renderer/elementTags.ts"],
     "js_storey": ["src-js/renderer/storey.ts"],
     "js_reach": ["src-js/renderer/reach.ts", "src-js/renderer/svg/reach.ts", "src-js/renderer/svg/overlays.ts"],

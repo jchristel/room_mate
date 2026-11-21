@@ -4,6 +4,7 @@
 
 import { useState } from "react";
 
+import { Chip, Chips, ListPane, Row, RowList, SearchBox } from "../ui/ListPane.js";
 import { attentionReasons, blueprintNeedsAttention, filterBlueprints } from "./common.js";
 import type { BlueprintSummary } from "./types.js";
 
@@ -26,55 +27,59 @@ export function BlueprintList({ rows, selectedId, busy, onSelect, onImport, onEx
   const attention = rows?.filter(blueprintNeedsAttention).length ?? 0;
   const shown = rows ? filterBlueprints(onlyAttention ? rows.filter(blueprintNeedsAttention) : rows, text) : rows;
   return (
-    <aside className="list" aria-label="Blueprints">
-      <div className="actions">
+    <ListPane
+      label="Blueprints"
+      actions={
         <button type="button" onClick={onImport}>
           Import
         </button>
-      </div>
-      <input type="search" placeholder="Filter: name or room" value={text} onChange={(e) => setText(e.target.value)} aria-label="Filter blueprints" />
-      {attention > 0 ? (
-        <label className="filter">
-          <input type="checkbox" checked={onlyAttention} onChange={(e) => setOnlyAttention(e.target.checked)} /> Needs attention ({attention})
-        </label>
-      ) : null}
+      }
+      search={<SearchBox value={text} onChange={setText} placeholder="Filter: name or room" label="Filter blueprints" />}
+      filters={
+        <Chips label="Filters">
+          <Chip kind="attention" on={onlyAttention} onClick={() => setOnlyAttention(!onlyAttention)}>
+            needs attention {attention}
+          </Chip>
+        </Chips>
+      }
+      footer={
+        selectedId ? (
+          <>
+            <button type="button" disabled={busy} onClick={onExport}>
+              Export
+            </button>
+            <button type="button" disabled={busy} onClick={onRename}>
+              Rename
+            </button>
+            <button type="button" disabled={busy} onClick={onToggleUse} title="A blueprint is never deleted. Not in use: no new assignments, its sheets are not suggested; everything bound to it stays.">
+              {inUse ? "Mark not in use" : "Mark in use"}
+            </button>
+          </>
+        ) : null
+      }
+    >
       {rows === null ? <p className="hint">Reading the blueprints…</p> : null}
       {rows && rows.length > 0 && shown?.length === 0 ? <p className="hint">No blueprint matches.</p> : null}
       {rows?.length === 0 ? <p className="hint">No blueprints yet. A blueprint is pushed from Revit, and its room layout sheets go to the sheet library bound to it; Import reads an export of one (the room alone).</p> : null}
-      <ul>
+      <RowList>
         {shown?.map((b) => (
-          <li key={b.id}>
-            <button type="button" className={b.id === selectedId ? "on" : ""} aria-pressed={b.id === selectedId} onClick={() => onSelect(b.id)}>
-              <b>
-                {b.name}
-                {blueprintNeedsAttention(b) ? (
-                  <i className="attention" title={attentionReasons(b).join("; ")}>
-                    needs attention
-                  </i>
-                ) : null}
-              </b>
-              <span>
-                {b.in_use ? "" : "not in use · "}
-                {b.items} items · {b.sheets > 0 ? `${b.sheets} sheet${b.sheets === 1 ? "" : "s"}` : "no sheets"} · r{b.current_revision}
-                {b.pending > 0 ? ` · ${b.pending} pending` : ""}
-              </span>
-            </button>
-          </li>
+          <Row key={b.id} on={b.id === selectedId} onClick={() => onSelect(b.id)}>
+            <b>
+              {b.name}
+              {blueprintNeedsAttention(b) ? (
+                <i className="badge attention" title={attentionReasons(b).join("; ")}>
+                  needs attention
+                </i>
+              ) : null}
+            </b>
+            <span>
+              {b.in_use ? "" : "not in use · "}
+              {b.items} items · {b.sheets > 0 ? `${b.sheets} sheet${b.sheets === 1 ? "" : "s"}` : "no sheets"} · r{b.current_revision}
+              {b.pending > 0 ? ` · ${b.pending} pending` : ""}
+            </span>
+          </Row>
         ))}
-      </ul>
-      {selectedId ? (
-        <div className="actions">
-          <button type="button" disabled={busy} onClick={onExport}>
-            Export
-          </button>
-          <button type="button" disabled={busy} onClick={onRename}>
-            Rename
-          </button>
-          <button type="button" disabled={busy} onClick={onToggleUse} title="A blueprint is never deleted. Not in use: no new assignments, its sheets are not suggested; everything bound to it stays.">
-            {inUse ? "Mark not in use" : "Mark in use"}
-          </button>
-        </div>
-      ) : null}
-    </aside>
+      </RowList>
+    </ListPane>
   );
 }

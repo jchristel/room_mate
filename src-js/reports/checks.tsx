@@ -7,7 +7,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-import { apiGet } from "./common.js";
+import { apiGet } from "../ui/common.js";
 import { CHECKS, visibleRows, type CheckDef } from "./checkRows.js";
 import { buildCsv, downloadCsv } from "./csv.js";
 import type { ValidationResponse } from "./types.js";

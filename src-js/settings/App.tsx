@@ -28,7 +28,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import { apiGet, apiSend, persistSelection, seedProjectId } from "./common.js";
+import { apiGet, apiSend, persistSelection, seedProjectId } from "../ui/common.js";
 import { defaultSettings } from "./defaults.js";
 import { saveBody } from "./saveBody.js";
 import { AppearanceSection } from "./sections/appearance.js";

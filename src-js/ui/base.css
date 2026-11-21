@@ -1,0 +1,31 @@
+/* What every page of the app shares: the page shell (reset, header, the body's two rows), buttons and the
+   controls round a list (action rows, filter chips, tags, the rule between sections). The palette is
+   static/tokens.css. A page's own CSS holds only its layout and what no other page has (2026-11-22: before this each
+   page carried its own copy of all of it, and the copies had started to differ). */
+
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--paper); color: var(--ink); font-family: var(--mono); font-size: 13px; line-height: 1.5; overflow: hidden; }
+#root { height: 100%; min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr); }
+button, select, input { font-family: var(--mono); font-size: 0.78rem; color: var(--ink); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+header { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; padding: 0.75rem 1.25rem; border-bottom: 1px solid var(--ink); }
+header h1 { font-size: 0.95rem; font-weight: 600; letter-spacing: 0.18em; text-transform: uppercase; margin: 0; }
+header select { background: var(--paper); border: 1px solid var(--rule); padding: 0.2rem 0.4rem; }
+header .links { margin-left: auto; display: flex; gap: 1rem; }
+header .links a { color: var(--accent); font-size: 0.72rem; text-decoration: none; }
+header .links a:hover { text-decoration: underline; }
+button { background: var(--fill); border: 1px solid var(--rule); padding: 0.25rem 0.6rem; cursor: pointer; }
+button:hover:not(:disabled) { background: var(--fill-hover); }
+button:disabled { opacity: 0.5; cursor: default; }
+button.on { background: var(--fill); border-color: var(--ink); }
+button.danger { color: var(--accent); }
+.actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0.5rem 0; }
+.chips { display: flex; flex-wrap: wrap; gap: 0.3rem; margin: 0.5rem 0; }
+.chip { font-size: 0.66rem; padding: 0.1rem 0.45rem; }
+.badge.attention { color: var(--accent); border-color: var(--accent); }
+hr.sep { border: 0; border-top: 1px solid var(--rule); margin: 0.6rem 0; }
+.spacer { flex: 1; }
+.chip.attention.on { border-color: var(--accent); }
+.badge { font-style: normal; font-size: 0.66rem; border: 1px solid var(--rule); padding: 0 0.35rem; }
+.banner.error { border-color: var(--danger); color: var(--danger); }

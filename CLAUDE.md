@@ -598,6 +598,16 @@ target model's frame, mm. The Tasks button's sheet handler reads it (`room_m/rls
   arithmetic (`sheetPreviews.ts`), and a viewport past the paper marks the task with a warning (`sheetStatus`, judged in the page from each queued sheet
   task, never stored). The preview sizes the plan, elevations and 3D views for the room (`fitToRoom`); a schedule keeps the template's size. **The plug-in
   side is not run in Revit, and the drag is not driven in a browser.**
+- **A person can aim a queued task's 3D views on the plan** (`POST .../tasks/{id}/cameras`, `task_build::aim_three_ds`, `tasks::replace_three_ds`): the body
+  is EVERY heading the task keeps, `{cameras: [{index, direction: [x, y]}]}` (index from 1, a plan heading in the target model's frame; `[]` puts every view back
+  to the template's). The server stores `direction` on the `rls.three_ds` entry and works the camera, the walls to hide and the items to see through out AGAIN
+  (`rls_three_d::three_ds` takes the aims), from the room's outline the task keeps (`rls.room_outline`, with `rls.doors`: the footprints of the doors that open
+  onto or out of the room, read once per request by `RlsReads::doors`; a task made before them cannot be aimed, 400). The template's PITCH is kept and the
+  view turned about the vertical; the plug-in does the same (`apply_geometry.aim_xy`, in `rls_task` after the plan's turn: forward and up). The page draws the
+  room, its doors and each camera as an arrow with a grip at each end (`SheetPreview`'s `room` and `onAim`; either grip sets the heading, the arrow is then
+  drawn from what the camera looks at, a fixed length back), sizes the 3D viewport for the new heading, and zooms (buttons, or Ctrl/Cmd with the wheel; drag
+  the paper to pan). A server's 3D index is 1-BASED: the preview once matched cameras from 0 and drew none. **The plug-in side is not run in Revit and the grips
+  are not driven in a browser.**
 - **Different coarse edge counts place nothing** (the blueprint rule) and say so as a finding; the sheet is still made.
 - `POST /projects/{id}/tasks/rls-preview` is the same read for one room and stores nothing, so a preview is the task. A request
   may override a view's depth (`depths`: `depth_mm`, or `to_wall`).
@@ -1302,6 +1312,10 @@ with one, not here.
 
 - **Tests are inline**, never a `tests/` tree; a shared helper is duplicated per
   module rather than hoisted.
+- **The frontend's shared code is `src-js/ui/`** (2026-11-22; the old "two small copies" rule is retired): the server-call helpers, the
+  one filter rule (`match.ts`: every word typed must be found), `ListPane` and `useSelection` for the list pages, the sheet drawing
+  (`ui/sheet`) and `base.css` / `list-page.css`. A page keeps only its own layout and rules; a rule in a page's CSS that `ui/` already
+  has is a bug. See CODING-CONVENTIONS.md, "Frontend: what the pages share".
 - **Doc comments carry the *rationale***, not a restatement of the what. This is
   the single most visible house style; matching ordinary Rust terseness reads as
   foreign.

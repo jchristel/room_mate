@@ -90,11 +90,23 @@ export interface RlsSetPlan {
 
 /** `create_rls`: what the server worked out for this room (`service::rls_plan::RlsPlan`); model frame, mm. Only what the
  * sheet preview resizes from is typed here. */
+/** A new 3D view's camera in plan: its place among the template's 3D viewports (from 1), and the heading a person chose. */
+export interface ThreeDCamera {
+  index: number;
+  eye: [number, number];
+  looks_at: [number, number];
+  /** The unit heading a person chose, when they did (`POST .../cameras`). */
+  direction?: [number, number];
+}
+
 export interface RlsPlan {
   sheet_size?: string;
   markers?: { views: { view_id: number; marker_index: number; line_start: [number, number]; line_end: [number, number] }[] }[];
   plan_crop?: { min: [number, number]; max: [number, number] };
-  three_ds?: { index: number; eye: [number, number]; looks_at: [number, number] }[];
+  three_ds?: ThreeDCamera[];
+  /** This room's outline and the footprints of its doors, the model's frame, mm (what the cameras are drawn against). */
+  room_outline?: [number, number][];
+  doors?: [number, number][][];
   /** Viewports a person moved on the new sheet: the TEMPLATE viewport's id and its centre, mm from the paper's bottom left, y up. */
   viewport_moves?: { view_id: number; centre_mm: [number, number] }[];
 }
@@ -198,4 +210,9 @@ export interface Made {
   room_name: string;
   task?: TaskSummary;
   refused?: string;
+}
+
+/** The body of the aim request: EVERY heading the task should keep (a view not named looks the template's way). */
+export interface CameraAimsBody {
+  cameras: { index: number; direction: [number, number] }[];
 }

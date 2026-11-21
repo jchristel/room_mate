@@ -1,22 +1,12 @@
 // The endpoints the tasks page calls. Writes never throw on an HTTP error: the server's own text is
 // shown to the person, verbatim.
 
-import { apiGet, apiSend } from "./common.js";
-import type { AssignmentRow, Made, ProjectRow, RoomRow, SheetRow, Task, TaskState, TaskSummary, UpdateMode, ViewportMovesBody } from "./types.js";
+import { send, projectBase as base, type Sent } from "../ui/api.js";
 
-export type Sent<T> = { ok: true; value: T } | { ok: false; error: string };
+export type { Sent };
+import { apiGet } from "../ui/common.js";
+import type { AssignmentRow, Made, ProjectRow, RoomRow, SheetRow, Task, TaskState, TaskSummary, UpdateMode, ViewportMovesBody, CameraAimsBody } from "./types.js";
 
-const base = (project: string) => `/projects/${encodeURIComponent(project)}`;
-
-async function send<T>(method: string, url: string, body: unknown): Promise<Sent<T>> {
-  const r = await apiSend(method, url, body);
-  if (!r.ok) return { ok: false, error: r.text || `HTTP ${r.status}` };
-  try {
-    return { ok: true, value: (r.text ? JSON.parse(r.text) : null) as T };
-  } catch {
-    return { ok: false, error: "the server's answer was not JSON" };
-  }
-}
 
 const whole = (r: Sent<Task>): Sent<Task> =>
   r.ok ? { ok: true, value: { ...r.value, items: r.value.items ?? [], sheets: r.value.sheets ?? [], tag_rules: r.value.tag_rules ?? [], findings: r.value.findings ?? [], attempts: r.value.attempts ?? [] } } : r;
@@ -38,6 +28,8 @@ export const dismiss = (project: string, id: string) =>
 export const resend = (project: string, id: string) =>
   send<Task>("POST", `${base(project)}/tasks/${encodeURIComponent(id)}/resend`, null).then(whole);
 
+export const aimCameras = (project: string, id: string, body: CameraAimsBody) =>
+  send<Task>("POST", `${base(project)}/tasks/${encodeURIComponent(id)}/cameras`, body).then(whole);
 export const moveViewports = (project: string, id: string, body: ViewportMovesBody) =>
   send<Task>("POST", `${base(project)}/tasks/${encodeURIComponent(id)}/viewports`, body).then(whole);
 

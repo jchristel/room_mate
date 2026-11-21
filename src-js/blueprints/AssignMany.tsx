@@ -12,7 +12,10 @@
 import { useMemo, useState } from "react";
 
 import * as api from "./api.js";
+import { SearchBox } from "../ui/ListPane.js";
+import { matchesAll } from "../ui/match.js";
 import type { AssignmentRow, Blueprint, RoomRow, RoomSolve, Verdict } from "./types.js";
+import { message } from "../ui/api.js";
 
 export interface AssignManyProps {
   project: string;
@@ -29,7 +32,6 @@ export interface AssignManyProps {
   onAssigned(message: string): void;
 }
 
-const message = (e: unknown): string => String((e as Error).message ?? e);
 const MARK: Record<Verdict, string> = { clear: "✓", check: "!", cannot: "✗" };
 
 function detail(s: RoomSolve): string {
@@ -50,8 +52,7 @@ export function AssignMany({ project, blueprint, revision, rooms, levels, assign
   const [error, setError] = useState<string | null>(null);
 
   const shown = useMemo(() => {
-    const f = filter.trim().toLowerCase();
-    return (rooms ?? []).filter((r) => !f || r.name.toLowerCase().includes(f)).slice(0, 200);
+    return (rooms ?? []).filter((r) => matchesAll(r.name, filter)).slice(0, 200);
   }, [rooms, filter]);
   const assignedTo = useMemo(() => new Map(assigned.map((a) => [a.room.room_id, a])), [assigned]);
 
@@ -105,7 +106,7 @@ export function AssignMany({ project, blueprint, revision, rooms, levels, assign
     <>
       <h3>Rooms</h3>
       {!rooms ? <p className="hint">Reading the rooms…</p> : null}
-      <input type="search" placeholder="Filter rooms by name" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter rooms" />
+      <SearchBox value={filter} onChange={setFilter} placeholder="Filter rooms by name" label="Filter rooms" />
       <div className="actions">
         <button type="button" onClick={tickShown} disabled={shown.length === 0}>
           Tick the {shown.length} shown
