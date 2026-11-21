@@ -43,6 +43,11 @@ use super::room_locator::RoomRef;
 use super::ServiceError;
 use crate::state::AppState;
 
+mod doors;
+mod fit;
+pub use doors::*;
+pub(in crate::service) use fit::*;
+
 /// An item's corner this near the boundary of the fine outline is still inside.
 pub const INSIDE_TOL_MM: f64 = 20.0;
 /// Two items interpenetrating by more than this overlap.
@@ -175,124 +180,6 @@ pub struct Resolution {
     pub mapped_doors: Vec<BlueprintDoor>,
 }
 
-/// What a blueprint door scores when the room has no door on the edge it lands on.
-pub const DOOR_UNMATCHED_MM: f64 = 3_000.0;
-/// A chosen mapping whose doors are further apart than this is reported.
-pub const DOOR_DISAGREE_MM: f64 = 600.0;
-
-/// Mean distance from each blueprint door to the nearest door of the room on the edge it maps to,
-/// taking a position as the same fraction along the edge. `None` when there is nothing to compare.
-fn door_gap(bp: &[BlueprintDoor], room: &[BlueprintDoor], edge_map: &[usize], t_edges: &[Edge]) -> Option<f64> {
-    if bp.is_empty() || room.is_empty() {
-        return None;
-    }
-    let gaps: Vec<f64> = bp
-        .iter()
-        .filter_map(|d| {
-            let j = *edge_map.get(d.edge)?;
-            let len = t_edges.get(j)?.len;
-            let want = d.along_mm / d.edge_len_mm.max(1.0) * len;
-            Some(
-                room.iter()
-                    .filter(|r| r.edge == j)
-                    .map(|r| (r.along_mm - want).abs())
-                    .min_by(f64::total_cmp)
-                    .unwrap_or(DOOR_UNMATCHED_MM),
-            )
-        })
-        .collect();
-    (!gaps.is_empty()).then(|| gaps.iter().sum::<f64>() / gaps.len() as f64)
-}
-
-/// The room's doors against its coarse outline: edge, distance along it and width.
-fn doors_on(doors: &[SourceDoor], coarse: &[Pt]) -> Vec<BlueprintDoor> {
-    let es = edges(coarse);
-    doors
-        .iter()
-        .filter_map(|d| {
-            let (edge, along_mm, width_mm) = door_on_edges(&d.footprint, coarse)?;
-            Some(BlueprintDoor { id: d.id.clone(), edge, along_mm, edge_len_mm: es[edge].len, width_mm })
-        })
-        .collect()
-}
-
-/// The blueprint's doors as `edge_map` lands them on the room: the same fraction along the edge
-/// they were on, which is the position `door_gap` compares.
-fn map_doors(doors: &[BlueprintDoor], edge_map: &[usize], t_edges: &[Edge]) -> Vec<BlueprintDoor> {
-    doors
-        .iter()
-        .filter_map(|d| {
-            let edge = *edge_map.get(d.edge)?;
-            let len = t_edges.get(edge)?.len;
-            Some(BlueprintDoor {
-                id: d.id.clone(),
-                edge,
-                along_mm: d.along_mm / d.edge_len_mm.max(1.0) * len,
-                edge_len_mm: len,
-                width_mm: d.width_mm,
-            })
-        })
-        .collect()
-}
-
-/// Say so when the chosen mapping puts the blueprint's doors well away from the room's.
-fn door_findings(
-    bp: &[BlueprintDoor],
-    room: &[BlueprintDoor],
-    edge_map: &[usize],
-    t_edges: &[Edge],
-    findings: &mut Vec<Finding>,
-) {
-    if let Some(gap) = door_gap(bp, room, edge_map, t_edges)
-        && gap > DOOR_DISAGREE_MM
-    {
-        findings.push(Finding::DoorsDisagree {
-            message: format!(
-                "the blueprint's doors land {gap:.0} mm from the room's doors on average; check the rotation"
-            ),
-        });
-    }
-}
-
-fn turns(ring: &[Pt]) -> Vec<f64> {
-    let es = edges(ring);
-    (0..es.len())
-        .map(|i| {
-            let (a, b) = (es[i].t, es[(i + 1) % es.len()].t);
-            cross(a, b).atan2(dot(a, b)).to_degrees()
-        })
-        .collect()
-}
-
-fn shape_cost(a: &[Edge], ta: &[f64], b: &[Edge], tb: &[f64], shift: usize) -> f64 {
-    let k = a.len();
-    (0..k)
-        .map(|j| {
-            let m = (j + shift) % k;
-            let len = (b[m].len / a[j].len).ln().abs();
-            let turn = if (ta[j] - tb[m]).abs() > TURN_TOLERANCE_DEG { TURN_PENALTY } else { 0.0 };
-            len + turn
-        })
-        .sum()
-}
-
-/// The shape cost of every cyclic shift of `b`'s edges against `a`'s, in shift order.
-pub(super) fn shift_costs(a: &[Pt], b: &[Pt]) -> Vec<(usize, f64)> {
-    let (ea, eb) = (edges(a), edges(b));
-    let (ta, tb) = (turns(a), turns(b));
-    (0..ea.len()).map(|s| (s, shape_cost(&ea, &ta, &eb, &tb, s))).collect()
-}
-
-/// The shift with the lowest shape cost, and that cost.
-pub(super) fn best_shift(a: &[Pt], b: &[Pt]) -> (usize, f64) {
-    shift_costs(a, b).into_iter().min_by(|x, y| x.1.total_cmp(&y.1)).unwrap_or((0, f64::MAX))
-}
-
-/// The ring reflected across the x axis, still counter-clockwise.
-fn reflected(ring: &[Pt]) -> Vec<Pt> {
-    ring.iter().rev().map(|&(x, y)| (x, -y)).collect()
-}
-
 /// An item's centre and orientation (radians) in the frame of `ring`'s edges.
 fn frame_in(item: &BlueprintItem, es: &[Edge]) -> Option<(Pt, f64)> {
     let e = es.get(item.placement.edge)?;
@@ -330,72 +217,6 @@ fn rule_text(item: &BlueprintItem, edge: usize) -> String {
         OffMode::Percent => format!("{:.0}% of the room's depth", p.off_mm / p.depth_mm * 100.0),
     };
     format!("edge {edge} (blueprint edge {}): {along}, {off}", p.edge)
-}
-
-/// How the blueprint's coarse outline sits on the target's, and what to say about it.
-fn fit_outlines(
-    bp_ring: &[Pt],
-    t_coarse: &[Pt],
-    shift: Option<usize>,
-    doors: (&[BlueprintDoor], &[BlueprintDoor]),
-    findings: &mut Vec<Finding>,
-) -> (Fit, Vec<Candidate>) {
-    let (es_bp, es_t) = (edges(bp_ring), edges(t_coarse));
-    let (ta, tb) = (turns(bp_ring), turns(t_coarse));
-    let k = t_coarse.len();
-    let mut candidates: Vec<Candidate> = (0..k)
-        .map(|s| Candidate {
-            shift: s,
-            cost: shape_cost(&es_bp, &ta, &es_t, &tb, s),
-            door_gap_mm: door_gap(doors.0, doors.1, &(0..k).map(|i| (i + s) % k).collect::<Vec<_>>(), &es_t),
-        })
-        .filter(|c| c.cost <= FIT_OK)
-        .collect();
-    // Doors choose between rotations the shape cannot tell apart: those within `SHAPE_TIE` of the best
-    // cost. A rotation that fits clearly worse is not promoted because a door happens to line up.
-    let best = candidates.iter().map(|c| c.cost).fold(f64::INFINITY, f64::min);
-    candidates.sort_by(|a, b| {
-        let (ta, tb) = (a.cost > best + SHAPE_TIE, b.cost > best + SHAPE_TIE);
-        ta.cmp(&tb)
-            .then(a.door_gap_mm.unwrap_or(0.0).total_cmp(&b.door_gap_mm.unwrap_or(0.0)))
-            .then(a.cost.total_cmp(&b.cost))
-            .then(a.shift.cmp(&b.shift))
-    });
-    let (auto_shift, auto_cost) = match candidates.first() {
-        Some(c) => (c.shift, c.cost),
-        None => best_shift(bp_ring, t_coarse),
-    };
-    let s = shift.unwrap_or(auto_shift);
-    let cost = if shift.is_some() {
-        shape_cost(&es_bp, &turns(bp_ring), &es_t, &turns(t_coarse), s)
-    } else {
-        auto_cost
-    };
-    let mirror_cost = best_shift(&reflected(bp_ring), t_coarse).1;
-    // A mirror image only counts when NO rotation fits: a rectangle's reflection is itself a rotation,
-    // so a badly pinned shift on a symmetric room is a wrong mapping, not a mirrored room.
-    let kind = if cost <= FIT_OK {
-        FitKind::Plain
-    } else if auto_cost <= FIT_OK {
-        FitKind::NoFit
-    } else if mirror_cost <= FIT_OK {
-        FitKind::MirrorImage
-    } else {
-        FitKind::NoFit
-    };
-    match kind {
-        FitKind::MirrorImage => findings.push(Finding::MirrorImage {
-            message: "this room is the blueprint's shape reflected; rotation cannot reach it, so it needs a blueprint authored for the other hand".to_string(),
-        }),
-        FitKind::NoFit if auto_cost <= FIT_OK => findings.push(Finding::ShapeMismatch {
-            message: format!("shift {s} does not fit the room's shape (cost {cost:.2}); shift {auto_shift} does"),
-        }),
-        FitKind::NoFit => findings.push(Finding::ShapeMismatch {
-            message: format!("the outlines have the same number of edges but not the same shape (cost {cost:.2})"),
-        }),
-        _ => {}
-    }
-    (Fit { kind, shift: s, cost: Some(cost), mirror_cost: Some(mirror_cost) }, candidates)
 }
 
 /// Everything the placement step reads: the live items, their frames in the blueprint, and the
