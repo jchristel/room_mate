@@ -384,6 +384,33 @@ class PlanCrop(unittest.TestCase):
         self.assertIsNone(verdict(t)["plan"]["plan_crop"])
 
 
+class ViewportMoves(unittest.TestCase):
+    """Where a person moved a viewport on the tasks page: the template viewport's id and a centre in paper mm."""
+
+    def test_a_moved_viewport_is_asked_for_by_its_centre_and_the_rest_keep_the_template_s(self):
+        t = task()
+        t["rls"]["viewport_moves"] = [{"view_id": 10, "centre_mm": [150.0, 120.5]}, {"view_id": 2, "centre_mm": [410, 60]},
+                                      {"view_id": 3, "centre_mm": [200.0, 80.0]}]
+        plan = verdict(t)["plan"]
+        self.assertEqual([150.0, 120.5], plan["centre_mm"])
+        self.assertEqual([200.0, 80.0], plan["schedule_centre_mm"])
+        by_view = dict((e["view_id"], e["centre_mm"]) for e in plan["elevations"])
+        self.assertEqual({1: None, 2: [410.0, 60.0]}, by_view)
+
+    def test_no_moves_means_every_viewport_goes_where_the_template_has_it(self):
+        plan = verdict()["plan"]
+        self.assertIsNone(plan["centre_mm"])
+        self.assertIsNone(plan["schedule_centre_mm"])
+        self.assertEqual([None, None], [e["centre_mm"] for e in plan["elevations"]])
+
+    def test_a_broken_move_is_ignored(self):
+        t = task()
+        t["rls"]["viewport_moves"] = [{"view_id": 10}, {"centre_mm": [1, 2]}, {"view_id": 3, "centre_mm": [1]}]
+        plan = verdict(t)["plan"]
+        self.assertIsNone(plan["centre_mm"])
+        self.assertIsNone(plan["schedule_centre_mm"])
+
+
 class Source(unittest.TestCase):
     def test_sheets_and_items_go_to_their_own_handlers(self):
         from room_m import task_dispatch

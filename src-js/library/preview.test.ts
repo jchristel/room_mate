@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import type { PaperBox } from "./types.js";
 import { cameraArrows, kindOf, previewOf } from "./preview.js";
 
 const port = (vp_type: string, [x0, y0, x1, y1]: number[], scale = 50) => ({
@@ -95,3 +96,62 @@ describe("sheet preview", () => {
     expect(cameraArrows([plan, down, bare])).toEqual([]);
   });
 });
+
+describe("crop rectangles", () => {
+  // the crop is 4000 x 2000 mm at 1:50: 80 x 40 on paper, in a box 100 x 60 centred at (60, 50)
+  const port = (view: object) => ({
+    vp_type: "floor plan",
+    bounding_box: { min_x: 10, min_y: 20, max_x: 110, max_y: 80 },
+    view: { view_scale: 50, bounding_box: { min_x: 0, min_y: 0, max_x: 4000, max_y: 2000 }, ...view },
+  });
+  const sheet = (view: object) => ({ size_mm: { width_mm: 200, height_mm: 100 }, sheet: { view_ports: [port(view)] } });
+
+  it("centres the crop in the box at its own size and pushes the annotation crop out by each side's offset", () => {
+    const box = previewOf(sheet({ annotation_crop_active: true, annotation_crop_offsets: { left: 5, right: 10, top: 4, bottom: 6 } }))!.boxes[0]!;
+    // y up: crop x 20..100, y 30..70; flipped on a 100 mm sheet the top is 30 and the height 40
+    expect(box.crop).toEqual({ x: 20, y: 30, w: 80, h: 40 });
+    // 5 left, 10 right, 4 above, 6 below: x 15..110, y up 24..74, flipped top 26, height 50
+    expect(box.annotation).toEqual({ x: 15, y: 26, w: 95, h: 50 });
+  });
+
+  it("draws none when the annotation crop is off or unread, or the crop's size is unknown", () => {
+    const offsets = { left: 5, right: 5, top: 5, bottom: 5 };
+    expect(previewOf(sheet({ annotation_crop_active: false, annotation_crop_offsets: offsets }))!.boxes[0]!.crop).toBeUndefined();
+    expect(previewOf(sheet({}))!.boxes[0]!.annotation).toBeUndefined();
+    expect(previewOf(sheet({ annotation_crop_active: true, annotation_crop_offsets: offsets, view_scale: undefined }))!.boxes[0]!.crop).toBeUndefined();
+  });
+});
+
+describe("clipping", () => {
+  const sheet = (box: PaperBox, size?: { width_mm: number; height_mm: number }) => ({
+    ...(size && { size_mm: size }),
+    sheet: { view_ports: [{ vp_type: "floor plan", bounding_box: box }] },
+  });
+  const paper = { width_mm: 200, height_mm: 100 };
+
+  it("flags a box past any edge of a measured sheet, with a little tolerance", () => {
+    const flag = (b: PaperBox) => previewOf(sheet(b, paper))!.boxes[0]!.clipped;
+    expect(flag({ min_x: 10, min_y: 10, max_x: 190, max_y: 90 })).toBeUndefined();
+    expect(flag({ min_x: -0.4, min_y: 0, max_x: 200.4, max_y: 100.4 })).toBeUndefined();
+    expect(flag({ min_x: -1, min_y: 10, max_x: 190, max_y: 90 })).toBe(true);
+    expect(flag({ min_x: 10, min_y: 10, max_x: 201, max_y: 90 })).toBe(true);
+    expect(flag({ min_x: 10, min_y: 10, max_x: 190, max_y: 101 })).toBe(true);
+    expect(flag({ min_x: 10, min_y: -2, max_x: 190, max_y: 90 })).toBe(true);
+  });
+
+  it("says nothing when the paper was not measured: the outline is drawn round the viewports", () => {
+    expect(previewOf(sheet({ min_x: -5, min_y: 0, max_x: 50, max_y: 50 }))!.boxes[0]!.clipped).toBeUndefined();
+  });
+});
+
+describe("box ports", () => {
+  it("says which viewport each box draws, counting those with no outline", () => {
+    const box = { min_x: 0, min_y: 0, max_x: 10, max_y: 10 };
+    const preview = previewOf({
+      size_mm: { width_mm: 100, height_mm: 100 },
+      sheet: { view_ports: [{ vp_type: "floor plan" }, { vp_type: "elevation", bounding_box: box }, { vp_type: "schedule", bounding_box: box }] },
+    })!;
+    expect(preview.boxes.map((b) => b.port)).toEqual([1, 2]);
+  });
+});
+

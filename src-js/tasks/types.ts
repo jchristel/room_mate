@@ -88,6 +88,25 @@ export interface RlsSetPlan {
   sheets: { views: SetSheetView[] }[];
 }
 
+/** `create_rls`: what the server worked out for this room (`service::rls_plan::RlsPlan`); model frame, mm. Only what the
+ * sheet preview resizes from is typed here. */
+export interface RlsPlan {
+  sheet_size?: string;
+  markers?: { views: { view_id: number; marker_index: number; line_start: [number, number]; line_end: [number, number] }[] }[];
+  plan_crop?: { min: [number, number]; max: [number, number] };
+  three_ds?: { index: number; eye: [number, number]; looks_at: [number, number] }[];
+  /** Viewports a person moved on the new sheet: the TEMPLATE viewport's id and its centre, mm from the paper's bottom left, y up. */
+  viewport_moves?: { view_id: number; centre_mm: [number, number] }[];
+}
+
+/** The body of `POST .../tasks/{id}/viewports` (`tasks::ViewportMoves`). */
+export interface ViewportMovesBody {
+  /** `create_rls`: replaces the task's moved viewports; `[]` puts them all back. */
+  moves?: { view_id: number; centre_mm: [number, number] }[];
+  /** `create_rls_set`: the centre of a sheet's view. */
+  set_moves?: { sheet: number; view: number; centre_mm: [number, number] }[];
+}
+
 export interface TaskSheet {
   revit_sheet_id: string;
   document_title: string;
@@ -136,7 +155,7 @@ export interface Task extends Omit<TaskSummary, "items" | "sheets" | "tag_rules"
   /** `create_rls_set`: the rooms (lead first), the paper and the sheets as laid out (`service::rls_set_task`). */
   rls_set?: RlsSetPlan;
   /** `create_rls`: what the server worked out for this room; only the paper size is read here. */
-  rls?: { sheet_size?: string } & Record<string, unknown>;
+  rls?: RlsPlan;
   items: TaskItem[];
   sheets: TaskSheet[];
   tag_rules: TagRule[];

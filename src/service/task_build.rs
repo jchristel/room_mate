@@ -601,7 +601,15 @@ pub fn rls_from_sheet_with(
         || room_tag.is_some()
         || plan_crop.is_some()
         || !three_ds.is_empty())
-    .then_some(RlsPlan { sheet_size, markers, tags, room_tag, plan_crop, three_ds });
+    .then_some(RlsPlan {
+        sheet_size,
+        markers,
+        tags,
+        room_tag,
+        plan_crop,
+        three_ds,
+        viewport_moves: Vec::new(),
+    });
     Ok(NewTask {
         rls,
         rls_set: None,

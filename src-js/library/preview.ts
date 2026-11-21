@@ -1,7 +1,7 @@
 // The sheet preview's geometry: the sheet's outline and a box per viewport, in paper millimetres with y
 // pointing down (SVG), so the component only draws. Pure, tested in preview.test.ts.
 
-import type { SheetRecord, ViewportInfo } from "./types.js";
+import type { PaperBox, SheetRecord, ViewportInfo } from "./types.js";
 
 export type PortKind = "plan" | "elevation" | "three_d" | "schedule" | "other";
 
@@ -29,12 +29,19 @@ export function kindOf(vpType: string | undefined): PortKind {
 }
 
 export interface PreviewBox {
+  /** Which of the sheet's `view_ports` this box draws (those without an outline have no box). */
+  port: number;
   x: number;
   y: number;
   w: number;
   h: number;
   kind: PortKind;
   label: string;
+  /** The box reaches past the paper's edge (only judged when the paper size is measured). */
+  clipped?: boolean;
+  /** The view crop and the annotation crop round it, drawn dashed, when the view has one on (see `cropRectangles`). */
+  crop?: { x: number; y: number; w: number; h: number };
+  annotation?: { x: number; y: number; w: number; h: number };
 }
 
 /** An elevation's line drawn on the plan viewport, with the index its view has on its marker. */
@@ -69,6 +76,9 @@ export interface Preview {
 
 const MARGIN_MM = 20;
 
+/** How far past the paper's edge a box may stand before it counts as clipping: drawing and rounding noise. */
+export const CLIP_TOLERANCE_MM = 0.5;
+
 function labelOf(p: ViewportInfo, kind: PortKind): string {
   const scale = p.view?.view_scale;
   const name = KIND_LABEL[kind];
@@ -76,6 +86,23 @@ function labelOf(p: ViewportInfo, kind: PortKind): string {
   if (kind === "schedule" && typeof p.view?.total_number_of_rows === "number") label += ` · ${p.view.total_number_of_rows} items`;
   if (kind === "elevation" && typeof p.view?.marker_index === "number") label += ` · #${p.view.marker_index}`;
   return label;
+}
+
+/**
+ * A viewport's view crop and, round it, its annotation crop, paper mm with y up; null when the view has no annotation
+ * crop on or its crop size cannot be worked out (no scale, or no crop box). The crop's size is exact: its box in the
+ * model (the plan's crop, an elevation's width and height) over the view scale. Where it sits is NOT exported, so it is
+ * centred on the viewport's box, which is the crop plus a margin (measured on House A's Rumpus sheet: about 6 mm on
+ * the plan, 15 mm wide and 39 mm tall on the elevations); the annotation crop is the crop pushed out by the export's
+ * offsets, each side its own.
+ */
+export function cropRectangles(p: ViewportInfo): { view: PaperBox; annotation: PaperBox } | null {
+  const [b, c, o, scale] = [p.bounding_box, p.view?.bounding_box, p.view?.annotation_crop_offsets, p.view?.view_scale];
+  if (!b || !c || !o || !scale || !p.view?.annotation_crop_active) return null;
+  const [hw, hh] = [(c.max_x - c.min_x) / scale / 2, (c.max_y - c.min_y) / scale / 2];
+  const [cx, cy] = [(b.min_x + b.max_x) / 2, (b.min_y + b.max_y) / 2];
+  const view = { min_x: cx - hw, max_x: cx + hw, min_y: cy - hh, max_y: cy + hh };
+  return { view, annotation: { min_x: view.min_x - o.left, max_x: view.max_x + o.right, min_y: view.min_y - o.bottom, max_y: view.max_y + o.top } };
 }
 
 /**
@@ -156,13 +183,18 @@ export function cameraArrows(ports: ViewportInfo[]): PreviewArrow[] {
   return arrows;
 }
 
+function clips(b: { minX: number; maxX: number; minY: number; maxY: number }, width: number, height: number): boolean {
+  const t = CLIP_TOLERANCE_MM;
+  return b.minX < -t || b.minY < -t || b.maxX > width + t || b.maxY > height + t;
+}
+
 /** The preview of a sheet, or null when it has nothing to draw: no viewport has an outline and no paper size is known. */
 export function previewOf(record: Pick<SheetRecord, "size_mm" | "sheet">): Preview | null {
-  const ports = (record.sheet.view_ports ?? []).filter((p) => p.bounding_box);
-  const boxes = ports.map((p) => {
+  const ports = (record.sheet.view_ports ?? []).flatMap((p, port) => (p.bounding_box ? [{ p, port }] : []));
+  const boxes = ports.map(({ p, port }) => {
     const b = p.bounding_box!;
     const kind = kindOf(p.vp_type);
-    return { minX: b.min_x, maxX: b.max_x, minY: b.min_y, maxY: b.max_y, kind, label: labelOf(p, kind) };
+    return { port, minX: b.min_x, maxX: b.max_x, minY: b.min_y, maxY: b.max_y, kind, label: labelOf(p, kind), crops: cropRectangles(p) };
   });
   let width = record.size_mm?.width_mm ?? 0;
   let height = record.size_mm?.height_mm ?? 0;
@@ -172,6 +204,7 @@ export function previewOf(record: Pick<SheetRecord, "size_mm" | "sheet">): Previ
     width = Math.max(...boxes.map((b) => b.maxX)) + MARGIN_MM;
     height = Math.max(...boxes.map((b) => b.maxY)) + MARGIN_MM;
   }
+  const rect = (r: PaperBox) => ({ x: r.min_x, y: height - r.max_y, w: r.max_x - r.min_x, h: r.max_y - r.min_y });
   return {
     width,
     height,
@@ -183,6 +216,16 @@ export function previewOf(record: Pick<SheetRecord, "size_mm" | "sheet">): Previ
       y2: height - a.y2,
       head: a.head.map((h) => ({ x: h.x, y: height - h.y })),
     })),
-    boxes: boxes.map((b) => ({ x: b.minX, y: height - b.maxY, w: b.maxX - b.minX, h: b.maxY - b.minY, kind: b.kind, label: b.label })),
+    boxes: boxes.map((b) => ({
+      port: b.port,
+      x: b.minX,
+      y: height - b.maxY,
+      w: b.maxX - b.minX,
+      h: b.maxY - b.minY,
+      kind: b.kind,
+      label: b.label,
+      ...(measured && clips(b, width, height) && { clipped: true }),
+      ...(b.crops && { crop: rect(b.crops.view), annotation: rect(b.crops.annotation) }),
+    })),
   };
 }

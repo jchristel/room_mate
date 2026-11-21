@@ -9,17 +9,21 @@
 // A task is a RECORD (plan decision 21): it holds what Revit is told as of when it was made. The
 // resolver is not asked again here.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import * as api from "./api.js";
 import { persistSelection, seedProjectId } from "./common.js";
 import { MakeTasks } from "./MakeTasks.js";
 import { TaskDetail } from "./TaskDetail.js";
 import { TaskList } from "./TaskList.js";
-import type { AssignmentRow, Made, ProjectRow, Task, TaskState, TaskSummary } from "./types.js";
+import { canDismiss, canResend, roomsLabel } from "./model.js";
+import { sheetStatus, type SheetStatus } from "./sheetPreviews.js";
+import type { AssignmentRow, Made, ProjectRow, Task, TaskState, TaskSummary, ViewportMovesBody } from "./types.js";
 
 const message = (e: unknown): string => String((e as Error).message ?? e);
 const POLL_MS = 8000;
+/** Full tasks read at once to look at their sheets. */
+const LOOK_AT_ONCE = 4;
 
 export function App() {
   const [projects, setProjects] = useState<ProjectRow[]>([]);
@@ -28,7 +32,12 @@ export function App() {
   const [selected, setSelected] = useState<Task | null>(null);
   const [model, setModel] = useState("");
   const [states, setStates] = useState<ReadonlySet<TaskState>>(new Set());
+  const [onlyWarnings, setOnlyWarnings] = useState(false);
+  // What each queued sheet task looks like against its paper, keyed by task and stamped with the `updated_at` it was read at.
+  const [status, setStatus] = useState<ReadonlyMap<string, SheetStatus & { at: string }>>(new Map());
   const [making, setMaking] = useState(false);
+  const [multi, setMulti] = useState(false);
+  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
   const [assignments, setAssignments] = useState<AssignmentRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -60,11 +69,40 @@ export function App() {
     setSelected(null);
     setMaking(false);
     setModel("");
+    setStatus(new Map());
     if (!projectId) return;
     void refresh(projectId);
     const timer = window.setInterval(() => void refresh(projectId), POLL_MS);
     return () => window.clearInterval(timer);
   }, [projectId, refresh]);
+
+  // Look at the sheets of every queued task that makes some: a list row has no viewports, so the whole task is read
+  // once per version (a task is a record, and `updated_at` moves when it does) and judged by `sheetStatus`. A read
+  // already under way is not started again by the next poll, and one that finishes after a project change is dropped.
+  const looking = useRef(new Set<string>());
+  const current = useRef<string | null>(null);
+  current.current = projectId;
+  useEffect(() => {
+    if (!projectId || !rows) return;
+    const queue = rows.filter(
+      (r) => r.state === "queued" && (r.kind === "create_rls" || r.kind === "create_rls_set") && status.get(r.id)?.at !== r.updated_at && !looking.current.has(`${projectId}/${r.id}@${r.updated_at}`),
+    );
+    for (const r of queue) looking.current.add(`${projectId}/${r.id}@${r.updated_at}`);
+    const worker = async () => {
+      for (let r = queue.shift(); r; r = queue.shift()) {
+        const key = `${projectId}/${r.id}@${r.updated_at}`;
+        try {
+          const s = sheetStatus(await api.getTask(projectId, r.id));
+          if (current.current === projectId) setStatus((cur) => new Map(cur).set(r.id, { ...s, at: r.updated_at }));
+        } catch {
+          // a task that cannot be read now is looked at again on the next poll
+        } finally {
+          looking.current.delete(key);
+        }
+      }
+    };
+    for (let i = 0, n = Math.min(LOOK_AT_ONCE, queue.length); i < n; i += 1) void worker();
+  }, [projectId, rows, status]);
 
   // What the make panel offers, read when it opens.
   useEffect(() => {
@@ -104,6 +142,51 @@ export function App() {
     void refresh(projectId);
   };
 
+  // Several tasks at once. Only the ticked tasks the action applies to are sent; the rest are left as they are.
+  const actOnPicked = async (what: "dismiss" | "resend") => {
+    if (!projectId) return;
+    const can = what === "dismiss" ? canDismiss : canResend;
+    const todo = (rows ?? []).filter((t) => picked.has(t.id) && can(t.state));
+    if (todo.length === 0) return;
+    if (what === "dismiss" && todo.some((t) => t.state === "in_progress") && !window.confirm("A Revit session was handed at least one of these tasks. Dismiss them anyway? A late report from that session will be refused.")) return;
+    setBusy(true);
+    const failed: string[] = [];
+    for (const t of todo) {
+      const r = await (what === "dismiss" ? api.dismiss(projectId, t.id) : api.resend(projectId, t.id));
+      if (!r.ok) failed.push(`${roomsLabel(t)}: ${r.error}`);
+    }
+    setBusy(false);
+    const done = todo.length - failed.length;
+    setError(failed.length > 0 ? `Not ${what === "dismiss" ? "dismissed" : "resent"}: ${failed.join("; ")}` : null);
+    setNotice(`${done} task${done === 1 ? "" : "s"} ${what === "dismiss" ? "dismissed" : "put back in the queue"}.`);
+    void refresh(projectId);
+  };
+
+  // Only what is still in the list counts: a task can leave it between polls.
+  const ticked = (rows ?? []).filter((t) => picked.has(t.id));
+
+  const pick = (ids: readonly string[], on: boolean) =>
+    setPicked((cur) => {
+      const n = new Set(cur);
+      for (const id of ids) {
+        if (on) n.add(id);
+        else n.delete(id);
+      }
+      return n;
+    });
+
+  const moveViewports = async (body: ViewportMovesBody) => {
+    if (!projectId || !selected) return;
+    setBusy(true);
+    const r = await api.moveViewports(projectId, selected.id, body);
+    setBusy(false);
+    if (!r.ok) return setError(r.error);
+    setError(null);
+    setNotice("Positions saved.");
+    setSelected(r.value);
+    void refresh(projectId);
+  };
+
   const toggleState = (s: TaskState) =>
     setStates((cur) => {
       const n = new Set(cur);
@@ -127,6 +210,7 @@ export function App() {
           value={projectId ?? ""}
           onChange={(e) => {
             setProjectId(e.target.value);
+            setPicked(new Set());
             persistSelection(e.target.value);
           }}
         >
@@ -150,10 +234,23 @@ export function App() {
           selectedId={selected?.id ?? null}
           model={model}
           states={states}
+          status={status}
+          onlyWarnings={onlyWarnings}
+          onOnlyWarnings={setOnlyWarnings}
           onModel={setModel}
           onToggleState={toggleState}
           onSelect={(id) => void open(id)}
+          multi={multi}
+          picked={picked}
+          onMulti={(on) => {
+            setMulti(on);
+            setPicked(new Set());
+            setMaking(false);
+          }}
+          onPick={pick}
           onMake={() => {
+            setMulti(false);
+            setPicked(new Set());
             setMaking(true);
             setSelected(null);
             setNotice(null);
@@ -162,10 +259,29 @@ export function App() {
         <main>
           {error ? <p className="banner error">{error}</p> : null}
           {notice && !error ? <p className="banner">{notice}</p> : null}
-          {making && projectId ? (
+          {multi ? (
+            <div className="detail">
+              <div className="toolbar">
+                <strong>
+                  {ticked.length} task{ticked.length === 1 ? "" : "s"} selected
+                </strong>
+                <span className="spacer" />
+                <button type="button" disabled={busy || ticked.length === 0} onClick={() => setPicked(new Set())}>
+                  Clear
+                </button>
+                <button type="button" disabled={busy || ticked.every((t) => !canResend(t.state))} onClick={() => void actOnPicked("resend")}>
+                  Resend {ticked.filter((t) => canResend(t.state)).length}
+                </button>
+                <button type="button" className="danger" disabled={busy || ticked.every((t) => !canDismiss(t.state))} onClick={() => void actOnPicked("dismiss")}>
+                  Dismiss {ticked.filter((t) => canDismiss(t.state)).length}
+                </button>
+              </div>
+              <p className="hint">Tick tasks on the left. A task an action does not apply to (resending one already queued, dismissing one already dismissed) is skipped. Switch "Select several" off to see one task.</p>
+            </div>
+          ) : making && projectId ? (
             <MakeTasks project={projectId} assignments={assignments} onMade={made} onClose={() => setMaking(false)} />
           ) : selected ? (
-            <TaskDetail task={selected} busy={busy} onDismiss={() => void act("dismiss")} onResend={() => void act("resend")} />
+            <TaskDetail task={selected} busy={busy} onDismiss={() => void act("dismiss")} onResend={() => void act("resend")} onMoveViewports={(b) => void moveViewports(b)} />
           ) : (
             <p className="hint empty">Choose a task on the left, or make some.</p>
           )}

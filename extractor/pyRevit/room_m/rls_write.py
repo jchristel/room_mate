@@ -378,9 +378,10 @@ class RlsWriter(object):
         )
 
     def _place_on(self, item, sheet):
-        """`(sheet, centre_mm)`: where a view of `item` goes. One sheet, at the template viewport's place (`None`);
-        a set's writer (`room_m.rls_set_write`) answers the item's own sheet and centre from the task."""
-        return sheet, None
+        """`(sheet, centre_mm)`: where a view of `item` goes. One sheet; the centre is where a person moved it on the
+        tasks page (`rls.viewport_moves`, mm from the paper's bottom left), else `None`: the template viewport's place.
+        A set's writer (`room_m.rls_set_write`) answers the item's own sheet and centre from the task."""
+        return sheet, item.get("centre_mm")
 
     def _viewport(self, sheet, view, template_vp, notes, label, kind, at_mm=None):
         # a set's task says where each viewport's centre is on its sheet (mm from the paper's bottom left)
@@ -731,9 +732,14 @@ class RlsWriter(object):
         self._title_on_sheet(copy, plan.get("schedule_title"), plan["schedule_name"], notes)
         vp = plan["schedule_viewport"]
         box = (vp or {}).get("bounding_box") or {}
+        moved = plan.get("schedule_centre_mm")
         try:
-            # the schedule's upper left corner: the template box's smallest x and largest y (mm)
-            at = (_ft(box["min_x"]), _ft(box["max_y"]))
+            if moved:
+                # moved by a person: its centre, so the upper left corner is half the template box's size from it
+                at = (_ft(moved[0] - (box["max_x"] - box["min_x"]) / 2), _ft(moved[1] + (box["max_y"] - box["min_y"]) / 2))
+            else:
+                # the schedule's upper left corner: the template box's smallest x and largest y (mm)
+                at = (_ft(box["min_x"]), _ft(box["max_y"]))
         except (KeyError, TypeError):
             at = (0.0, 0.0)
             notes.append("the schedule had no place on the template sheet: put at the sheet's origin")

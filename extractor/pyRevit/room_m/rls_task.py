@@ -184,6 +184,17 @@ def _three_ds(template, names):
     return views, skipped
 
 
+def _moves(task):
+    """`{template viewport id: [x, y]}`: where a person moved a viewport on the new sheet (`rls.viewport_moves`), the
+    viewport's CENTRE in mm from the paper's bottom left, y up. A viewport not in it goes where the template has it."""
+    out = {}
+    for move in (task.get("rls") or {}).get("viewport_moves") or []:
+        centre = move.get("centre_mm")
+        if move.get("view_id") is not None and centre and len(centre) == 2:
+            out[move["view_id"]] = [centre[0], centre[1]]
+    return out
+
+
 def _plan_tags(task):
     """The tags the server worked out for the plan view: `[tag]`, each with an item id and a head."""
     tags = (task.get("rls") or {}).get("tags") or {}
@@ -390,6 +401,15 @@ def build(task, settings, values):
         "room_tag_head": _room_tag_head(task),
         "plan_crop": plan_crop,
     }
+    # where a person moved a viewport (the tasks page): the writer asks each item for `centre_mm`, as a set's does
+    moves = _moves(task)
+    at = lambda vp: moves.get((vp or {}).get("view_id"))  # noqa: E731
+    plan["centre_mm"] = at(plan_vp)
+    plan["schedule_centre_mm"] = at(schedule_vp)
+    for e in elevations:
+        e["centre_mm"] = at(e["viewport"])
+    for v in three_ds:
+        v["centre_mm"] = at(v["viewport"])
     # the detail number each viewport gets, in the order the writer makes them (`detail_numbers`)
     plan["detail_numbers"] = detail_numbers.assign(
         {"elevation": len(elevations), "plan": 1, "three_d": len(three_ds)}, settings)

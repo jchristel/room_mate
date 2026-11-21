@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::service::blueprint_model::{BlueprintSheet, ItemClass, Property};
-use crate::service::rls_plan::RlsPlan;
+use crate::service::rls_plan::{RlsPlan, ViewportMove};
 use crate::service::rls_set_task::RlsSetPlan;
 use crate::state::is_path_safe_component;
 use crate::tag_rules::TaskRule;
@@ -650,6 +650,91 @@ pub fn resend(projects_dir: &Path, project: &str, id: &str) -> Result<Task, Task
     Ok(task)
 }
 
+/// What a person changed about where a task's viewports go: the tasks page's drag, saved.
+#[derive(Debug, Clone, Default, Deserialize)]
+pub struct ViewportMoves {
+    /// `create_rls`: the moved viewports by the template viewport's id. REPLACES the list the task holds, so `[]`
+    /// puts every viewport back where the template has it; absent leaves it.
+    #[serde(default)]
+    pub moves: Option<Vec<ViewportMove>>,
+    /// `create_rls_set`: the centre of sheet `sheet`'s view number `view`. The set's layout IS the task, so these
+    /// are written into it.
+    #[serde(default)]
+    pub set_moves: Vec<SetMove>,
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+pub struct SetMove {
+    pub sheet: usize,
+    pub view: usize,
+    pub centre_mm: [f64; 2],
+}
+
+/// Far beyond any sheet: a centre outside it is a client fault, not a layout.
+const MOVE_LIMIT_MM: f64 = 20_000.0;
+
+fn check_centre(centre: [f64; 2]) -> Result<(), TaskError> {
+    if centre.iter().all(|v| v.is_finite() && v.abs() <= MOVE_LIMIT_MM) {
+        Ok(())
+    } else {
+        bad(format!("a viewport centre of {centre:?} is not a place on a sheet"))
+    }
+}
+
+/// A person moves viewports on a queued task's sheet, to fix one that reaches past the paper. Only a queued task: a
+/// session holds the others, and a finished one is history. Where a viewport goes is a decision about THIS task, so
+/// nothing else changes and the task stays queued.
+pub fn move_viewports(projects_dir: &Path, project: &str, id: &str, request: ViewportMoves) -> Result<Task, TaskError> {
+    let _guard = SAVE_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut task = load(projects_dir, project, id)?;
+    if task.state != TaskState::Queued {
+        return Err(TaskError::Conflict("only a queued task's viewports can be moved".to_string()));
+    }
+    match task.kind {
+        TaskKind::CreateRls => {
+            if !request.set_moves.is_empty() {
+                return bad("a create-RLS task has no set sheets: send `moves`".to_string());
+            }
+            let Some(moves) = request.moves else {
+                return Ok(task);
+            };
+            let mut seen = std::collections::HashSet::new();
+            for m in &moves {
+                check_centre(m.centre_mm)?;
+                if !seen.insert(m.view_id) {
+                    return bad(format!("viewport {} is moved twice", m.view_id));
+                }
+            }
+            if !task.sheets.iter().any(|s| s.sheet.get("view_ports").is_some_and(|p| p.is_array())) && !moves.is_empty()
+            {
+                return bad("the task's sheet has no viewports to move".to_string());
+            }
+            task.rls.get_or_insert_with(RlsPlan::default).viewport_moves = moves;
+        }
+        TaskKind::CreateRlsSet => {
+            if request.moves.is_some() {
+                return bad("a set task's viewports are moved by sheet and view: send `set_moves`".to_string());
+            }
+            let set = task
+                .rls_set
+                .as_mut()
+                .ok_or_else(|| TaskError::Invalid("the task holds no set layout".to_string()))?;
+            for m in &request.set_moves {
+                check_centre(m.centre_mm)?;
+                let view = set.sheets.get_mut(m.sheet).and_then(|s| s.views.get_mut(m.view));
+                match view {
+                    Some(v) => v.centre_mm = m.centre_mm,
+                    None => return bad(format!("the set has no view {} on sheet {}", m.view, m.sheet)),
+                }
+            }
+        }
+        _ => return bad("this kind of task has no sheet to move viewports on".to_string()),
+    }
+    task.updated_at = now();
+    write(projects_dir, project, &task)?;
+    Ok(task)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -873,5 +958,76 @@ mod tests {
         let read = load(&dir, "p", &made.id).unwrap();
         assert_eq!(read.update_mode, Some(UpdateMode::Locations));
         assert_eq!(TaskSummary::from(&read).update_mode, Some(UpdateMode::Locations));
+    }
+
+    fn rls_task_with_viewports() -> NewTask {
+        let mut t = new_task("m1", "r1");
+        t.kind = TaskKind::CreateRls;
+        t.create_rls = true;
+        t.sheets = vec![BlueprintSheet {
+            revit_sheet_id: "1".to_string(),
+            document_title: "D".to_string(),
+            sheet_number: "S".to_string(),
+            sheet_name: String::new(),
+            size_mm: None,
+            room_summary: None,
+            room_outline: Vec::new(),
+            sheet: serde_json::json!({"view_ports": [{"view_id": 7}]}),
+        }];
+        t
+    }
+
+    #[test]
+    fn test_moving_a_viewport_is_saved_replaced_and_only_for_a_queued_task() {
+        let dir = temp_dir("move");
+        let made = create(&dir, "p", rls_task_with_viewports()).unwrap();
+        let moved = move_viewports(
+            &dir,
+            "p",
+            &made.id,
+            ViewportMoves {
+                moves: Some(vec![ViewportMove { view_id: 7, centre_mm: [100.0, 50.0] }]),
+                set_moves: vec![],
+            },
+        )
+        .unwrap();
+        assert_eq!(moved.state, TaskState::Queued);
+        assert_eq!(
+            moved.rls.as_ref().unwrap().viewport_moves,
+            vec![ViewportMove { view_id: 7, centre_mm: [100.0, 50.0] }]
+        );
+        assert_eq!(load(&dir, "p", &made.id).unwrap().rls.unwrap().viewport_moves.len(), 1, "it is stored");
+        // a request that leaves `moves` out keeps them, and an empty list puts every viewport back
+        let kept = move_viewports(&dir, "p", &made.id, ViewportMoves::default()).unwrap();
+        assert_eq!(kept.rls.unwrap().viewport_moves.len(), 1);
+        let cleared =
+            move_viewports(&dir, "p", &made.id, ViewportMoves { moves: Some(vec![]), set_moves: vec![] }).unwrap();
+        assert!(cleared.rls.unwrap().viewport_moves.is_empty());
+        // not a place on a sheet, and the same viewport twice
+        for bad_moves in [
+            vec![ViewportMove { view_id: 7, centre_mm: [f64::NAN, 0.0] }],
+            vec![ViewportMove { view_id: 7, centre_mm: [1e9, 0.0] }],
+            vec![
+                ViewportMove { view_id: 7, centre_mm: [1.0, 1.0] },
+                ViewportMove { view_id: 7, centre_mm: [2.0, 2.0] },
+            ],
+        ] {
+            let r = move_viewports(&dir, "p", &made.id, ViewportMoves { moves: Some(bad_moves), set_moves: vec![] });
+            assert!(matches!(r, Err(TaskError::Invalid(_))));
+        }
+        // a task a session holds is not edited under it
+        claim(&dir, "p", "m1", &[]).unwrap();
+        let r = move_viewports(&dir, "p", &made.id, ViewportMoves { moves: Some(vec![]), set_moves: vec![] });
+        assert!(matches!(r, Err(TaskError::Conflict(_))));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_a_kind_with_no_sheet_refuses_viewport_moves() {
+        let dir = temp_dir("move-kind");
+        let made = create(&dir, "p", new_task("m1", "r1")).unwrap();
+        let r = move_viewports(&dir, "p", &made.id, ViewportMoves { moves: Some(vec![]), set_moves: vec![] });
+        assert!(matches!(r, Err(TaskError::Invalid(_))));
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

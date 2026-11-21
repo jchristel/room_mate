@@ -590,6 +590,14 @@ target model's frame, mm. The Tasks button's sheet handler reads it (`room_m/rls
 - **A marker's position is read from its view pointers, not from `Location`.** Revit gives an `ElevationMarker` no point: its `Location` is the bare `Location` class and it has no bounding box outside a plan view, so `marker_location` was always null. duHast (`elevation.get_marker_centre_from_pointers`) takes each view's pointer (a dependent element of category `OST_Viewers`, which Revit names "Views"; the one with the largest id below the view's), its bounding box in a plan view, and fits the lines through those centres along the view directions: the circle's centre, measured in Revit. The elevation lines' own middles are NOT the marker (a line can be cropped off-centre: 280 mm out on the Rumpus sheet). A marker with one view answers none. **A sheet exported without it** (an old push, or a one-view marker) falls back on the server (`rls_plan::marker_from_view_axes`): where the views' axes cross through the middles of their lines, which is approximate, and for one view the middle of that line.
 - **A marker is placed once, from its lowest-numbered view**, so its views share one point; placing it from each view's own
   wall would give four different markers in a room that scaled unevenly.
+- **A person can move a viewport on a queued task's sheet** (`POST .../tasks/{id}/viewports`, `tasks::move_viewports`, the tasks page's drag): a
+  create-RLS task keeps `rls.viewport_moves`, the TEMPLATE viewport's id and its centre in paper mm from the bottom left, y up (a set's own frame), which
+  REPLACES the list (`[]` puts every viewport back); a set task's views are edited in place (`set_moves`: sheet and view index), since the layout IS the
+  task. Queued only (409 otherwise). A move changes where a viewport goes and never its size. The plug-in asks each item for `centre_mm` (`rls_task._moves`,
+  `RlsWriter._place_on`; the schedule's is turned back into the upper left corner from the template box's size). The page's preview is the same
+  arithmetic (`sheetPreviews.ts`), and a viewport past the paper marks the task with a warning (`sheetStatus`, judged in the page from each queued sheet
+  task, never stored). The preview sizes the plan, elevations and 3D views for the room (`fitToRoom`); a schedule keeps the template's size. **The plug-in
+  side is not run in Revit, and the drag is not driven in a browser.**
 - **Different coarse edge counts place nothing** (the blueprint rule) and say so as a finding; the sheet is still made.
 - `POST /projects/{id}/tasks/rls-preview` is the same read for one room and stores nothing, so a preview is the task. A request
   may override a view's depth (`depths`: `depth_mm`, or `to_wall`).

@@ -28,7 +28,7 @@ use crate::service::task_build::{
 };
 use crate::service::ServiceError;
 use crate::state::{AppState, Shared};
-use crate::tasks::{self, Report, ReportOutcome, Task, TaskState, TaskSummary, UpdateMode};
+use crate::tasks::{self, Report, ReportOutcome, Task, TaskState, TaskSummary, UpdateMode, ViewportMoves};
 
 const MAX_ROOMS_PER_REQUEST: usize = 200;
 
@@ -368,6 +368,17 @@ pub async fn http_resend_task(
     UrlPath((project_id, id)): UrlPath<(String, String)>,
 ) -> Result<Json<Task>, (StatusCode, String)> {
     tasks::resend(&projects_dir(&state)?, &project_id, &id).map(Json).map_err(to_http)
+}
+
+/// A person moves viewports on a queued task's sheet (`tasks::move_viewports`).
+pub async fn http_move_task_viewports(
+    State(state): State<Shared>,
+    UrlPath((project_id, id)): UrlPath<(String, String)>,
+    Json(body): Json<ViewportMoves>,
+) -> Result<Json<Task>, (StatusCode, String)> {
+    tasks::move_viewports(&projects_dir(&state)?, &project_id, &id, body)
+        .map(Json)
+        .map_err(to_http)
 }
 
 #[cfg(test)]

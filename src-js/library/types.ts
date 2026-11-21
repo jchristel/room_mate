@@ -82,10 +82,14 @@ export interface ViewInfo {
   /** Elevation: the line in the model, mm; start to end runs to the viewer's right. */
   line_start?: Point3 | null;
   line_end?: Point3 | null;
+  /** Plan and elevation: the annotation crop is on, and where its edges stand outside the view crop, mm on paper. */
+  annotation_crop_active?: boolean | null;
+  annotation_crop_offsets?: { left: number; right: number; top: number; bottom: number } | null;
   /** Plan: the crop box in the model's frame, mm. */
   bounding_box?: PaperBox;
   /** 3D: the direction the camera looks along (any length), and the section box in the model's frame, mm. */
   forward_direction?: Point3 | null;
+  up_direction?: Point3 | null;
   section_box_min?: Point3 | null;
   section_box_max?: Point3 | null;
 }
