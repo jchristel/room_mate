@@ -735,6 +735,48 @@ pub fn move_viewports(projects_dir: &Path, project: &str, id: &str, request: Vie
     Ok(task)
 }
 
+/// A direction a person chose for one of a task's 3D views, in plan, in the target model's frame (see `aim_cameras`).
+#[derive(Debug, Clone, Copy, PartialEq, Deserialize)]
+pub struct CameraAim {
+    /// The 3D view, by its place among the template's 3D viewports, from 1.
+    pub index: usize,
+    pub direction: [f64; 2],
+}
+
+/// The body of the aim request: EVERY aim the task should keep. A view not named looks along the template's direction.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CameraAims {
+    pub cameras: Vec<CameraAim>,
+}
+
+/// A queued create-RLS task may be aimed: a session holds the others, and a finished one is history.
+pub fn check_aimable(task: &Task) -> Result<(), TaskError> {
+    if task.state != TaskState::Queued {
+        return Err(TaskError::Conflict("only a queued task's 3D views can be aimed".to_string()));
+    }
+    if task.kind != TaskKind::CreateRls {
+        return bad("only a create-RLS task has 3D views to aim".to_string());
+    }
+    Ok(())
+}
+
+/// Store the 3D views worked out again for the directions a person chose (`task_build::aim_three_ds`). Nothing else
+/// about the task changes and it stays queued.
+pub fn replace_three_ds(
+    projects_dir: &Path,
+    project: &str,
+    id: &str,
+    plans: Vec<crate::service::rls_three_d::ThreeDPlan>,
+) -> Result<Task, TaskError> {
+    let _guard = SAVE_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut task = load(projects_dir, project, id)?;
+    check_aimable(&task)?;
+    task.rls.get_or_insert_with(RlsPlan::default).three_ds = plans;
+    task.updated_at = now();
+    write(projects_dir, project, &task)?;
+    Ok(task)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1029,5 +1071,23 @@ mod tests {
         let r = move_viewports(&dir, "p", &made.id, ViewportMoves { moves: Some(vec![]), set_moves: vec![] });
         assert!(matches!(r, Err(TaskError::Invalid(_))));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Only a queued create-RLS task's 3D views can be aimed; the stored plan keeps everything else.
+    #[test]
+    fn test_only_a_queued_create_rls_task_can_be_aimed() {
+        let dir = temp_dir("aim");
+        let mut new = new_task("m", "1");
+        new.kind = TaskKind::CreateRls;
+        new.rls = Some(RlsPlan { room_outline: vec![[0.0, 0.0], [1.0, 0.0], [1.0, 1.0]], ..Default::default() });
+        let task = create(&dir, "p", new).unwrap();
+        check_aimable(&task).unwrap();
+        let aimed = replace_three_ds(&dir, "p", &task.id, vec![]).unwrap();
+        assert_eq!(3, aimed.rls.unwrap().room_outline.len(), "the outline is kept");
+
+        let populate = create(&dir, "p", new_task("m", "2")).unwrap();
+        assert!(matches!(check_aimable(&populate), Err(TaskError::Invalid(_))));
+        dismiss(&dir, "p", &task.id).unwrap();
+        assert!(matches!(replace_three_ds(&dir, "p", &task.id, vec![]), Err(TaskError::Conflict(_))));
     }
 }

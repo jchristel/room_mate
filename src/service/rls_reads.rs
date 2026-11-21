@@ -20,7 +20,7 @@
 
 use std::cell::OnceCell;
 
-use super::blueprint_capture::qualify_room_in;
+use super::blueprint_capture::{project_doors, qualify_room_in, ProjectDoor};
 use super::items::{assemble_items, FfeResult, ItemScope};
 use super::room_locator::RoomRef;
 use super::rooms::{assemble_rooms, RoomScope, RoomsResult};
@@ -33,11 +33,18 @@ pub struct RlsReads<'a> {
     pub(super) project: &'a str,
     rooms: OnceCell<Option<RoomsResult>>,
     ffe: OnceCell<Option<FfeResult>>,
+    doors: OnceCell<Vec<ProjectDoor>>,
 }
 
 impl<'a> RlsReads<'a> {
     pub fn new(state: &'a AppState, project: &'a str) -> Self {
-        RlsReads { state, project, rooms: OnceCell::new(), ffe: OnceCell::new() }
+        RlsReads {
+            state,
+            project,
+            rooms: OnceCell::new(),
+            ffe: OnceCell::new(),
+            doors: OnceCell::new(),
+        }
     }
 
     /// The project's rooms, as `/rooms` answers them; `None` when nothing has been pushed.
@@ -56,6 +63,15 @@ impl<'a> RlsReads<'a> {
             let _ = self.ffe.set(assemble_items(self.state, &scope)?);
         }
         Ok(self.ffe.get().and_then(Option::as_ref))
+    }
+
+    /// Every door of the project that has a footprint (`blueprint_capture::project_doors`), in the project's plan
+    /// frame, read once: a task draws the doors of its room, and a request may name hundreds.
+    pub fn doors(&self) -> Result<&[ProjectDoor], ServiceError> {
+        if self.doors.get().is_none() {
+            let _ = self.doors.set(project_doors(self.state, self.project)?);
+        }
+        Ok(self.doors.get().map_or(&[], Vec::as_slice))
     }
 
     /// `blueprint_capture::qualify_room` with no model named, over the rooms read once.

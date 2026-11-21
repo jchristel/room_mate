@@ -62,6 +62,11 @@ pub struct ThreeDPlan {
     /// The items to make transparent in this view.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub see_through: Vec<String>,
+    /// The direction a person chose in plan, a unit vector in the target model's frame (`aim_three_ds`). Absent means
+    /// the template's direction, turned with the plan. The plug-in keeps the template's pitch and turns the view's
+    /// right and up about the vertical to look this way.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<[f64; 2]>,
 }
 
 fn is_three_d(port: &Value) -> bool {
@@ -146,7 +151,17 @@ fn bounds(ring: &[Pt]) -> Option<(Pt, Pt)> {
 /// Every 3D viewport of `sheet` made for the room `ring` (the fine outline, counter-clockwise, in the target
 /// model's frame, mm): where its camera is, the edges whose walls go and the `items` seen through. A viewport with
 /// no plan direction (looking straight down) hides nothing and still has its place in the list.
-pub fn three_ds(sheet: &Value, ring: &[Pt], crop: Option<&PlanCrop>, items: &[RoomItem]) -> Vec<ThreeDPlan> {
+///
+/// `aims` are the directions a person chose in plan, by the view's index (from 1): the camera then looks that way
+/// instead of along the template's direction, at the template's pitch (a unit vector; the plan crop's turn is not
+/// applied, a person drew it on the turned plan already).
+pub fn three_ds(
+    sheet: &Value,
+    ring: &[Pt],
+    crop: Option<&PlanCrop>,
+    items: &[RoomItem],
+    aims: &[(usize, [f64; 2])],
+) -> Vec<ThreeDPlan> {
     let Some((lo, hi)) = bounds(ring) else {
         return Vec::new();
     };
@@ -168,10 +183,24 @@ pub fn three_ds(sheet: &Value, ring: &[Pt], crop: Option<&PlanCrop>, items: &[Ro
         .enumerate()
         .map(|(n, port)| {
             let view = port.get("view");
-            let forward = xyz(view.and_then(|v| v.get("forward_direction"))).map(|f| {
-                let (x, y) = rotate((f[0], f[1]), turn);
-                [x, y, f[2]]
+            let template = xyz(view.and_then(|v| v.get("forward_direction")));
+            let chosen = aims.iter().find(|(i, _)| *i == n + 1).and_then(|(_, d)| {
+                let len = d[0].hypot(d[1]);
+                (len > 1e-9 && len.is_finite()).then(|| [d[0] / len, d[1] / len])
             });
+            let forward = match (chosen, template) {
+                // the template's pitch, a person's heading; a template that looks straight down gets 45 degrees
+                (Some(d), t) => {
+                    let fz = t.map_or(-1.0, |f| f[2]);
+                    let plan = t.map(|f| f[0].hypot(f[1])).filter(|p| *p > 1e-6).unwrap_or(fz.abs());
+                    Some([d[0] * plan, d[1] * plan, fz])
+                }
+                (None, Some(f)) => {
+                    let (x, y) = rotate((f[0], f[1]), turn);
+                    Some([x, y, f[2]])
+                }
+                (None, None) => None,
+            };
             // duHast stands the camera back twice the box's 3D diagonal along the UNIT direction, so in plan it is
             // that distance times the direction's share in plan. The box's height is the template's; without it
             // the server cannot know it (a room carries no height) and leaves it out, which puts the eye a little
@@ -205,6 +234,7 @@ pub fn three_ds(sheet: &Value, ring: &[Pt], crop: Option<&PlanCrop>, items: &[Ro
                 hide: hide.iter().map(|&(a, b)| [[a.0, a.1], [b.0, b.1]]).collect(),
                 band_mm: HIDE_BAND_MM,
                 see_through,
+                direction: chosen,
             }
         })
         .collect()
@@ -269,7 +299,7 @@ mod tests {
             item("bed", vec![(1200.0, 900.0), (2800.0, 900.0), (2800.0, 2100.0), (1200.0, 2100.0)]),
             item("desk", vec![(3500.0, 2900.0), (3950.0, 2900.0), (3950.0, 2990.0), (3500.0, 2990.0)]),
         ];
-        let plans = three_ds(&sheet([203.2, 203.2, -101.6]), &room(), None, &items);
+        let plans = three_ds(&sheet([203.2, 203.2, -101.6]), &room(), None, &items, &[]);
         assert_eq!(1, plans.len());
         let p = &plans[0];
         assert_eq!(1, p.index);
@@ -282,10 +312,10 @@ mod tests {
 
     #[test]
     fn looking_straight_down_hides_nothing_and_a_sheet_without_3d_has_no_plans() {
-        let plans = three_ds(&sheet([0.0, 0.0, -1.0]), &room(), None, &[]);
+        let plans = three_ds(&sheet([0.0, 0.0, -1.0]), &room(), None, &[], &[]);
         assert!(plans[0].hide.is_empty());
-        assert!(three_ds(&json!({"view_ports": [{"vp_type": "floor plan"}]}), &room(), None, &[]).is_empty());
-        assert!(three_ds(&sheet([1.0, 1.0, -1.0]), &[], None, &[]).is_empty());
+        assert!(three_ds(&json!({"view_ports": [{"vp_type": "floor plan"}]}), &room(), None, &[], &[]).is_empty());
+        assert!(three_ds(&sheet([1.0, 1.0, -1.0]), &[], None, &[], &[]).is_empty());
     }
 
     #[test]
@@ -296,7 +326,7 @@ mod tests {
             offsets_mm: super::super::rls_plan::CropOffsets { left: 0.0, right: 0.0, bottom: 0.0, top: 0.0 },
             turn: None,
         };
-        let p = &three_ds(&sheet([0.0, 1.0, -1.0]), &room(), Some(&crop), &[])[0];
+        let p = &three_ds(&sheet([0.0, 1.0, -1.0]), &room(), Some(&crop), &[], &[])[0];
         assert!((p.eye[0] - 1000.0).abs() < 1e-6, "{:?}", p.eye);
     }
 
@@ -310,7 +340,7 @@ mod tests {
             offsets_mm: super::super::rls_plan::CropOffsets { left: 0.0, right: 0.0, bottom: 0.0, top: 0.0 },
             turn: None,
         };
-        let p = &three_ds(&sheet([0.0, 1.0, -1.0]), &room(), Some(&crop), &[])[0];
+        let p = &three_ds(&sheet([0.0, 1.0, -1.0]), &room(), Some(&crop), &[], &[])[0];
         let diagonal = (4000.0f64.powi(2) + 3000.0f64.powi(2) + 3300.0f64.powi(2)).sqrt();
         let back = 2.0 * diagonal * std::f64::consts::FRAC_1_SQRT_2;
         assert!((p.eye[1] - (1500.0 - back)).abs() < 1e-6, "{:?}", p.eye);
@@ -326,8 +356,34 @@ mod tests {
             offsets_mm: super::super::rls_plan::CropOffsets { left: 0.0, right: 0.0, bottom: 0.0, top: 0.0 },
             turn: Some(super::super::rls_turn::ViewTurn { angle_deg: 90.0, by: super::super::rls_turn::TurnBy::Walls }),
         };
-        let p = &three_ds(&sheet([0.0, 1.0, -1.0]), &room(), Some(&crop), &[])[0];
+        let p = &three_ds(&sheet([0.0, 1.0, -1.0]), &room(), Some(&crop), &[], &[])[0];
         assert!(p.eye[0] > 4000.0 && (p.eye[1] - 1500.0).abs() < 1e-6, "{:?}", p.eye);
         assert_eq!(vec![[[4000.0, 0.0], [4000.0, 3000.0]]], p.hide);
+    }
+
+    /// A person turns the camera in plan: it looks that way at the template's pitch, the eye stands back along it and
+    /// the walls to hide are the ones that heading faces. The aim is carried so the plug-in turns the view the same way.
+    #[test]
+    fn an_aimed_view_looks_along_the_chosen_heading_at_the_templates_pitch() {
+        let looking_north = sheet([0.0, 1.0, -1.0]);
+        let plain = &three_ds(&looking_north, &room(), None, &[], &[])[0];
+        assert!(plain.direction.is_none());
+        assert!(plain.eye[1] < plain.looks_at[1], "the template looks north, so the eye is south");
+
+        let aimed = &three_ds(&looking_north, &room(), None, &[], &[(1, [-2.0, 0.0])])[0];
+        assert_eq!(Some([-1.0, 0.0]), aimed.direction, "a unit heading");
+        assert!(
+            aimed.eye[0] > aimed.looks_at[0] && (aimed.eye[1] - aimed.looks_at[1]).abs() < 1e-6,
+            "looking west, from the east"
+        );
+        assert_eq!(
+            vec![[[4000.0, 0.0], [4000.0, 3000.0]]],
+            aimed.hide,
+            "the east wall stands between the eye and the room"
+        );
+
+        // a view not named keeps the template's, and a heading with no length is ignored
+        let other = &three_ds(&looking_north, &room(), None, &[], &[(2, [1.0, 0.0]), (1, [0.0, 0.0])])[0];
+        assert!(other.direction.is_none());
     }
 }

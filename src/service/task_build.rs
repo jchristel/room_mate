@@ -414,6 +414,63 @@ fn room_items(reads: &RlsReads, room: &RoomRef, parameter: &str) -> Result<Vec<R
         .collect())
 }
 
+/// The footprints of the doors that open onto or out of `room` (either side names it, as a blueprint's capture reads
+/// them), in the room's own model's frame, mm.
+fn door_marks(reads: &RlsReads, room: &RoomRef) -> Result<Vec<Vec<[f64; 2]>>, ServiceError> {
+    let to_model = project_to_model(reads.state, reads.project, &room.model_id)?;
+    Ok(reads
+        .doors()?
+        .iter()
+        .filter(|d| d.opens_onto(room))
+        .map(|d| {
+            d.door
+                .footprint
+                .iter()
+                .map(|&p| {
+                    let q = to_model.point(p);
+                    [q.0, q.1]
+                })
+                .collect()
+        })
+        .collect())
+}
+
+/// A queued create-RLS task's 3D views looked along the directions a person chose in plan (`aims`: the view's index
+/// from 1 and a heading; each view not named keeps the template's direction): the cameras, the walls to hide and the
+/// items to see through worked out again from the room's outline the task stored. The task's FF&E is read for the
+/// last of those, which is why this is not a plain edit of the stored plan.
+pub fn aim_three_ds(
+    state: &AppState,
+    project: &str,
+    task: &crate::tasks::Task,
+    aims: &[(usize, [f64; 2])],
+) -> Result<Vec<super::rls_three_d::ThreeDPlan>, ServiceError> {
+    let invalid = |m: &str| ServiceError::Invalid(m.to_string());
+    let rls = task.rls.as_ref().ok_or_else(|| invalid("the task holds no sheet plan"))?;
+    if rls.three_ds.is_empty() {
+        return Err(invalid("the task has no 3D view to aim"));
+    }
+    if rls.room_outline.len() < 3 {
+        return Err(invalid(
+            "the task was made before it kept the room's outline: make it again to aim its 3D views",
+        ));
+    }
+    for (index, d) in aims {
+        if !(1..=rls.three_ds.len()).contains(index) {
+            return Err(ServiceError::Invalid(format!("the task has no 3D view {index}")));
+        }
+        if !d[0].is_finite() || !d[1].is_finite() || d[0].hypot(d[1]) < 1e-9 {
+            return Err(invalid("a direction needs a length"));
+        }
+    }
+    let sheet = &task.sheets.first().ok_or_else(|| invalid("the task holds no sheet"))?.sheet;
+    let ring: Vec<Pt> = rls.room_outline.iter().map(|p| (p[0], p[1])).collect();
+    let reads = RlsReads::new(state, project);
+    let room = RoomRef { model_id: task.model_id.clone(), room_id: task.room.room_id.clone() };
+    let items = room_items(&reads, &room, &type_code_parameter(state, project))?;
+    Ok(three_ds(sheet, &ring, rls.plan_crop.as_ref(), &items, aims))
+}
+
 fn sheet_for_rules(record: &sheets::SheetRecord) -> BlueprintSheet {
     BlueprintSheet {
         revit_sheet_id: record.revit_sheet_id.clone(),
@@ -592,14 +649,18 @@ pub fn rls_from_sheet_with(
     };
     let tags = request.tags.as_ref().map(|t| plan_tags(&record.sheet, &items, &markers, &tag_rules, t));
     let three_ds = three_d_room
-        .map(|ring| three_ds(&record.sheet, ring, plan_crop.as_ref(), &items))
+        .map(|ring| three_ds(&record.sheet, ring, plan_crop.as_ref(), &items, &[]))
         .unwrap_or_default();
+    // what the tasks page draws the cameras against: the room's outline and its doors, in the model's own frame
+    let room_outline: Vec<[f64; 2]> = rings.1.iter().flatten().map(|p| [p.0, p.1]).collect();
+    let doors = door_marks(reads, room)?;
     let room_tag = room_tag_head(rings.0.as_deref().ok(), rings.1.as_deref(), &record, &tag_rules, &mut findings);
     let rls = (sheet_size.is_some()
         || !markers.is_empty()
         || tags.is_some()
         || room_tag.is_some()
         || plan_crop.is_some()
+        || !room_outline.is_empty()
         || !three_ds.is_empty())
     .then_some(RlsPlan {
         sheet_size,
@@ -608,6 +669,8 @@ pub fn rls_from_sheet_with(
         room_tag,
         plan_crop,
         three_ds,
+        room_outline,
+        doors,
         viewport_moves: Vec::new(),
     });
     Ok(NewTask {

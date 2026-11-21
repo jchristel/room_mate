@@ -127,6 +127,24 @@ def turn_xy(vector, turn_deg):
     return [vector[0] * c - vector[1] * s, vector[0] * s + vector[1] * c, vector[2]]
 
 
+def aim_xy(forward, up, direction):
+    """`(forward, up)` aimed along `direction` (`[x, y]`, a heading in plan a person chose, `rls.three_ds[].direction`):
+    the view's pitch is kept and the view is turned about the vertical so that its plan direction is the heading, the
+    up vector turned with it. A view that looks straight down is given 45 degrees. A heading with no length leaves
+    both as they are."""
+    length = math.hypot(direction[0], direction[1])
+    if length < 1e-9:
+        return list(forward), list(up)
+    ux, uy = direction[0] / length, direction[1] / length
+    plan = math.hypot(forward[0], forward[1])
+    pitch = plan if plan > 1e-6 else abs(forward[2]) or 1.0
+    aimed = [ux * pitch, uy * pitch, forward[2] if (plan > 1e-6 or forward[2]) else -1.0]
+    # the turn the plan direction makes (a view looking straight down has none to turn the up vector by)
+    now = math.atan2(forward[1], forward[0]) if plan > 1e-6 else math.atan2(uy, ux)
+    turned = turn_xy(up, math.degrees(math.atan2(uy, ux) - now))
+    return aimed, turned
+
+
 def turned_extent(lo, hi, turn_deg):
     """The axis-aligned `(lo, hi)` (`[x, y]` each) round the box `lo`..`hi` turned by `turn_deg` about its centre:
     what a collector must search to find everything inside a turned section box, whose `lo` and `hi` are its

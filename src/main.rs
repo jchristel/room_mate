@@ -58,8 +58,8 @@ use roommate::sheets_api::{
 };
 use roommate::tag_rules_api::{http_delete_tag_rule, http_get_tag_rule, http_list_tag_rules, http_observe_tags};
 use roommate::tasks_api::{
-    http_claim_tasks, http_create_tasks, http_dismiss_task, http_get_task, http_list_tasks, http_move_task_viewports,
-    http_preview_rls, http_preview_rls_set, http_report_tasks, http_resend_task,
+    http_aim_task_cameras, http_claim_tasks, http_create_tasks, http_dismiss_task, http_get_task, http_list_tasks,
+    http_move_task_viewports, http_preview_rls, http_preview_rls_set, http_report_tasks, http_resend_task,
 };
 use roommate::{DEFAULT_HTTP_HOST, DEFAULT_HTTP_PORT};
 
@@ -345,6 +345,7 @@ fn authored_routes() -> Router<roommate::state::Shared> {
         .route("/projects/{id}/tasks/{task}/dismiss", post(http_dismiss_task))
         .route("/projects/{id}/tasks/{task}/resend", post(http_resend_task))
         .route("/projects/{id}/tasks/{task}/viewports", post(http_move_task_viewports))
+        .route("/projects/{id}/tasks/{task}/cameras", post(http_aim_task_cameras))
         // Tag rules: where a tag goes relative to the element it tags, one rule per key. POST is
         // the extractor's observations. See `tag_rules`.
         .route("/projects/{id}/tagrules", get(http_list_tag_rules))
