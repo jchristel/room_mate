@@ -1,6 +1,6 @@
 # Wiring the roommate MCP server into a host
 
-`bin/mcp.rs` is an [MCP](https://modelcontextprotocol.io) server over **stdio**:
+`bin/mcp/` is an [MCP](https://modelcontextprotocol.io) server over **stdio**:
 the host launches it as a child process, speaks JSON-RPC on stdin/stdout, and it
 exposes roommate's read side (`list_projects`, `get_rooms`, `get_validation`,
 `get_hierarchy_areas`, …) as tools. See [STRATEGY-MCP.md](STRATEGY-MCP.md) for

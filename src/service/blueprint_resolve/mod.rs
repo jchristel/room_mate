@@ -24,6 +24,10 @@
 //! **No reflection.** Edges map by a cyclic shift only (decision 7). A mirror-image room is
 //! recognised and *said*; the other hand is a blueprint a person authors (a reflection would
 //! place the wrong families), so the resolver never mirrors and nothing generates a copy.
+//!
+//! Kept whole: the resolver proper: `Context` places each item from its recipe, and `resolve_with_overrides` applies
+//! a person's nudges before judging the findings. The two share one placement state and splitting them would put it
+//! across a module boundary. Doors and the outline fit already moved out (`doors`, `fit`).
 
 use std::collections::{BTreeMap, BTreeSet};
 

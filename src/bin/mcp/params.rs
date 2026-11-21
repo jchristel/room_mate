@@ -1,4 +1,8 @@
 //! The arguments each MCP tool takes: one struct per tool (or family of tools), deserialised from the call and described to the model by its schema.
+//!
+//! Kept whole: one struct per tool's arguments and nothing else: a flat catalogue that grows by one entry per tool,
+//! with no logic to separate. Grouping it by domain would only repeat the `tools_*` split, which already names where
+//! each struct is used.
 
 use super::*;
 

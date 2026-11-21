@@ -9,6 +9,10 @@
 //! `ModelKey` lives here (not in `storage`) because it's the shared identity
 //! both state and storage key on; keeping it here avoids a state↔storage import
 //! cycle.
+//!
+//! Kept whole: `AppState` and its one `impl`, which is the server's whole interface to the store (push, read, carry
+//! over, activate). It is one type with one lock discipline, and its helpers (codec, registry, streaming) already
+//! moved out. The seam, if it grows, is the scoped-push half of the impl.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;

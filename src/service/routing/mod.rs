@@ -38,6 +38,10 @@
 //! room whose outline is missing or too irregular falls back to the straight line
 //! between its two points, counted in the result's `note` so it is never silent.
 //! A route's distance is a walking estimate, not a measurement.
+//!
+//! Kept whole: one algorithm, the router's port network: the ports, the frontier, the solve and the assembly of a
+//! route share their types and read as one pass. Its excess over the trigger is the algorithm's own rationale. The
+//! distance field already moved out (`field`).
 
 use std::cmp::Ordering;
 use std::collections::{BinaryHeap, HashMap};

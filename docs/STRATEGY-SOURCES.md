@@ -11,7 +11,7 @@ most projects configure, but the pipeline is keyed on N of them).
 
 **Open work only.** The producer, the loader, the join, the two-header CSV
 format and the entity-scoped source model all ship, and each carries its
-rationale where it is built — `src/reference.rs`, `src/service/rooms.rs`,
+rationale where it is built — `src/reference.rs`, `src/service/rooms/`,
 `src/settings/`, and `extractor/pyRevit/`. What follows is what is *not* built,
 plus the two rules that govern the next source rather than the current ones.
 

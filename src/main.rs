@@ -3,6 +3,10 @@
 //! substance lives in the `roommate` lib crate (see its own header for the
 //! module index). The `mcp` binary (`src/bin/mcp.rs`) is the other consumer
 //! of that lib crate, over stdio instead of HTTP.
+//!
+//! Kept whole: the server's startup and its router. `build_router` is one chain so every route can be read in one
+//! place (the MCP parity check reads it), and the guards beside it (CORS, the Host check, the viewer root) are small
+//! and only meaningful together with it. The seam, if it grows, is `authored_routes` versus the rest.
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};

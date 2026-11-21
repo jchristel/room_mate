@@ -1,6 +1,10 @@
 //! The room filter language: `field op value` predicates over a room's own fields and its joined reference sources
 //! (`Predicate`, `RoomFilter`), and what a field name may be (`split_namespace`). Also read by openings, FF&E and surfaces through
 //! `FilterTarget`, so one language filters every entity.
+//!
+//! Kept whole: one filter language: the predicate, its parser, its evaluation over a room or any `FilterTarget`, and
+//! the field-name rules are only correct together (a change to the grammar changes all of them). It moved out of
+//! `rooms/mod.rs` whole for that reason, not to be split again.
 
 use super::*;
 

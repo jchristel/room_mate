@@ -1,5 +1,9 @@
 //! The rules a project chooses: the measurement standard, how an opening or an item finds its room (`RoomResolution`, `RoomAttribution`),
 //! and the routing, opening, FF&E and area policies. Each default is the one a project that says nothing runs on.
+//!
+//! Kept whole: the per-project policies as flat data: each is a struct of fields with a documented default and a
+//! small `impl`, and they are only ever read together (`Settings` holds them all). Nothing in it has behaviour to
+//! separate; it moved out of `settings/mod.rs` as the policy half of that file.
 
 use super::*;
 

@@ -40,11 +40,11 @@ known and only the writing-down is missing:
   bulk moved with them rather than being split.
   The types are already grouped by concern in the file (area policy, reference
   field config, hierarchy, milestones, colour plans), so the seams exist.
-- **`areas.rs` and `rooms.rs` are cohesive by argument, not by accident** — one
-  geometry pipeline and one assembly pipeline, each with an invariant only
-  checkable by reading the parts together. That argument has never been written
-  into either header, so the next reader cannot tell it was decided rather than
-  deferred. Writing it is the whole task.
+- **`areas` and `rooms` were cohesive by argument and have now been split along the seams that held** (2026-11-22):
+  `service/areas/` is the footprint geometry (`footprint`) and the hierarchy of groups (`hierarchy`) round the response
+  types and `assemble_areas`; `service/rooms/` is the filter language (`filter`) and the assembly (`assemble`) round the
+  response and the scope. Every module over the trigger is now either split like these or judged and recorded in
+  `scripts/weekly_review_ignore.toml`, with the reason also in its own header.
 
 ## Tests
 - Unit tests live **inline** as `#[cfg(test)] mod tests` at the bottom of the
