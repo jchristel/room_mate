@@ -36,7 +36,8 @@ Served by the server at `http://127.0.0.1:5151`. Six pages.
   layers and colours. Put two storeys, or two buildings, side by side.
 - **Turns what you see into work for Revit.** The **RLS tool** picks a library sheet
   and the rooms to make it for, or, in **set** mode, takes several adjacent rooms and lets
-  you lay their views out across sheets yourself; the **Blueprint tool** lays a stored room
+  you lay their views out across sheets yourself (fold the plan away with **Plan ▾** to give
+  the sheets the whole pane); the **Blueprint tool** lays a stored room
   layout over a room and assigns it. All of them queue tasks that a Revit session picks up.
 
 **Also**
@@ -99,6 +100,8 @@ Review the sheet data pushed from Revit.
 
 - **What was asked of Revit, and what happened**: state, items, sheets, findings and
   every attempt of each task.
+- **A preview of every sheet a task makes**: a set's sheets as laid out, or the template's
+  viewports on the paper the task asks for, stacked and scrolling.
 - **Make tasks**: populate or update a room from an assignment; dismiss or resend.
 
 **Also**
@@ -121,7 +124,7 @@ installer as an optional component. A section per button, with what it does in f
 |---|---|---|
 | <img src="extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/ExportAll.pushbutton/Icon.png" alt="" width="32"> | **Export** | One window: check the entities, choose the project and phase (preselected from the server) and the whole model or chosen levels. Pushes the seven entities to the server, with or without shared nested families; remembers your choices. In daily use. |
 | <img src="extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/Blueprint.pushbutton/Icon.png" alt="" width="32"> | **Blueprint** | Sends rooms and their room layout sheets to the server as blueprints. Sheets can be matched to rooms by a rule written with `{Parameter}` placeholders; duplicate blueprint names are flagged. |
-| <img src="extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/Sheets.pushbutton/Icon.png" alt="" width="32"> | **Sheets** | Sends chosen sheets to the library, with a filter, check-all-matched and the same room-matching rule. |
+| <img src="extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/Sheets.pushbutton/Icon.png" alt="" width="32"> | **Sheets** | Sends chosen sheets to the library, with a filter, check-all-matched and the same room-matching rule. Tick the one room a sheet was made for: its outline travels with the sheet and is what carries the sheet's elevations, plan crop and turn to another room. |
 | <img src="extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/Tasks.pushbutton/Icon.png" alt="" width="32"> | **Tasks** | Lists the open model's queued tasks (with Refresh), claims the checked ones, checks them all, then **creates the room layout sheets** (plan, elevations, 3D view, schedule, tags). Run in Revit end to end. Each 3D view hides the walls between its camera and the room and makes the items along them transparent; nested parts are tagged when a rule exists for them. A room at an angle to its template gets its plan and 3D views turned so it sits square on the sheet. Each view gets its Title on Sheet from a template. A **set of adjacent rooms** gets its sheets as laid out in the viewer: one plan round all of them, four elevations and a schedule per room (a schedule may be repeated on several sheets), one 3D view. Sets and placing items are built but not yet run in Revit. |
 | <img src="extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/RlsSettings.pushbutton/Icon.png" alt="" width="32"> | **RLS settings** | Per-model settings for how sheets are made (title blocks, tags, sheet number and name templates, and per kind of view its view type, view name and Title on Sheet templates; one viewport type for all), stored in the model. A **Sets of rooms** group names a set's sheets, plan and 3D view from its largest room, with `{Rooms:Number}` for every room and `{Sheet_Counter}` for each sheet. |
 | <img src="extractor/pyRevit/RoomMate.extension/duHast.tab/RoomMate.panel/Server.pushbutton/Icon.png" alt="" width="32"> | **Server** | Which server this model talks to; shown in the blue header of every window. |
@@ -157,7 +160,8 @@ One Rust binary ([`src/`](src)) that serves the pages and the API.
   and floors to rooms.
 - **Geometry**: areas, adjacency, room location, routing and reach, blueprint resolving.
 - **Authored data**: blueprints, assignments, tasks, the sheet library, tag rules, connections.
-- **Room layout sheets worked out for Revit**: a create-RLS task says where each elevation
+- **Room layout sheets worked out for Revit**: a library sheet stores the outline of the room
+  it was made for, so it transfers without that room being linked or in the same project. A create-RLS task says where each elevation
   marker and view goes in the new room, where the plan crop and the tags go, how far to turn
   the plan for a room at an angle to its template, and for each 3D view where its camera is,
   which of the room's walls to hide and what to see through. A request reads the rooms and

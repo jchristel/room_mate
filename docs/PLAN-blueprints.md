@@ -157,7 +157,8 @@ write path into Revit. They have very different risk, which drives the staging.
     sheets. Through the **blueprint button** they go into a blueprint (with the room data, as a
     pending revision of the blueprint of that name, or a new blueprint; the same rule as
     import). Through the **Sheets button** they go to the library as generic sheets, with the rooms
-    they cover chosen in the export window (a sheet needs no room; the figures of those rooms travel with it).
+    they cover chosen in the export window (a sheet needs no room; the figures of those rooms travel with it, and for one room its outline, which is what
+    carries the sheet's views to another room: 2026-11-19).
 20. **A sheet reaches a room in one of two ways.** *Through a blueprint:* the sheets bound to the assignment's blueprint
     (no separate association record; sheets follow the blueprint's latest accepted push, and a pin covers the items only). *Suggested:* in sheet creation mode
     only, the server ranks library sheets by how close their room is to the target room (size,
@@ -226,7 +227,7 @@ write path into Revit. They have very different risk, which drives the staging.
     dimensions are of the smallest enclosing rectangle, so a rotated room reads the same, and
     the item count is counted as capture counts. Suggest ranks on these figures against the
     target room's current ones. The Sheets button sends the figures of the rooms the person chose (one
-    combined figure when a sheet covers several); a generic sheet's `room_key` is built from them (decision 27).
+    combined figure when a sheet covers several, and the outline when it covers one); a generic sheet's `room_key` is built from them (decision 27).
     A blueprint needs no such summary: it holds the room itself.
 26. **Two task kinds read different inputs** (decided 2026-10-20), both validated as in
     decision 22 where the check applies:

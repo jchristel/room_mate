@@ -14,7 +14,7 @@ the server writes beside what it reads.
 
 | | |
 |---|---|
-| `data/snapshots/House A/` | Two pushes of one model: an earlier one (rooms, doors, windows, FF&E) and the current one (all seven entities). The project settings' two milestones, **Earlier push** and **Current push**, compare them. |
+| `data/snapshots/House A/` | Two pushes of one model: an earlier one (rooms, doors, windows, FF&E, August and September) and the current one (all seven entities, pushed in one run on 2026-11-19). The project settings' two milestones, **Earlier push** and **Current push**, compare them. |
 | `projects/House A.toml` | The project settings, including `tag_type_code` (the FF&E type parameter tag rules are keyed by). |
 | `projects/blueprints/`, `projects/assignments/` | A blueprint captured from **BED 01** and placed in **BED 02**. |
 
