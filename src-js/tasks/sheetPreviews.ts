@@ -7,11 +7,31 @@
 
 import type { SheetRecord, ViewportInfo } from "../library/types.js";
 import { kindOf, previewOf } from "../library/preview.js";
-import type { RlsPlan, RlsSetPlan, SetSheetView, Task } from "./types.js";
+import type { RlsPlan, RlsSetPlan, SetSheetView, Task, ViewportMovesBody } from "./types.js";
 
 export interface TaskSheetPreview {
   title: string;
   record: Pick<SheetRecord, "size_mm" | "sheet">;
+  /** Each viewport's key, in the order of `record.sheet.view_ports`: what a move is saved against. */
+  keys: (string | undefined)[];
+}
+
+/** Viewport centres a person set, by key (`taskSheetPreviews`), paper mm from the bottom left, y up. */
+export type Centres = ReadonlyMap<string, [number, number]>;
+
+const templateKey = (viewId: unknown): string | undefined => (typeof viewId === "number" ? `vp:${viewId}` : undefined);
+const setKey = (sheet: number, view: number): string => `set:${sheet}:${view}`;
+
+/** `p` with its box (size kept) centred on `centre`; its centre point follows, which the elevation lines and cameras drawn on the plan read. */
+function placedAt(p: ViewportInfo, centre: [number, number]): ViewportInfo {
+  const box = p.bounding_box;
+  if (!box) return p;
+  const [w, h] = [box.max_x - box.min_x, box.max_y - box.min_y];
+  return {
+    ...p,
+    bounding_box: { min_x: centre[0] - w / 2, max_x: centre[0] + w / 2, min_y: centre[1] - h / 2, max_y: centre[1] + h / 2 },
+    centre_point: { x: centre[0], y: centre[1] },
+  };
 }
 
 /** A size token's paper, landscape, mm (the server's `paper_of`). */
@@ -167,28 +187,76 @@ export function fitToRoom(sheet: SheetRecord["sheet"], rls: RlsPlan | undefined)
   return { ...sheet, view_ports };
 }
 
-/** The drawings for `task`, one per sheet it makes or copies, in order; empty when it has none. */
-export function taskSheetPreviews(task: Task): TaskSheetPreview[] {
+/** The centres a `create_rls` task already holds (`rls.viewport_moves`), by key. */
+export function savedCentres(task: Task): Map<string, [number, number]> {
+  const out = new Map<string, [number, number]>();
+  for (const m of task.rls?.viewport_moves ?? []) out.set(`vp:${m.view_id}`, m.centre_mm);
+  return out;
+}
+
+/**
+ * The drawings for `task`, one per sheet it makes or copies, in order; empty when it has none. `draft` holds centres a
+ * person has set and not saved; they go over the ones the task holds. A set's saved centres are in its views already.
+ */
+export function taskSheetPreviews(task: Task, draft?: Centres): TaskSheetPreview[] {
   const set = task.rls_set;
   if (set) {
     const size_mm = set.paper_mm ? { width_mm: set.paper_mm[0], height_mm: set.paper_mm[1] } : paperOf(set.sheet_size);
     return set.sheets.map((s, i) => {
-      const sheet = { view_ports: s.views.map((v) => setViewport(v, set)) };
+      const keys = s.views.map((_, j) => setKey(i, j));
+      const sheet = {
+        view_ports: s.views.map((v, j) => {
+          const moved = draft?.get(keys[j]!);
+          return setViewport(moved ? { ...v, centre_mm: moved } : v, set);
+        }),
+      };
       return {
         title: `Sheet ${i + 1} of ${set.sheets.length} (${set.sheet_size.toUpperCase()})`,
         record: size_mm ? { size_mm, sheet } : { sheet },
+        keys,
       };
     });
   }
   const asked = task.kind === "create_rls" ? paperOf(task.rls?.sheet_size) : undefined;
+  const centres = new Map([...savedCentres(task), ...(draft ?? [])]);
   return task.sheets.map((s) => {
     const size_mm = asked ?? s.size_mm;
-    const sheet = (task.kind === "create_rls" ? fitToRoom(s.sheet as SheetRecord["sheet"], task.rls) : s.sheet) as SheetRecord["sheet"];
+    const fitted = (task.kind === "create_rls" ? fitToRoom(s.sheet as SheetRecord["sheet"], task.rls) : s.sheet) as SheetRecord["sheet"];
+    const keys = (fitted.view_ports ?? []).map((p) => templateKey((p as { view_id?: unknown }).view_id));
+    // the viewport keeps the size the room gave it and goes where it was put
+    const view_ports = fitted.view_ports?.map((p, i) => {
+      const at = task.kind === "create_rls" && keys[i] ? centres.get(keys[i]!) : undefined;
+      return at ? placedAt(p, at) : p;
+    });
+    const sheet = (view_ports ? { ...fitted, view_ports } : fitted) as SheetRecord["sheet"];
     return {
       title: `${s.sheet_number}${s.sheet_name ? ` ${s.sheet_name}` : ""}${asked ? ` on ${String(task.rls?.sheet_size).toUpperCase()}` : ""}`,
       record: size_mm ? { size_mm, sheet } : { sheet },
+      keys,
     };
   });
+}
+
+/**
+ * What to send to save `draft`: a create-RLS task's whole list of moved viewports (what it holds with the draft over
+ * it), a set's changed views. Null when there is nothing to save. `[]` for a create-RLS task is the way to put every
+ * viewport back, so that is `clearMoves`, not this.
+ */
+export function movesBody(task: Task, draft: Centres): ViewportMovesBody | null {
+  if (draft.size === 0) return null;
+  if (task.rls_set) {
+    const set_moves = [...draft].flatMap(([key, centre_mm]) => {
+      const m = /^set:(\d+):(\d+)$/.exec(key);
+      return m ? [{ sheet: Number(m[1]), view: Number(m[2]), centre_mm }] : [];
+    });
+    return set_moves.length > 0 ? { set_moves } : null;
+  }
+  const merged = new Map([...savedCentres(task), ...draft]);
+  const moves = [...merged].flatMap(([key, centre_mm]) => {
+    const m = /^vp:(-?\d+)$/.exec(key);
+    return m ? [{ view_id: Number(m[1]), centre_mm }] : [];
+  });
+  return moves.length > 0 ? { moves } : null;
 }
 
 /** Whether the task's sheets fit their paper: `clipping` when any viewport reaches past the edge. `unknown` for a task
@@ -199,10 +267,10 @@ export interface SheetStatus {
   clipped: number;
 }
 
-export function sheetStatus(task: Task): SheetStatus {
+export function sheetStatus(task: Task, draft?: Centres): SheetStatus {
   let measured = 0;
   let clipped = 0;
-  for (const p of taskSheetPreviews(task)) {
+  for (const p of taskSheetPreviews(task, draft)) {
     const preview = previewOf(p.record);
     if (!preview?.measured) continue;
     measured += 1;

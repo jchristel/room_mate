@@ -2,7 +2,7 @@
 // shown to the person, verbatim.
 
 import { apiGet, apiSend } from "./common.js";
-import type { AssignmentRow, Made, ProjectRow, RoomRow, SheetRow, Task, TaskState, TaskSummary, UpdateMode } from "./types.js";
+import type { AssignmentRow, Made, ProjectRow, RoomRow, SheetRow, Task, TaskState, TaskSummary, UpdateMode, ViewportMovesBody } from "./types.js";
 
 export type Sent<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -37,6 +37,9 @@ export const dismiss = (project: string, id: string) =>
   send<Task>("POST", `${base(project)}/tasks/${encodeURIComponent(id)}/dismiss`, null).then(whole);
 export const resend = (project: string, id: string) =>
   send<Task>("POST", `${base(project)}/tasks/${encodeURIComponent(id)}/resend`, null).then(whole);
+
+export const moveViewports = (project: string, id: string, body: ViewportMovesBody) =>
+  send<Task>("POST", `${base(project)}/tasks/${encodeURIComponent(id)}/viewports`, body).then(whole);
 
 export interface PopulateRequest {
   assignment_ids: string[];

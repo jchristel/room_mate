@@ -1,25 +1,36 @@
 // One task, as a person checks what Revit was or will be told, and what the session said.
 
+import { useEffect, useState } from "react";
+
 import { KIND_TEXT, STATE_TEXT, UPDATE_MODE_TEXT, canDismiss, canResend, findingText, needsAttention, shortTime } from "./model.js";
-import type { Task } from "./types.js";
+import type { Task, ViewportMovesBody } from "./types.js";
 import { SheetPreview } from "../library/SheetPreview.js";
-import { sheetStatus, taskSheetPreviews } from "./sheetPreviews.js";
+import { movesBody, sheetStatus, taskSheetPreviews, type Centres } from "./sheetPreviews.js";
 
 export interface DetailProps {
   task: Task;
   busy: boolean;
   onDismiss(): void;
   onResend(): void;
+  /** Save where viewports were moved (`POST .../viewports`); the page shows the task the server answers with. */
+  onMoveViewports(body: ViewportMovesBody): void;
 }
 
 const yes = (b: boolean): string => (b ? "yes" : "no");
 
-export function TaskDetail({ task, busy, onDismiss, onResend }: DetailProps) {
+export function TaskDetail({ task, busy, onDismiss, onResend, onMoveViewports }: DetailProps) {
   const t = task;
   const populate = t.kind === "populate_room";
   const update = t.kind === "update_room";
-  const previews = taskSheetPreviews(t);
-  const fit = sheetStatus(t);
+  // centres a person has dragged and not saved, by viewport key; gone when the task is read again
+  const [draft, setDraft] = useState<Centres>(new Map());
+  useEffect(() => setDraft(new Map()), [t.id, t.updated_at]);
+  const previews = taskSheetPreviews(t, draft);
+  const fit = sheetStatus(t, draft);
+  // only a task still waiting in the queue: a session holds the others and a finished one is history
+  const editable = t.state === "queued" && (t.kind === "create_rls" || t.kind === "create_rls_set");
+  const body = movesBody(t, draft);
+  const moved = (t.rls?.viewport_moves?.length ?? 0) > 0;
   return (
     <div className="detail">
       <div className="toolbar">
@@ -110,10 +121,35 @@ export function TaskDetail({ task, busy, onDismiss, onResend }: DetailProps) {
             {previews.map((p, i) => (
               <section key={i}>
                 <div className="sub">{p.title}</div>
-                <SheetPreview record={p.record} />
+                <SheetPreview
+                  record={p.record}
+                  {...(editable && {
+                    onMove: (port: number, centre: [number, number]) => {
+                      const key = p.keys[port];
+                      if (key) setDraft((cur) => new Map(cur).set(key, centre));
+                    },
+                  })}
+                />
               </section>
             ))}
           </div>
+          {editable ? (
+            <div className="toolbar">
+              <span className="hint">Drag a viewport to move it on the sheet; its size stays.</span>
+              <span className="spacer" />
+              <button type="button" disabled={busy || draft.size === 0} onClick={() => setDraft(new Map())}>
+                Discard moves
+              </button>
+              {t.kind === "create_rls" && moved ? (
+                <button type="button" disabled={busy} onClick={() => onMoveViewports({ moves: [] })}>
+                  Back to the template's places
+                </button>
+              ) : null}
+              <button type="button" disabled={busy || !body} onClick={() => body && onMoveViewports(body)}>
+                Save positions
+              </button>
+            </div>
+          ) : null}
         </>
       ) : null}
 

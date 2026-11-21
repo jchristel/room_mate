@@ -144,3 +144,14 @@ describe("clipping", () => {
   });
 });
 
+describe("box ports", () => {
+  it("says which viewport each box draws, counting those with no outline", () => {
+    const box = { min_x: 0, min_y: 0, max_x: 10, max_y: 10 };
+    const preview = previewOf({
+      size_mm: { width_mm: 100, height_mm: 100 },
+      sheet: { view_ports: [{ vp_type: "floor plan" }, { vp_type: "elevation", bounding_box: box }, { vp_type: "schedule", bounding_box: box }] },
+    })!;
+    expect(preview.boxes.map((b) => b.port)).toEqual([1, 2]);
+  });
+});
+

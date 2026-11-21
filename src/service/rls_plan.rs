@@ -123,6 +123,18 @@ pub struct RlsPlan {
     /// hides walls by its own rule and sees through nothing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub three_ds: Vec<ThreeDPlan>,
+    /// Where a person moved a viewport on the sheet (`tasks::move_viewports`), by the TEMPLATE viewport's id. Absent
+    /// means every viewport goes where the template has it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub viewport_moves: Vec<ViewportMove>,
+}
+
+/// A viewport's centre on the new sheet, mm from the paper's bottom left corner, y up (the set tasks' own frame).
+/// The viewport keeps its size; only where it goes changes.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct ViewportMove {
+    pub view_id: i64,
+    pub centre_mm: [f64; 2],
 }
 
 /// A plan view's crop in this room: a rectangle in the target model's frame, mm, and the offsets of each side from

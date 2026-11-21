@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { previewOf } from "../library/preview.js";
-import { boxExtent, fitToRoom, sheetStatus, paperOf, taskSheetPreviews } from "./sheetPreviews.js";
+import { boxExtent, fitToRoom, movesBody, sheetStatus, paperOf, taskSheetPreviews } from "./sheetPreviews.js";
 import type { Task } from "./types.js";
 
 const base = (over: Partial<Task>): Task =>
@@ -184,5 +184,56 @@ describe("sheet status", () => {
 
   it("is unknown for a task with no sheets", () => {
     expect(sheetStatus(base({}))).toEqual({ state: "unknown", clipped: 0 });
+  });
+});
+
+describe("moving viewports", () => {
+  const template = {
+    revit_sheet_id: "1",
+    document_title: "D",
+    sheet_number: "S",
+    size_mm: { width_mm: 420, height_mm: 297 },
+    sheet: {
+      view_ports: [
+        { vp_type: "floor plan", view_id: 10, bounding_box: { min_x: 10, min_y: 10, max_x: 110, max_y: 70 }, centre_point: { x: 60, y: 40 }, view: { view_scale: 50 } },
+        { vp_type: "schedule", view_id: 3, bounding_box: { min_x: 300, min_y: 10, max_x: 400, max_y: 50 } },
+      ],
+    },
+  };
+
+  it("keys each viewport by its template id and moves one to its new centre, size kept", () => {
+    const task = base({ sheets: [template] });
+    const [one] = taskSheetPreviews(task, new Map([["vp:3", [350, 200] as [number, number]]]));
+    expect(one!.keys).toEqual(["vp:10", "vp:3"]);
+    expect(one!.record.sheet.view_ports![1]!.bounding_box).toEqual({ min_x: 300, max_x: 400, min_y: 180, max_y: 220 });
+    expect(one!.record.sheet.view_ports![1]!.centre_point).toEqual({ x: 350, y: 200 });
+    expect(one!.record.sheet.view_ports![0]!.bounding_box).toEqual(template.sheet.view_ports[0]!.bounding_box);
+  });
+
+  it("draws what the task holds, with an unsaved move over it, and the status follows", () => {
+    const task = base({ sheets: [template], rls: { viewport_moves: [{ view_id: 3, centre_mm: [350, 200] }] } });
+    expect(taskSheetPreviews(task)[0]!.record.sheet.view_ports![1]!.centre_point).toEqual({ x: 350, y: 200 });
+    expect(sheetStatus(task).state).toBe("ok");
+    const off = new Map<string, [number, number]>([["vp:3", [415, 200]]]);
+    expect(taskSheetPreviews(task, off)[0]!.record.sheet.view_ports![1]!.centre_point).toEqual({ x: 415, y: 200 });
+    // 415 + 50 is past a 420 mm paper
+    expect(sheetStatus(task, off)).toEqual({ state: "clipping", clipped: 1 });
+  });
+
+  it("sends a create-RLS task's whole list, and a set's changed views, and nothing for no change", () => {
+    const task = base({ sheets: [template], rls: { viewport_moves: [{ view_id: 3, centre_mm: [350, 200] }] } });
+    expect(movesBody(task, new Map())).toBeNull();
+    expect(movesBody(task, new Map([["vp:10", [60, 100] as [number, number]]]))).toEqual({
+      moves: [
+        { view_id: 3, centre_mm: [350, 200] },
+        { view_id: 10, centre_mm: [60, 100] },
+      ],
+    });
+    const set = base({
+      kind: "create_rls_set",
+      rls_set: { sheet_size: "a3", lead_room: "1", rooms: [], sheets: [{ views: [{ kind: "plan", centre_mm: [100, 100], size_mm: [50, 50] }] }] },
+    });
+    expect(movesBody(set, new Map([["set:0:0", [120, 90] as [number, number]]]))).toEqual({ set_moves: [{ sheet: 0, view: 0, centre_mm: [120, 90] }] });
+    expect(taskSheetPreviews(set, new Map([["set:0:0", [120, 90] as [number, number]]]))[0]!.record.sheet.view_ports![0]!.centre_point).toEqual({ x: 120, y: 90 });
   });
 });

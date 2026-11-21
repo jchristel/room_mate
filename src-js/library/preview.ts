@@ -29,6 +29,8 @@ export function kindOf(vpType: string | undefined): PortKind {
 }
 
 export interface PreviewBox {
+  /** Which of the sheet's `view_ports` this box draws (those without an outline have no box). */
+  port: number;
   x: number;
   y: number;
   w: number;
@@ -188,11 +190,11 @@ function clips(b: { minX: number; maxX: number; minY: number; maxY: number }, wi
 
 /** The preview of a sheet, or null when it has nothing to draw: no viewport has an outline and no paper size is known. */
 export function previewOf(record: Pick<SheetRecord, "size_mm" | "sheet">): Preview | null {
-  const ports = (record.sheet.view_ports ?? []).filter((p) => p.bounding_box);
-  const boxes = ports.map((p) => {
+  const ports = (record.sheet.view_ports ?? []).flatMap((p, port) => (p.bounding_box ? [{ p, port }] : []));
+  const boxes = ports.map(({ p, port }) => {
     const b = p.bounding_box!;
     const kind = kindOf(p.vp_type);
-    return { minX: b.min_x, maxX: b.max_x, minY: b.min_y, maxY: b.max_y, kind, label: labelOf(p, kind), crops: cropRectangles(p) };
+    return { port, minX: b.min_x, maxX: b.max_x, minY: b.min_y, maxY: b.max_y, kind, label: labelOf(p, kind), crops: cropRectangles(p) };
   });
   let width = record.size_mm?.width_mm ?? 0;
   let height = record.size_mm?.height_mm ?? 0;
@@ -215,6 +217,7 @@ export function previewOf(record: Pick<SheetRecord, "size_mm" | "sheet">): Previ
       head: a.head.map((h) => ({ x: h.x, y: height - h.y })),
     })),
     boxes: boxes.map((b) => ({
+      port: b.port,
       x: b.minX,
       y: height - b.maxY,
       w: b.maxX - b.minX,

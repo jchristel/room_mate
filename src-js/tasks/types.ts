@@ -95,6 +95,16 @@ export interface RlsPlan {
   markers?: { views: { view_id: number; marker_index: number; line_start: [number, number]; line_end: [number, number] }[] }[];
   plan_crop?: { min: [number, number]; max: [number, number] };
   three_ds?: { index: number; eye: [number, number]; looks_at: [number, number] }[];
+  /** Viewports a person moved on the new sheet: the TEMPLATE viewport's id and its centre, mm from the paper's bottom left, y up. */
+  viewport_moves?: { view_id: number; centre_mm: [number, number] }[];
+}
+
+/** The body of `POST .../tasks/{id}/viewports` (`tasks::ViewportMoves`). */
+export interface ViewportMovesBody {
+  /** `create_rls`: replaces the task's moved viewports; `[]` puts them all back. */
+  moves?: { view_id: number; centre_mm: [number, number] }[];
+  /** `create_rls_set`: the centre of a sheet's view. */
+  set_moves?: { sheet: number; view: number; centre_mm: [number, number] }[];
 }
 
 export interface TaskSheet {

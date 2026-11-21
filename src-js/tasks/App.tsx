@@ -17,7 +17,7 @@ import { MakeTasks } from "./MakeTasks.js";
 import { TaskDetail } from "./TaskDetail.js";
 import { TaskList } from "./TaskList.js";
 import { sheetStatus, type SheetStatus } from "./sheetPreviews.js";
-import type { AssignmentRow, Made, ProjectRow, Task, TaskState, TaskSummary } from "./types.js";
+import type { AssignmentRow, Made, ProjectRow, Task, TaskState, TaskSummary, ViewportMovesBody } from "./types.js";
 
 const message = (e: unknown): string => String((e as Error).message ?? e);
 const POLL_MS = 8000;
@@ -139,6 +139,18 @@ export function App() {
     void refresh(projectId);
   };
 
+  const moveViewports = async (body: ViewportMovesBody) => {
+    if (!projectId || !selected) return;
+    setBusy(true);
+    const r = await api.moveViewports(projectId, selected.id, body);
+    setBusy(false);
+    if (!r.ok) return setError(r.error);
+    setError(null);
+    setNotice("Positions saved.");
+    setSelected(r.value);
+    void refresh(projectId);
+  };
+
   const toggleState = (s: TaskState) =>
     setStates((cur) => {
       const n = new Set(cur);
@@ -203,7 +215,7 @@ export function App() {
           {making && projectId ? (
             <MakeTasks project={projectId} assignments={assignments} onMade={made} onClose={() => setMaking(false)} />
           ) : selected ? (
-            <TaskDetail task={selected} busy={busy} onDismiss={() => void act("dismiss")} onResend={() => void act("resend")} />
+            <TaskDetail task={selected} busy={busy} onDismiss={() => void act("dismiss")} onResend={() => void act("resend")} onMoveViewports={(b) => void moveViewports(b)} />
           ) : (
             <p className="hint empty">Choose a task on the left, or make some.</p>
           )}
