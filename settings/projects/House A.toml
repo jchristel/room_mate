@@ -8,6 +8,7 @@ room_label = [
 ]
 colour_plans = []
 hierarchy_exclusions = []
+tag_type_code = "ItemCode"
 
 [sources]
 
@@ -126,3 +127,15 @@ fill = "#f60404"
 hover = "#3649d3"
 
 [hover]
+
+[tags.ffe]
+fields = ["$type_name"]
+
+[tags.spaces]
+fields = ["$name"]
+
+[tags.ceilings]
+fields = ["$type_name"]
+
+[tags.floors]
+fields = ["$type_name"]
