@@ -43,7 +43,7 @@ IGNORE_FILE = Path(__file__).resolve().parent / "weekly_review_ignore.toml"
 # holds `roommate-shared` — the settings types and `RoomBoundary` among them —
 # which the docs still cite as freely as anything in `src/`.
 SOURCE_TREES = ("src", "crates", "src-js", "static", "extractor", "scripts")
-SOURCE_SUFFIXES = {".rs", ".ts", ".js", ".py", ".html"}
+SOURCE_SUFFIXES = {".rs", ".ts", ".tsx", ".js", ".py", ".html"}
 
 # Generated, and megabytes of minified vendor code: it would match almost any
 # identifier by chance and silence real findings.
@@ -345,6 +345,23 @@ def check_mcp_parity(findings: Findings) -> None:
         "/api/settings/projects": "list_project_settings",
         "/api/settings/projects/{id}": "get_project_settings",
         "/api/settings/resolve/{id}": "resolve_project_settings",
+        "/projects/{id}/blueprints": "list_blueprints",
+        "/projects/{id}/blueprints/capture": "capture_blueprint",
+        "/projects/{id}/blueprints/{blueprint}": "get_blueprint",
+        "/projects/{id}/blueprints/{blueprint}/bundle": "get_blueprint_bundle",
+        "/projects/{id}/blueprints/{blueprint}/resolve": "resolve_blueprint",
+        "/projects/{id}/assignments": "list_assignments",
+        "/projects/{id}/tasks": "list_tasks",
+        "/projects/{id}/tasks/{task}": "get_task",
+        "/projects/{id}/tagrules": "list_tag_rules",
+        "/projects/{id}/tagrules/{rule}": "get_tag_rule",
+        "/projects/{id}/sheets": "list_sheets",
+        "/projects/{id}/sheets/suggest": "suggest_sheets",
+        "/projects/{id}/sheets/{sheet}": "get_sheet",
+        "/projects/{id}/sheets/{sheet}/elevations": "get_sheet_elevations",
+        "/projects/{id}/reports/columns": "list_report_columns",
+        "/api/reports/projects/{project}": "list_saved_reports",
+        "/api/reports/projects/{project}/{report}": "get_saved_report",
     }
     for route in routes:
         tool = mapping.get(route, "?")
