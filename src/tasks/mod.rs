@@ -39,10 +39,10 @@ use crate::service::rls_set_task::RlsSetPlan;
 use crate::state::is_path_safe_component;
 use crate::tag_rules::TaskRule;
 
-mod store;
 mod edits;
-pub use store::*;
+mod store;
 pub use edits::*;
+pub use store::*;
 
 pub const SCHEMA_VERSION: u32 = 1;
 const MAX_TASKS_PER_PROJECT: usize = 50_000;
