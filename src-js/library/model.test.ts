@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
-import { boundaryText, boundText, degrees, filterRules, ruleLabel, scopeText, sheetNeedsAttention, sheetReasons, sizeText, suggestionText, summaryText } from "./model.js";
-import type { RuleSummary, Suggestion } from "./types.js";
+import { boundaryText, boundText, degrees, filterRules, filterSheets, ruleLabel, scopeText, sheetNeedsAttention, sheetReasons, sizeText, suggestionText, summaryText } from "./model.js";
+import type { RuleSummary, SheetSummary, Suggestion } from "./types.js";
 
 const rule = (code: string, tag: [string, string], vp = "floor plan"): RuleSummary => ({
   id: "tr-" + code + tag.join("") + vp,
@@ -81,5 +81,18 @@ describe("sheets", () => {
   it("say how far a suggestion is in each figure", () => {
     const s = { parts: { area: Math.log(1.5), proportion: 0, items: Math.log(2) } } as Suggestion;
     expect(suggestionText(s)).toBe("area 50% off, proportions 0% off, items 100% off");
+  });
+});
+
+describe("filter sheets", () => {
+  const sheet = (number: string, name: string, rooms: string[] = []) => ({ sheet_number: number, sheet_name: name, document_title: "House A", rooms }) as SheetSummary;
+  const sheets = [sheet("A101", "Bedroom RLS", ["01.02 BED"]), sheet("A102", "Bathroom RLS", ["01.03 WC"]), sheet("A103", "Rumpus")];
+
+  it("keep sheets that contain every word, in order", () => {
+    expect(filterSheets(sheets, "rls").map((s) => s.sheet_number)).toEqual(["A101", "A102"]);
+    expect(filterSheets(sheets, "BED rls").length).toBe(1);
+    expect(filterSheets(sheets, "wc").map((s) => s.sheet_number)).toEqual(["A102"]);
+    expect(filterSheets(sheets, "").length).toBe(3);
+    expect(filterSheets(sheets, "nothing").length).toBe(0);
   });
 });

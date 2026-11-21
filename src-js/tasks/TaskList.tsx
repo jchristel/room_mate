@@ -17,9 +17,14 @@ export interface ListProps {
   onToggleState(state: TaskState): void;
   onSelect(id: string): void;
   onMake(): void;
+  /** Several tasks at once: a click ticks a task instead of opening it. */
+  multi: boolean;
+  picked: ReadonlySet<string>;
+  onMulti(on: boolean): void;
+  onPick(ids: readonly string[], on: boolean): void;
 }
 
-export function TaskList({ rows, selectedId, model, states, status, onlyWarnings, onOnlyWarnings, onModel, onToggleState, onSelect, onMake }: ListProps) {
+export function TaskList({ rows, selectedId, model, states, status, onlyWarnings, onOnlyWarnings, onModel, onToggleState, onSelect, onMake, multi, picked, onMulti, onPick }: ListProps) {
   const all = rows ?? [];
   const counts = countByState(model ? all.filter((r) => r.model_id === model) : all);
   const warns = (id: string) => status.get(id)?.state === "clipping";
@@ -27,12 +32,21 @@ export function TaskList({ rows, selectedId, model, states, status, onlyWarnings
   const warnings = inModel.filter((r) => warns(r.id)).length;
   const shown = newestFirst(all.filter((r) => (!model || r.model_id === model) && (states.size === 0 || states.has(r.state)) && (!onlyWarnings || warns(r.id))));
   const models = modelsOf(all);
+  const on = (id: string) => (multi ? picked.has(id) : id === selectedId);
   return (
     <aside className="left" aria-label="Tasks">
       <div className="actions">
         <button type="button" onClick={onMake}>
           Make tasks
         </button>
+        <button type="button" className={multi ? "on" : ""} aria-pressed={multi} onClick={() => onMulti(!multi)}>
+          Select several
+        </button>
+        {multi ? (
+          <button type="button" disabled={shown.length > 0 && shown.every((t) => picked.has(t.id))} onClick={() => onPick(shown.map((t) => t.id), true)}>
+            Select all shown ({shown.length})
+          </button>
+        ) : null}
       </div>
       {models.length > 1 ? (
         <label className="stack">
@@ -68,7 +82,12 @@ export function TaskList({ rows, selectedId, model, states, status, onlyWarnings
       <ul>
         {shown.map((t) => (
           <li key={t.id}>
-            <button type="button" className={t.id === selectedId ? "on" : ""} aria-pressed={t.id === selectedId} onClick={() => onSelect(t.id)}>
+            <button
+              type="button"
+              className={on(t.id) ? "on" : ""}
+              aria-pressed={on(t.id)}
+              onClick={() => (multi ? onPick([t.id], !picked.has(t.id)) : onSelect(t.id))}
+            >
               <b>
                 {warns(t.id) ? (
                   <span className="warn-icon" role="img" aria-label="A viewport is past the sheet's edge" title={`${status.get(t.id)?.clipped} viewport(s) past the sheet's edge`}>

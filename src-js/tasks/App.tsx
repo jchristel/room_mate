@@ -16,6 +16,7 @@ import { persistSelection, seedProjectId } from "./common.js";
 import { MakeTasks } from "./MakeTasks.js";
 import { TaskDetail } from "./TaskDetail.js";
 import { TaskList } from "./TaskList.js";
+import { canDismiss, canResend, roomsLabel } from "./model.js";
 import { sheetStatus, type SheetStatus } from "./sheetPreviews.js";
 import type { AssignmentRow, Made, ProjectRow, Task, TaskState, TaskSummary, ViewportMovesBody } from "./types.js";
 
@@ -35,6 +36,8 @@ export function App() {
   // What each queued sheet task looks like against its paper, keyed by task and stamped with the `updated_at` it was read at.
   const [status, setStatus] = useState<ReadonlyMap<string, SheetStatus & { at: string }>>(new Map());
   const [making, setMaking] = useState(false);
+  const [multi, setMulti] = useState(false);
+  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set());
   const [assignments, setAssignments] = useState<AssignmentRow[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -139,6 +142,39 @@ export function App() {
     void refresh(projectId);
   };
 
+  // Several tasks at once. Only the ticked tasks the action applies to are sent; the rest are left as they are.
+  const actOnPicked = async (what: "dismiss" | "resend") => {
+    if (!projectId) return;
+    const can = what === "dismiss" ? canDismiss : canResend;
+    const todo = (rows ?? []).filter((t) => picked.has(t.id) && can(t.state));
+    if (todo.length === 0) return;
+    if (what === "dismiss" && todo.some((t) => t.state === "in_progress") && !window.confirm("A Revit session was handed at least one of these tasks. Dismiss them anyway? A late report from that session will be refused.")) return;
+    setBusy(true);
+    const failed: string[] = [];
+    for (const t of todo) {
+      const r = await (what === "dismiss" ? api.dismiss(projectId, t.id) : api.resend(projectId, t.id));
+      if (!r.ok) failed.push(`${roomsLabel(t)}: ${r.error}`);
+    }
+    setBusy(false);
+    const done = todo.length - failed.length;
+    setError(failed.length > 0 ? `Not ${what === "dismiss" ? "dismissed" : "resent"}: ${failed.join("; ")}` : null);
+    setNotice(`${done} task${done === 1 ? "" : "s"} ${what === "dismiss" ? "dismissed" : "put back in the queue"}.`);
+    void refresh(projectId);
+  };
+
+  // Only what is still in the list counts: a task can leave it between polls.
+  const ticked = (rows ?? []).filter((t) => picked.has(t.id));
+
+  const pick = (ids: readonly string[], on: boolean) =>
+    setPicked((cur) => {
+      const n = new Set(cur);
+      for (const id of ids) {
+        if (on) n.add(id);
+        else n.delete(id);
+      }
+      return n;
+    });
+
   const moveViewports = async (body: ViewportMovesBody) => {
     if (!projectId || !selected) return;
     setBusy(true);
@@ -174,6 +210,7 @@ export function App() {
           value={projectId ?? ""}
           onChange={(e) => {
             setProjectId(e.target.value);
+            setPicked(new Set());
             persistSelection(e.target.value);
           }}
         >
@@ -203,7 +240,17 @@ export function App() {
           onModel={setModel}
           onToggleState={toggleState}
           onSelect={(id) => void open(id)}
+          multi={multi}
+          picked={picked}
+          onMulti={(on) => {
+            setMulti(on);
+            setPicked(new Set());
+            setMaking(false);
+          }}
+          onPick={pick}
           onMake={() => {
+            setMulti(false);
+            setPicked(new Set());
             setMaking(true);
             setSelected(null);
             setNotice(null);
@@ -212,7 +259,26 @@ export function App() {
         <main>
           {error ? <p className="banner error">{error}</p> : null}
           {notice && !error ? <p className="banner">{notice}</p> : null}
-          {making && projectId ? (
+          {multi ? (
+            <div className="detail">
+              <div className="toolbar">
+                <strong>
+                  {ticked.length} task{ticked.length === 1 ? "" : "s"} selected
+                </strong>
+                <span className="spacer" />
+                <button type="button" disabled={busy || ticked.length === 0} onClick={() => setPicked(new Set())}>
+                  Clear
+                </button>
+                <button type="button" disabled={busy || ticked.every((t) => !canResend(t.state))} onClick={() => void actOnPicked("resend")}>
+                  Resend {ticked.filter((t) => canResend(t.state)).length}
+                </button>
+                <button type="button" className="danger" disabled={busy || ticked.every((t) => !canDismiss(t.state))} onClick={() => void actOnPicked("dismiss")}>
+                  Dismiss {ticked.filter((t) => canDismiss(t.state)).length}
+                </button>
+              </div>
+              <p className="hint">Tick tasks on the left. A task an action does not apply to (resending one already queued, dismissing one already dismissed) is skipped. Switch "Select several" off to see one task.</p>
+            </div>
+          ) : making && projectId ? (
             <MakeTasks project={projectId} assignments={assignments} onMade={made} onClose={() => setMaking(false)} />
           ) : selected ? (
             <TaskDetail task={selected} busy={busy} onDismiss={() => void act("dismiss")} onResend={() => void act("resend")} onMoveViewports={(b) => void moveViewports(b)} />

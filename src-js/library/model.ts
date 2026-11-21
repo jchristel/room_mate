@@ -49,6 +49,16 @@ export function filterRules(rules: readonly RuleSummary[], text: string): RuleSu
     .sort((a, b) => ruleLabel(a).localeCompare(ruleLabel(b)) || a.key.viewport_type.localeCompare(b.key.viewport_type));
 }
 
+/** Sheets whose number, name, document, rooms or room key contain every word of `text` (case-insensitive), in the order given. */
+export function filterSheets<T extends SheetSummary>(sheets: readonly T[], text: string): T[] {
+  const words = trim(text).toLowerCase().split(/\s+/).filter(Boolean);
+  const hay = (s: T) => [s.sheet_number, s.sheet_name, s.document_title, s.room_key ?? "", ...(s.rooms ?? [])].join(" ").toLowerCase();
+  return sheets.filter((s) => {
+    const h = hay(s);
+    return words.every((w) => h.includes(w));
+  });
+}
+
 /** Where a sample was read: the sheet, the tag and the element, as Revit numbered them. */
 export const sampleSource = (s: Sample): string => `sheet ${s.source.sheet.sheet_number || s.source.sheet.revit_sheet_id}, tag ${s.source.tag_id}, element ${s.source.element_id}`;
 

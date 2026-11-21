@@ -8,7 +8,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import * as api from "./api.js";
-import { boundText, sheetNeedsAttention, sheetReasons, shortTime, sizeText, suggestionText, summaryText } from "./model.js";
+import { boundText, filterSheets, sheetNeedsAttention, sheetReasons, shortTime, sizeText, suggestionText, summaryText } from "./model.js";
+import { MultiPanel, MultiToggle, useSelection } from "./Selection.js";
 import { SheetPreview } from "./SheetPreview.js";
 import type { RoomRow, SheetRecord, SheetSummary, Suggestions } from "./types.js";
 
@@ -26,6 +27,8 @@ export function SheetsTab({ project, rooms, onError, onNotice }: TabProps) {
   const [rows, setRows] = useState<SheetSummary[] | null>(null);
   const [record, setRecord] = useState<SheetRecord | null>(null);
   const [onlyAttention, setOnlyAttention] = useState(false);
+  const [text, setText] = useState("");
+  const selection = useSelection();
   const [suggesting, setSuggesting] = useState(false);
   const [busy, setBusy] = useState(false);
   const [names, setNames] = useState<ReadonlyMap<string, string>>(new Map());
@@ -68,7 +71,30 @@ export function SheetsTab({ project, rooms, onError, onNotice }: TabProps) {
     void refresh();
   };
 
-  const shown = useMemo(() => (onlyAttention ? rows?.filter(sheetNeedsAttention) : rows) ?? null, [rows, onlyAttention]);
+  const shown = useMemo(() => filterSheets((onlyAttention ? rows?.filter(sheetNeedsAttention) : rows) ?? [], text), [rows, onlyAttention, text]);
+  // Only what is still in the list counts: a push or a delete elsewhere can take a ticked sheet away.
+  const ticked = useMemo(() => (rows ?? []).filter((s) => selection.picked.has(s.id)), [rows, selection.picked]);
+
+  const removeTicked = async () => {
+    if (!window.confirm(`Delete ${ticked.length} sheet${ticked.length === 1 ? "" : "s"} from the library? Tasks already made keep their copy.`)) return;
+    setBusy(true);
+    const failed: string[] = [];
+    const left: string[] = [];
+    for (const s of ticked) {
+      const d = await api.deleteSheet(project, s.id, s.taken_at);
+      if (!d.ok) {
+        failed.push(`${s.sheet_number}: ${d.error}`);
+        left.push(s.id);
+      }
+    }
+    setBusy(false);
+    selection.set(left);
+    if (record && ticked.some((s) => s.id === record.id && !left.includes(s.id))) setRecord(null);
+    onError(failed.length > 0 ? `Not deleted: ${failed.join("; ")}` : null);
+    onNotice(`${ticked.length - failed.length} sheet${ticked.length - failed.length === 1 ? "" : "s"} deleted.`);
+    void refresh();
+  };
+  const isOn = (id: string) => (selection.multi ? selection.picked.has(id) : id === record?.id);
   const attention = rows?.filter(sheetNeedsAttention).length ?? 0;
 
   return (
@@ -84,7 +110,9 @@ export function SheetsTab({ project, rooms, onError, onNotice }: TabProps) {
           >
             Suggest for a room
           </button>
+          <MultiToggle selection={selection} />
         </div>
+        <input type="search" placeholder="Filter: number, name, room" value={text} onChange={(e) => setText(e.target.value)} aria-label="Filter sheets" />
         {attention > 0 ? (
           <label className="filter">
             <input type="checkbox" checked={onlyAttention} onChange={(e) => setOnlyAttention(e.target.checked)} /> Needs attention ({attention})
@@ -92,10 +120,16 @@ export function SheetsTab({ project, rooms, onError, onNotice }: TabProps) {
         ) : null}
         {rows === null ? <p className="hint">Reading the sheets…</p> : null}
         {rows?.length === 0 ? <p className="hint">The library is empty. Export sheets from Revit with the Sheets button.</p> : null}
+        {rows && rows.length > 0 && shown.length === 0 ? <p className="hint">No sheet matches.</p> : null}
         <ul>
-          {shown?.map((s) => (
+          {shown.map((s) => (
             <li key={s.id}>
-              <button type="button" className={s.id === record?.id ? "on" : ""} aria-pressed={s.id === record?.id} onClick={() => void open(s.id)}>
+              <button
+                type="button"
+                className={isOn(s.id) ? "on" : ""}
+                aria-pressed={isOn(s.id)}
+                onClick={() => (selection.multi ? selection.toggle(s.id) : void open(s.id))}
+              >
                 <b>
                   {s.sheet_number} {s.sheet_name}
                   {sheetNeedsAttention(s) ? (
@@ -113,7 +147,9 @@ export function SheetsTab({ project, rooms, onError, onNotice }: TabProps) {
         </ul>
       </aside>
       <main>
-        {suggesting ? (
+        {selection.multi ? (
+          <MultiPanel noun="sheet" shown={shown.length} ticked={ticked.length} busy={busy} onAll={() => selection.set(shown.map((s) => s.id))} onNone={() => selection.set([])} onDelete={() => void removeTicked()} />
+        ) : suggesting ? (
           <Suggest project={project} rooms={rooms} onError={onError} />
         ) : record ? (
           <SheetDetail

@@ -9,6 +9,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import * as api from "./api.js";
 import { boundaryText, degrees, filterRules, mm, ruleLabel, sampleSource, scopeText, shortTime } from "./model.js";
+import { MultiPanel, MultiToggle, useSelection } from "./Selection.js";
 import type { TabProps } from "./SheetsTab.js";
 import type { RuleSummary, TagRule } from "./types.js";
 
@@ -18,6 +19,7 @@ export function RulesTab({ project, onError, onNotice }: Omit<TabProps, "rooms">
   const [rows, setRows] = useState<RuleSummary[] | null>(null);
   const [rule, setRule] = useState<TagRule | null>(null);
   const [text, setText] = useState("");
+  const selection = useSelection();
   const [busy, setBusy] = useState(false);
   const [names, setNames] = useState<ReadonlyMap<string, string>>(new Map());
 
@@ -31,6 +33,29 @@ export function RulesTab({ project, onError, onNotice }: Omit<TabProps, "rooms">
   }, [project, refresh]);
 
   const shown = useMemo(() => filterRules(rows ?? [], text), [rows, text]);
+
+  const ticked = useMemo(() => (rows ?? []).filter((r) => selection.picked.has(r.id)), [rows, selection.picked]);
+  const isOn = (id: string) => (selection.multi ? selection.picked.has(id) : id === rule?.id);
+
+  const removeTicked = async () => {
+    if (!window.confirm(`Delete ${ticked.length} rule${ticked.length === 1 ? "" : "s"}? Tasks already made keep their copy.`)) return;
+    setBusy(true);
+    const failed: string[] = [];
+    const left: string[] = [];
+    for (const r of ticked) {
+      const d = await api.deleteRule(project, r.id);
+      if (!d.ok) {
+        failed.push(`${ruleLabel(r)}: ${d.error}`);
+        left.push(r.id);
+      }
+    }
+    setBusy(false);
+    selection.set(left);
+    if (rule && ticked.some((r) => r.id === rule.id && !left.includes(r.id))) setRule(null);
+    onError(failed.length > 0 ? `Not deleted: ${failed.join("; ")}` : null);
+    onNotice(`${ticked.length - failed.length} rule${ticked.length - failed.length === 1 ? "" : "s"} deleted.`);
+    void refresh();
+  };
 
   const open = async (id: string) => {
     onError(null);
@@ -57,6 +82,9 @@ export function RulesTab({ project, onError, onNotice }: Omit<TabProps, "rooms">
   return (
     <div className="page">
       <aside className="left" aria-label="Tag rules">
+        <div className="actions">
+          <MultiToggle selection={selection} />
+        </div>
         <input type="search" placeholder="Filter: type code, tag, view" value={text} onChange={(e) => setText(e.target.value)} aria-label="Filter rules" />
         {rows === null ? <p className="hint">Reading the rules…</p> : null}
         {rows?.length === 0 ? <p className="hint">No rules yet. Rules are learned from the tags on sheets exported with the Sheets or Blueprint button.</p> : null}
@@ -64,7 +92,12 @@ export function RulesTab({ project, onError, onNotice }: Omit<TabProps, "rooms">
         <ul>
           {shown.map((r) => (
             <li key={r.id}>
-              <button type="button" className={r.id === rule?.id ? "on" : ""} aria-pressed={r.id === rule?.id} onClick={() => void open(r.id)}>
+              <button
+                type="button"
+                className={isOn(r.id) ? "on" : ""}
+                aria-pressed={isOn(r.id)}
+                onClick={() => (selection.multi ? selection.toggle(r.id) : void open(r.id))}
+              >
                 <b>{ruleLabel(r)}</b>
                 <span>
                   {r.key.viewport_type} · {r.tag_kind} · {scopeText(r.key, names)} · {r.sample_count} sample{r.sample_count === 1 ? "" : "s"}
@@ -75,7 +108,9 @@ export function RulesTab({ project, onError, onNotice }: Omit<TabProps, "rooms">
         </ul>
       </aside>
       <main>
-        {rule ? (
+        {selection.multi ? (
+          <MultiPanel noun="rule" shown={shown.length} ticked={ticked.length} busy={busy} onAll={() => selection.set(shown.map((r) => r.id))} onNone={() => selection.set([])} onDelete={() => void removeTicked()} />
+        ) : rule ? (
           <div className="detail">
             <div className="toolbar">
               <strong>{ruleLabel(rule)}</strong>
