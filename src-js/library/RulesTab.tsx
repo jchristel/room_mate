@@ -5,7 +5,7 @@
 //
 // Offsets are paper millimetres in the element's own frame: x along its facing, y to its left.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import * as api from "./api.js";
 import { boundaryText, degrees, filterRules, mm, ruleLabel, sampleSource, scopeText, shortTime } from "./model.js";
@@ -14,6 +14,9 @@ import { MultiPanel, MultiToggle, useSelection } from "../ui/Selection.js";
 import type { TabProps } from "./SheetsTab.js";
 import type { RuleSummary, TagRule } from "./types.js";
 import { message } from "../ui/api.js";
+import { batches } from "../ui/batch.js";
+import { saveJson } from "../ui/file.js";
+import { fileNameFor, outcomeText, parseFile, sum, toFile, type ImportOutcome } from "./rulesExchange.js";
 
 
 export function RulesTab({ project, onError, onNotice }: Omit<TabProps, "rooms">) {
@@ -58,6 +61,49 @@ export function RulesTab({ project, onError, onNotice }: Omit<TabProps, "rooms">
     void refresh();
   };
 
+  // Export what is ticked (multi-selection), else what the filter shows. A rule is read whole: the list holds summaries.
+  const exportTargets = selection.multi && ticked.length > 0 ? ticked : shown;
+  const exportFile = async () => {
+    setBusy(true);
+    onError(null);
+    try {
+      const rules: TagRule[] = [];
+      for (let i = 0; i < exportTargets.length; i += 6) rules.push(...(await Promise.all(exportTargets.slice(i, i + 6).map((r) => api.getRule(project, r.id)))));
+      saveJson(fileNameFor(project, rules.length), toFile(rules, project));
+      onNotice(`Exported ${rules.length} rule${rules.length === 1 ? "" : "s"}.`);
+    } catch (e) {
+      onError(message(e));
+    }
+    setBusy(false);
+  };
+
+  const fileInput = useRef<HTMLInputElement>(null);
+  const importFile = async (f: File | undefined) => {
+    if (!f) return;
+    onError(null);
+    onNotice(null);
+    const parsed = parseFile(await f.text());
+    if (!parsed.ok) return onError(parsed.error);
+    const { rules, exported_from } = parsed.file;
+    const from = exported_from === project ? "this project" : `"${exported_from}"`;
+    if (!window.confirm(`Import ${rules.length} rule${rules.length === 1 ? "" : "s"} from ${from}? They are taken in as generic rules: samples join a rule of the same key, and a sample already held by another rule moves to the one it is filed under now.`)) return;
+    setBusy(true);
+    const done: ImportOutcome[] = [];
+    for (const group of batches(rules)) {
+      const r = await api.importRules(project, group);
+      if (!r.ok) {
+        setBusy(false);
+        onError(`${r.error}${done.length > 0 ? ` (${sum(done).samples} samples were taken in before that)` : ""}`);
+        void refresh();
+        return;
+      }
+      done.push(r.value);
+    }
+    setBusy(false);
+    onNotice(`Imported: ${outcomeText(sum(done))}.`);
+    void refresh();
+  };
+
   const open = async (id: string) => {
     onError(null);
     onNotice(null);
@@ -84,7 +130,27 @@ export function RulesTab({ project, onError, onNotice }: Omit<TabProps, "rooms">
     <div className="page">
       <ListPane
         label="Tag rules"
-        actions={<MultiToggle selection={selection} />}
+        actions={
+          <>
+            <button type="button" disabled={busy} onClick={() => fileInput.current?.click()}>
+              Import
+            </button>
+            <button type="button" disabled={busy || exportTargets.length === 0} onClick={() => void exportFile()}>
+              Export{selection.multi && ticked.length > 0 ? ` ${exportTargets.length}` : ""}
+            </button>
+            <input
+              ref={fileInput}
+              type="file"
+              accept=".json,application/json"
+              hidden
+              onChange={(e) => {
+                void importFile(e.target.files?.[0]);
+                e.target.value = "";
+              }}
+            />
+            <MultiToggle selection={selection} />
+          </>
+        }
         search={<SearchBox value={text} onChange={setText} placeholder="Filter: type code, tag, view" label="Filter rules" />}
       >
         {rows === null ? <p className="hint">Reading the rules…</p> : null}

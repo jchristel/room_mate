@@ -64,7 +64,9 @@ use roommate::sheets_api::{
     http_accept_sheet_push, http_delete_sheet, http_get_sheet, http_list_sheets, http_push_sheets,
     http_reject_sheet_push, http_sheet_elevations, http_solve_sheets, http_suggest_sheets,
 };
-use roommate::tag_rules_api::{http_delete_tag_rule, http_get_tag_rule, http_list_tag_rules, http_observe_tags};
+use roommate::tag_rules_api::{
+    http_delete_tag_rule, http_get_tag_rule, http_import_tag_rules, http_list_tag_rules, http_observe_tags,
+};
 use roommate::tasks_api::{
     http_aim_task_cameras, http_claim_tasks, http_create_tasks, http_dismiss_task, http_get_task, http_list_tasks,
     http_move_task_viewports, http_preview_rls, http_preview_rls_set, http_report_tasks, http_resend_task,
@@ -185,6 +187,7 @@ fn authored_routes() -> Router<roommate::state::Shared> {
         // the extractor's observations. See `tag_rules`.
         .route("/projects/{id}/tagrules", get(http_list_tag_rules))
         .route("/projects/{id}/tagrules/observations", post(http_observe_tags))
+        .route("/projects/{id}/tagrules/import", post(http_import_tag_rules))
         .route("/projects/{id}/tagrules/{rule}", get(http_get_tag_rule).delete(http_delete_tag_rule))
         .route("/projects/{id}/roomtasks", post(http_claim_tasks))
         .route("/projects/{id}/roomtasks/report", post(http_report_tasks))

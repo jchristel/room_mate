@@ -458,7 +458,7 @@ pub enum TagRuleError {
     Internal(anyhow::Error),
 }
 
-fn clean(s: &str) -> String {
+pub(crate) fn clean(s: &str) -> String {
     s.trim().chars().take(MAX_TEXT_CHARS).collect()
 }
 

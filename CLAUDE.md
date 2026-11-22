@@ -905,6 +905,19 @@ scale are read: see Tag rules).** Rules that are expensive to get wrong:
   (queued, in progress, completed or with warnings; those are faded, a double click on one or "Include all" puts it back), draws them green (80+), yellow
   (60-80) or red, lets a person override the sheet per room (an override, or "no sheet", is its own category) and queues, per sheet, the rooms of the
   ticked categories through the ordinary make request. The bands are constants in `rlsTool.ts`. **Not driven in a browser against Revit data.**
+- **The library page exports and imports sheets as a file, and the file is room-agnostic** (`library/exchange.ts`, 2026-11-22). An export
+  (the ticked sheets in multi-selection, else the filtered list) leaves out `room` and `blueprint` -- the two references the server never
+  validates -- and keeps the outline, figures and labels a sheet uses, plus no pending or rejected pushes. **An import is the extractor's own
+  push (`POST /sheets`), so it needs no endpoint**: identity, an update, and a renumbered sheet waiting for a decision are the server's, and
+  a bare push never unbinds a sheet the library already has bound. The page sends it in batches (`batches`: 50 sheets or about 1 MB) because
+  the route has no body limit of its own. A blueprint's own sheets travel with its Export, not this.
+  **Tag rules export and import the same way, and the import DOES have an endpoint** (`POST /projects/{id}/tagrules/import`,
+  `tag_rule_binding::import_generic`; `library/rulesExchange.ts`), because the extractor's `observations` route takes tags read from
+  Revit and works rules out from them, never a stored rule. A file holds each rule's key, kind and samples only; one bound to a
+  blueprint is filed as the generic rule it would become (references cleared, samples' boundary recipes dropped -- the server does the
+  same, so a hand-made file cannot bring either back). **Samples MERGE into a rule of the same key by where they were read** (never
+  replacing the rule), and a sample already held by another rule moves, so it lives in one. The answer says how many rules read a
+  type-code parameter other than the project's (`unused`: `rules_for` carries only the current parameter's).
 - **Neither sheet entry point is in `ENTITY_EXPORTERS`.** They are selection-driven, and the
   generic run driver has no per-entity choosing step. **Not yet run in Revit**: the pyRevit
   side was checked for syntax, ASCII and duHast-import closure only.

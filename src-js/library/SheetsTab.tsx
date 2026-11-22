@@ -5,7 +5,7 @@
 // **The sheet body is duHast's export and opaque to the server**, so this page shows only what a
 // person needs to choose a sheet (number, name, room, viewports); it does not draw the sheet.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import * as api from "./api.js";
 import { boundText, filterSheets, sheetNeedsAttention, sheetReasons, shortTime, sizeText, suggestionText, summaryText } from "./model.js";
@@ -15,6 +15,9 @@ import { matchesAll } from "../ui/match.js";
 import { SheetPreview } from "../ui/sheet/SheetPreview.js";
 import type { RoomRow, SheetRecord, SheetSummary, Suggestions } from "./types.js";
 import { message } from "../ui/api.js";
+import { batches } from "../ui/batch.js";
+import { saveJson } from "../ui/file.js";
+import { fileNameFor, outcomeText, parseFile, toFile, type PushOutcome } from "./exchange.js";
 
 const POLL_MS = 8000;
 
@@ -96,6 +99,49 @@ export function SheetsTab({ project, rooms, onError, onNotice }: TabProps) {
     onNotice(`${ticked.length - failed.length} sheet${ticked.length - failed.length === 1 ? "" : "s"} deleted.`);
     void refresh();
   };
+
+  // Export what is ticked (multi-selection), else what the filter shows. A record is read whole: the list holds summaries.
+  const exportTargets = selection.multi && ticked.length > 0 ? ticked : shown;
+  const exportFile = async () => {
+    setBusy(true);
+    onError(null);
+    try {
+      const records: SheetRecord[] = [];
+      for (let i = 0; i < exportTargets.length; i += 6) records.push(...(await Promise.all(exportTargets.slice(i, i + 6).map((s) => api.getSheet(project, s.id)))));
+      saveJson(fileNameFor(project, records.length), toFile(records, project));
+      onNotice(`Exported ${records.length} sheet${records.length === 1 ? "" : "s"}.`);
+    } catch (e) {
+      onError(message(e));
+    }
+    setBusy(false);
+  };
+
+  const fileInput = useRef<HTMLInputElement>(null);
+  const importFile = async (f: File | undefined) => {
+    if (!f) return;
+    onError(null);
+    onNotice(null);
+    const parsed = parseFile(await f.text());
+    if (!parsed.ok) return onError(parsed.error);
+    const sheets = parsed.file.sheets;
+    const from = parsed.file.exported_from === project ? "this project" : `"${parsed.file.exported_from}"`;
+    if (!window.confirm(`Import ${sheets.length} sheet${sheets.length === 1 ? "" : "s"} from ${from} into the library? A sheet already here is updated; one whose number changed waits for your decision.`)) return;
+    setBusy(true);
+    const outcomes: PushOutcome[] = [];
+    for (const group of batches(sheets)) {
+      const r = await api.pushSheets(project, group);
+      if (!r.ok) {
+        setBusy(false);
+        onError(`${r.error}${outcomes.length > 0 ? ` (${outcomes.length} sheet${outcomes.length === 1 ? "" : "s"} were taken in before that)` : ""}`);
+        void refresh();
+        return;
+      }
+      outcomes.push(...r.value);
+    }
+    setBusy(false);
+    onNotice(`Imported ${outcomes.length} sheet${outcomes.length === 1 ? "" : "s"}: ${outcomeText(outcomes)}.`);
+    void refresh();
+  };
   const isOn = (id: string) => (selection.multi ? selection.picked.has(id) : id === record?.id);
   const attention = rows?.filter(sheetNeedsAttention).length ?? 0;
 
@@ -114,6 +160,22 @@ export function SheetsTab({ project, rooms, onError, onNotice }: TabProps) {
             >
               Suggest for a room
             </button>
+            <button type="button" disabled={busy} onClick={() => fileInput.current?.click()}>
+              Import
+            </button>
+            <button type="button" disabled={busy || exportTargets.length === 0} onClick={() => void exportFile()}>
+              Export{exportTargets.length > 0 && (selection.multi && ticked.length > 0) ? ` ${exportTargets.length}` : ""}
+            </button>
+            <input
+              ref={fileInput}
+              type="file"
+              accept=".json,application/json"
+              hidden
+              onChange={(e) => {
+                void importFile(e.target.files?.[0]);
+                e.target.value = "";
+              }}
+            />
             <MultiToggle selection={selection} />
           </>
         }
