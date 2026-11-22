@@ -69,3 +69,6 @@ settings/projects/*.local.toml
 # unpicked invites unpicking it. Anything worth keeping graduates to
 # data/snapshots or docs/ under its own name.
 temp/
+
+# macOS
+.DS_Store
