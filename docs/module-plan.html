@@ -637,8 +637,8 @@
     js_viewport: [17, 262, 87, 127],
     js_window: [176, 567, 204, 133],
     lib: [31, 97, 49, 12],
-    main: [279, 988, 298, 386],
-    mcp: [1957, 2903, 552, 233],
+    main: [282, 998, 302, 386],
+    mcp: [1957, 2902, 551, 233],
     network: [84, 224, 37, 90],
     p_blueprints: [2522, 3636, 309, 452],
     p_bundle: [930, 1134, 45, 0],
@@ -684,7 +684,7 @@
     sheet_suggest: [325, 549, 68, 122],
     sheets: [629, 1135, 114, 333],
     sheets_api: [157, 195, 21, 0],
-    state: [531, 1368, 499, 235],
+    state: [540, 1385, 503, 235],
     storage: [156, 766, 511, 48],
     storage_fs: [570, 1866, 263, 955],
     storage_mem: [217, 552, 94, 211],
@@ -916,7 +916,7 @@
     },
     {
       id: "main", name: "main.rs", path: "src/main.rs", zone: "entry", lang: "Rust",
-      blurb: "The Axum HTTP binary, deliberately thin: parse args, build state, wire the router. <code>build_router</code> is split out of main so the CORS policy is reachable from a test — a security control with no regression test is one refactor from reverting to permissive.",
+      blurb: "The Axum HTTP binary, deliberately thin: parse args, build state, wire the router. <code>build_router</code> is split out of main so the CORS policy is reachable from a test — a security control with no regression test is one refactor from reverting to permissive. The CORS policy, the Host check and the viewer root live in <code>src/guards.rs</code>.",
       deps: ["bootstrap", "handlers", "settings_api", "state", "bp_api", "assign_api", "sheets_api", "tag_rules_api", "tasks_api", "scoped_push", "network"]
     },
     {

@@ -54,7 +54,6 @@ macro_rules! carry {
         }
     }};
 }
-pub(super) use carry;
 
 /// One snapshot being written element by element — the JSON half of
 /// `SnapshotStore::put_streaming`.
@@ -172,5 +171,32 @@ impl<'a> StreamingSnapshot<'a> {
             .write(&self.encoder.trailer().context("could not serialise property dictionary")?)?;
         self.writer.write(b"}\n")?;
         self.writer.commit()
+    }
+}
+
+impl AppState {
+    /// What a level-scoped push carries over from this model's latest snapshot of `kind`: every
+    /// element NOT on `replaced_levels` (Revit level ids, as the elements name them). `None` when the
+    /// model has no snapshot of that kind yet, in which case the push is simply what it sent.
+    pub fn carried_elements(
+        &self,
+        kind: SnapshotKind,
+        key: &ModelKey,
+        replaced_levels: &[String],
+    ) -> anyhow::Result<Option<Carried>> {
+        use crate::contract::{CeilingPayload, FfePayload, FloorPayload, WindowPayload};
+        let Some(bytes) = self.store.get_latest_raw(kind, key)? else {
+            return Ok(None);
+        };
+        let (b, m, l) = (bytes.as_slice(), key.model_id.as_str(), replaced_levels);
+        Ok(Some(match kind {
+            SnapshotKind::Rooms => carry!(b, RoomPayload, rooms, m, l, key),
+            SnapshotKind::Doors => carry!(b, DoorPayload, doors, m, l, key),
+            SnapshotKind::Windows => carry!(b, WindowPayload, windows, m, l, key),
+            SnapshotKind::Ffe => carry!(b, FfePayload, ffe, m, l, key),
+            SnapshotKind::Spaces => carry!(b, SpacePayload, spaces, m, l, key),
+            SnapshotKind::Ceilings => carry!(b, CeilingPayload, ceilings, m, l, key),
+            SnapshotKind::Floors => carry!(b, FloorPayload, floors, m, l, key),
+        }))
     }
 }

@@ -2,9 +2,9 @@
 //! (`Predicate`, `RoomFilter`), and what a field name may be (`split_namespace`). Also read by openings, FF&E and surfaces through
 //! `FilterTarget`, so one language filters every entity.
 //!
-//! Kept whole: one filter language: the predicate, its parser, its evaluation over a room or any `FilterTarget`, and
-//! the field-name rules are only correct together (a change to the grammar changes all of them). It moved out of
-//! `rooms/mod.rs` whole for that reason, not to be split again.
+//! Kept whole: one filter language. The operator table, the parser and the evaluator share `Op` and the predicate, so a
+//! change to the grammar touches all three. The namespace and field-name rules are separable in principle, but they only
+//! ever change with the grammar, and splitting them would lengthen the `use super::*` chain through `rooms/mod.rs`.
 
 use super::*;
 

@@ -39,8 +39,8 @@
 //! between its two points, counted in the result's `note` so it is never silent.
 //! A route's distance is a walking estimate, not a measurement.
 //!
-//! Kept whole: one algorithm, the router's port network: the ports, the frontier, the solve and the assembly of a
-//! route share their types and read as one pass. Its excess over the trigger is the algorithm's own rationale. The
+//! Kept whole: one algorithm over private types, the router's port network: the ports, the frontier, the solve and the
+//! assembly of a route read as one pass. Most of its length past the trigger is documentation of why, not code. The
 //! distance field already moved out (`field`).
 
 use std::cmp::Ordering;

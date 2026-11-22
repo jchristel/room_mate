@@ -84,7 +84,7 @@ MODULES = {
     "u_ui": ["extractor/pyRevit/room_m/utils/ui.py"],
     # ---- server
     "lib": ["src/lib.rs"],
-    "main": ["src/main.rs"],
+    "main": ["src/main.rs", "src/guards.rs"],
     "mcp": sorted(glob.glob("src/bin/mcp/*.rs")),
     "bootstrap": ["src/bootstrap.rs"],
     "handlers": ["src/handlers.rs"],

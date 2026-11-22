@@ -10,9 +10,11 @@
 //! both state and storage key on; keeping it here avoids a state↔storage import
 //! cycle.
 //!
-//! Kept whole: `AppState` and its one `impl`, which is the server's whole interface to the store (push, read, carry
-//! over, activate). It is one type with one lock discipline, and its helpers (codec, registry, streaming) already
-//! moved out. The seam, if it grows, is the scoped-push half of the impl.
+//! Kept whole: `AppState`, its constructors, the `registry` lock, the snapshot reads and writes, and the id guards
+//! (`ModelKey`, `validate_id`). What was a long tail of the one `impl` moved out as further `impl AppState` blocks beside
+//! the data they touch: `pending` (quarantine and promotion), `reference` (uploaded CSVs), `stream` (carried-over
+//! elements, with `Carried` and `carry!`), plus `codec` and `registry`. The store is a trait object with its own locking,
+//! so the only lock this file owns is the registry's.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
@@ -29,6 +31,8 @@ use crate::settings::{
 use crate::storage::{ModelIndexRow, SnapshotKind, SnapshotMeta, SnapshotStore, SnapshotWriter};
 
 mod codec;
+mod pending;
+mod reference;
 mod registry;
 mod stream;
 pub use codec::*;
@@ -374,120 +378,6 @@ impl AppState {
         self.store.get_phase(key)
     }
 
-    /// Quarantine a push whose phase disagrees with the lineage's — see
-    /// `SnapshotStore::put_pending_raw`. Stored but not live, awaiting an
-    /// explicit promotion.
-    ///
-    /// **Generic over the payload, exactly as `open_opening_snapshot` is**, and
-    /// for the same reason: this is the serde-at-the-boundary layer, so it
-    /// serialises whatever it is handed and the store still takes bytes plus a
-    /// kind. A `set_pending_spaces_snapshot` beside a rooms one would be the
-    /// parallel method set R1 exists to prevent.
-    pub fn set_pending_snapshot<P: crate::contract::SnapshotEnvelope + serde::Serialize>(
-        &self,
-        key: &ModelKey,
-        kind: SnapshotKind,
-        payload: &P,
-    ) -> anyhow::Result<()> {
-        let json = encode_snapshot(payload).context("could not serialise pending snapshot")?;
-        self.store.put_pending_raw(key, kind, payload.taken_at(), payload.phase(), &json)
-    }
-
-    /// The quarantined rooms push waiting on one model, if any — see
-    /// `SnapshotStore::get_pending_raw`.
-    ///
-    /// Rooms-typed on the way *out* while the way in is generic, and the
-    /// asymmetry is real rather than an oversight: writing needs only bytes, and
-    /// reading needs to know what to parse them into. `pending_spaces_snapshot`
-    /// is its sibling; a caller always knows which kind it is asking about,
-    /// because the route says so.
-    pub fn pending_snapshot(&self, key: &ModelKey) -> anyhow::Result<Option<RoomPayload>> {
-        self.store
-            .get_pending_raw(key, SnapshotKind::Rooms)?
-            .map(|bytes| parse_rooms(key, &bytes))
-            .transpose()
-    }
-
-    /// The quarantined **spaces** push waiting on one model, if any.
-    pub fn pending_spaces_snapshot(&self, key: &ModelKey) -> anyhow::Result<Option<SpacePayload>> {
-        self.store
-            .get_pending_raw(key, SnapshotKind::Spaces)?
-            .map(|bytes| parse_spaces(key, &bytes))
-            .transpose()
-    }
-
-    /// Make a quarantined push live, re-phasing the lineage — see
-    /// `SnapshotStore::promote_pending`. The one deliberate way a model's phase
-    /// changes after it is first set.
-    ///
-    /// The parse happens *here* rather than in the store because promoting is
-    /// defined in terms of the pending payload's own phase, and the store sees
-    /// only bytes. Reading it first also means a corrupt quarantined file fails
-    /// before anything is written, leaving it intact and retryable.
-    pub fn promote_pending_snapshot(&self, key: &ModelKey) -> anyhow::Result<Option<RoomPayload>> {
-        let Some(payload) = self.pending_snapshot(key)? else {
-            return Ok(None);
-        };
-        if self.store.promote_pending(&rooms_meta(key, &payload))? {
-            Ok(Some(payload))
-        } else {
-            // The quarantine was cleared between the read above and the
-            // promotion — report it as "nothing was pending", the same answer
-            // the caller would have got had it arrived a moment later.
-            Ok(None)
-        }
-    }
-
-    /// `promote_pending_snapshot`'s spaces counterpart, on identical terms.
-    ///
-    /// **A spaces lineage is re-phased by promoting a spaces push**, which is
-    /// the whole point of D11: a services model usually holds no rooms, so
-    /// "re-phase it with a rooms push first" is not an escape hatch it has.
-    pub fn promote_pending_spaces_snapshot(&self, key: &ModelKey) -> anyhow::Result<Option<SpacePayload>> {
-        let Some(payload) = self.pending_spaces_snapshot(key)? else {
-            return Ok(None);
-        };
-        let meta = SnapshotMeta {
-            kind: SnapshotKind::Spaces,
-            key,
-            project_name: &payload.project.name,
-            model_name: &payload.model.name,
-            taken_at: &payload.snapshot.taken_at,
-            phase: payload.phase.as_deref(),
-            model_to_shared: payload.model_to_shared,
-        };
-        if self.store.promote_pending(&meta)? {
-            Ok(Some(payload))
-        } else {
-            Ok(None)
-        }
-    }
-
-    /// What a level-scoped push carries over from this model's latest snapshot of `kind`: every
-    /// element NOT on `replaced_levels` (Revit level ids, as the elements name them). `None` when the
-    /// model has no snapshot of that kind yet, in which case the push is simply what it sent.
-    pub fn carried_elements(
-        &self,
-        kind: SnapshotKind,
-        key: &ModelKey,
-        replaced_levels: &[String],
-    ) -> anyhow::Result<Option<Carried>> {
-        use crate::contract::{CeilingPayload, FfePayload, FloorPayload, WindowPayload};
-        let Some(bytes) = self.store.get_latest_raw(kind, key)? else {
-            return Ok(None);
-        };
-        let (b, m, l) = (bytes.as_slice(), key.model_id.as_str(), replaced_levels);
-        Ok(Some(match kind {
-            SnapshotKind::Rooms => carry!(b, RoomPayload, rooms, m, l, key),
-            SnapshotKind::Doors => carry!(b, DoorPayload, doors, m, l, key),
-            SnapshotKind::Windows => carry!(b, WindowPayload, windows, m, l, key),
-            SnapshotKind::Ffe => carry!(b, FfePayload, ffe, m, l, key),
-            SnapshotKind::Spaces => carry!(b, SpacePayload, spaces, m, l, key),
-            SnapshotKind::Ceilings => carry!(b, CeilingPayload, ceilings, m, l, key),
-            SnapshotKind::Floors => carry!(b, FloorPayload, floors, m, l, key),
-        }))
-    }
-
     /// One model's snapshot ids, ascending — see `SnapshotStore::list_snapshot_ids`.
     pub fn list_snapshot_ids(&self, key: &ModelKey) -> anyhow::Result<Vec<String>> {
         self.store.list_snapshot_ids(SnapshotKind::Rooms, key)
@@ -506,29 +396,6 @@ impl AppState {
     /// a settings save's re-validation).
     pub fn store(&self) -> &dyn SnapshotStore {
         self.store.as_ref()
-    }
-
-    /// Store one uploaded reference-source CSV — see `SnapshotStore::put_reference`.
-    pub fn put_reference(&self, project_id: &str, source: &str, taken_at: &str, csv: &[u8]) -> anyhow::Result<bool> {
-        self.store.put_reference(project_id, source, taken_at, csv)
-    }
-
-    /// One project's snapshot ids for one reference source, ascending — see
-    /// `SnapshotStore::list_reference_snapshot_ids`.
-    pub fn list_reference_snapshot_ids(&self, project_id: &str, source: &str) -> anyhow::Result<Vec<String>> {
-        self.store.list_reference_snapshot_ids(project_id, source)
-    }
-
-    /// One stored reference-source CSV by snapshot id — see
-    /// `SnapshotStore::get_reference`.
-    pub fn get_reference(&self, project_id: &str, source: &str, taken_at: &str) -> anyhow::Result<Option<Vec<u8>>> {
-        self.store.get_reference(project_id, source, taken_at)
-    }
-
-    /// The newest stored CSV for one reference source, with its id — see
-    /// `SnapshotStore::get_latest_reference`.
-    pub fn get_latest_reference(&self, project_id: &str, source: &str) -> anyhow::Result<Option<(String, Vec<u8>)>> {
-        self.store.get_latest_reference(project_id, source)
     }
 }
 

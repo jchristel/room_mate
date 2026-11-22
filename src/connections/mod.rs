@@ -53,9 +53,9 @@
 //! to the wrong room. Whether a link's two rooms really are on different storeys
 //! is likewise a read-time finding, because it needs the model.
 //!
-//! Kept whole: the saved document, the input types a save sends and the save itself are one contract: each input
-//! mirrors a document type field for field, and `save` validates, resolves and writes them together. Validation and
-//! resolution already moved out (`validate`, `resolve`); what is left is that contract.
+//! Kept whole: the saved document, the input types a save sends and `load`/`save` are one contract: each input mirrors
+//! a document type field for field, and the siblings (`validate`, `resolve`) share its limits (`MAX_*`) and
+//! `ConnectionsError`, which is why those stay private to this module tree.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
