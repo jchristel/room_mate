@@ -123,7 +123,7 @@ date = "2026-07-29"
 
 [appearance.rooms]
 line = "#f0c800"
-fill = "#f60404"
+fill = "#53d5fd"
 hover = "#3649d3"
 
 [hover]
