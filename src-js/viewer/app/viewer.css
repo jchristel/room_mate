@@ -738,13 +738,13 @@
   .preview .port.three_d rect, .preview .key.three_d::before { fill: var(--ok); background: var(--ok); }
   .preview .port.schedule rect, .preview .key.schedule::before { fill: var(--rule); background: var(--rule); }
   .preview .port.other rect, .preview .key.other::before { fill: var(--fill-hover); background: var(--fill-hover); }
-  .preview .elevation-line line { stroke: var(--danger, #c0392b); stroke-width: 1.2; }
-  .preview .elevation-line text { fill: var(--danger, #c0392b); font-family: var(--mono); pointer-events: none; }
+  .preview .elevation-line line { stroke: var(--danger); stroke-width: 1.2; }
+  .preview .elevation-line text { fill: var(--danger); font-family: var(--mono); pointer-events: none; }
   .preview .key { margin-right: 0.8rem; }
   .preview .key::before { content: ""; display: inline-block; width: 0.7em; height: 0.7em; margin-right: 0.3em; opacity: 0.6; }
   /* The set composer: the views waiting on the left, the sheets side by side on the right, scrolling sideways. */
   .rlsFindings { margin: 0; padding: 0.2rem 0.5rem 0.2rem 1.5rem; border-bottom: 1px solid var(--rule); background: var(--paper); font-size: 0.85em; }
-  .rlsFindings .refused { color: var(--danger, #c0392b); }
+  .rlsFindings .refused { color: var(--danger); }
   .rlsComposer { display: flex; gap: 0.5rem; padding: 0.3rem 0.5rem; border-bottom: 1px solid var(--rule); background: var(--paper); max-height: 42vh; }
   .rlsPorts { display: flex; flex-direction: column; gap: 0.2rem; width: 15rem; flex: none; overflow-y: auto; font-size: 0.85em; }
   .rlsPort { display: flex; justify-content: space-between; align-items: center; gap: 0.3rem; padding: 0.1rem 0.3rem;
@@ -761,8 +761,8 @@
   .rlsSheet .port { cursor: move; touch-action: none; }
   .rlsSheet .port.estimate rect { stroke-dasharray: 3 2; }
   .rlsSheet .port.dragging rect { fill-opacity: 0.6; }
-  .rlsSheet .port.tooBig rect { stroke: var(--danger, #c0392b); stroke-width: 2.5; }
-  .rlsPort.tooBig { border-color: var(--danger, #c0392b); color: var(--danger, #c0392b); }
+  .rlsSheet .port.tooBig rect { stroke: var(--danger); stroke-width: 2.5; }
+  .rlsPort.tooBig { border-color: var(--danger); color: var(--danger); }
   /* The plan folded away (RLS set, "Plan"): the zone is the bar, the findings and the composer, which takes what is
      left. Each sheet is as TALL as the composer and as wide as its paper makes it (the SVG's viewBox gives the
      width), side by side, scrolling sideways. The canvas stays mounted, so the plan comes back as it was. */

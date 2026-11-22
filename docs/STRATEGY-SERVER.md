@@ -75,7 +75,7 @@ through `assemble_room` today would mean either losing that distinction or
 paying for the classification and label work validation never uses — a
 speculative abstraction with no current payoff.
 
-`assemble_room` therefore stays private to `rooms.rs` until a second consumer
+`assemble_room` therefore stays private to `service::rooms` until a second consumer
 actually exists and its real needs are known (F&E validation was the anticipated
 one). Widening it to `pub(crate)` is the cheap first move when that happens, and
 the decision of whether validation fits belongs at that point, not now.

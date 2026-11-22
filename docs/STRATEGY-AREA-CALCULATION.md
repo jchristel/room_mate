@@ -7,7 +7,7 @@ This has its own document because it is the only part of the pipeline where the
 **definition of the output is contested**. Everywhere else the server reports
 what the model says; here it has to decide what a wall belongs to, and reasonable
 standards disagree. **The algorithm is not described here** — it lives in
-`src/service/areas.rs`, whose module header carries the wall zone, the ownership
+`src/service/areas/`, whose module header carries the wall zone, the ownership
 theorem and the junction correction in full. This document carries the part no
 code comment can settle: what the number may be *called*, and what is unfinished.
 
@@ -110,7 +110,7 @@ Two places the literature has a better answer that was not taken:
   been made to speak. What it said:
 
   - The declared regime matches the measured one on every level: the
-    `coincident_share` cross-check in `areas.rs` logs nothing, and
+    `coincident_share` cross-check in `areas/` logs nothing, and
     `wall_gap_by_level` is `0` for all 18. The close is genuinely skipped.
   - **335 of 361 groups report exactly 1.000× their rooms' net area** — the
     signature of the regime, since a centreline room polygon already contains

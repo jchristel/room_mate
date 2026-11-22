@@ -1,23 +1,13 @@
 // The endpoints the library page calls. Writes never throw on an HTTP error: the server's own text
 // is shown to the person, verbatim.
 
-import { apiGet, apiSend } from "./common.js";
+import { send, projectBase as base, type Sent } from "../ui/api.js";
+
+export type { Sent };
+import { apiGet } from "../ui/common.js";
 import type { ProjectRow, RoomRow, RuleSummary, SheetRecord, SheetSummary, Suggestions, TagRule } from "./types.js";
 
-export type Sent<T> = { ok: true; value: T } | { ok: false; error: string };
-
-const base = (project: string) => `/projects/${encodeURIComponent(project)}`;
 const enc = encodeURIComponent;
-
-async function send<T>(method: string, url: string, body: unknown): Promise<Sent<T>> {
-  const r = await apiSend(method, url, body);
-  if (!r.ok) return { ok: false, error: r.text || `HTTP ${r.status}` };
-  try {
-    return { ok: true, value: (r.text ? JSON.parse(r.text) : null) as T };
-  } catch {
-    return { ok: false, error: "the server's answer was not JSON" };
-  }
-}
 
 export const listProjects = () => apiGet<ProjectRow[]>("/projects");
 export const listRooms = (project: string) => apiGet<{ rooms: RoomRow[] }>(`/rooms?project=${enc(project)}`).then((r) => r.rooms);

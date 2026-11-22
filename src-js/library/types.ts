@@ -57,58 +57,15 @@ export interface PendingSheet {
   phase?: string;
 }
 
-/** A 2D box in millimetres on the sheet, as duHast exports it. */
-export interface PaperBox {
-  min_x: number;
-  min_y: number;
-  max_x: number;
-  max_y: number;
-}
+import type { SheetDrawing } from "../ui/sheet/types.js";
 
-export interface Point3 {
-  x: number;
-  y: number;
-  z?: number;
-}
-
-/** What a viewport's view carries beyond its scale; each kind of view fills its own. */
-export interface ViewInfo {
-  view_scale?: number;
-  name?: string;
-  /** Schedule: rows in the schedule. */
-  total_number_of_rows?: number;
-  /** Elevation: which index of its marker the view is. */
-  marker_index?: number | null;
-  /** Elevation: the line in the model, mm; start to end runs to the viewer's right. */
-  line_start?: Point3 | null;
-  line_end?: Point3 | null;
-  /** Plan and elevation: the annotation crop is on, and where its edges stand outside the view crop, mm on paper. */
-  annotation_crop_active?: boolean | null;
-  annotation_crop_offsets?: { left: number; right: number; top: number; bottom: number } | null;
-  /** Plan: the crop box in the model's frame, mm. */
-  bounding_box?: PaperBox;
-  /** 3D: the direction the camera looks along (any length), and the section box in the model's frame, mm. */
-  forward_direction?: Point3 | null;
-  up_direction?: Point3 | null;
-  section_box_min?: Point3 | null;
-  section_box_max?: Point3 | null;
-}
-
-export interface ViewportInfo {
-  /** "floor plan", "elevation", "three d" or "schedule". */
-  vp_type?: string;
-  /** The viewport's outline on the sheet. */
-  bounding_box?: PaperBox;
-  /** Where the viewport sits on the sheet, mm. */
-  centre_point?: { x: number; y: number };
-  view?: ViewInfo;
-}
+export type { PaperBox, Point3, ViewInfo, ViewportInfo } from "../ui/sheet/types.js";
 
 export interface SheetRecord extends Omit<SheetSummary, "viewports" | "pending"> {
   phase?: string;
   received_at: string;
   /** The sheet as duHast exports it: opaque here beyond its viewports. */
-  sheet: { view_ports?: ViewportInfo[] } & Record<string, unknown>;
+  sheet: SheetDrawing["sheet"];
   pending: PendingSheet[];
   rejected: (PendingSheet & { rejected_at: string })[];
 }

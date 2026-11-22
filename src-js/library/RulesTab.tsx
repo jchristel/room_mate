@@ -9,11 +9,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import * as api from "./api.js";
 import { boundaryText, degrees, filterRules, mm, ruleLabel, sampleSource, scopeText, shortTime } from "./model.js";
-import { MultiPanel, MultiToggle, useSelection } from "./Selection.js";
+import { ListPane, Row, RowList, SearchBox } from "../ui/ListPane.js";
+import { MultiPanel, MultiToggle, useSelection } from "../ui/Selection.js";
 import type { TabProps } from "./SheetsTab.js";
 import type { RuleSummary, TagRule } from "./types.js";
+import { message } from "../ui/api.js";
 
-const message = (e: unknown): string => String((e as Error).message ?? e);
 
 export function RulesTab({ project, onError, onNotice }: Omit<TabProps, "rooms">) {
   const [rows, setRows] = useState<RuleSummary[] | null>(null);
@@ -81,35 +82,32 @@ export function RulesTab({ project, onError, onNotice }: Omit<TabProps, "rooms">
 
   return (
     <div className="page">
-      <aside className="left" aria-label="Tag rules">
-        <div className="actions">
-          <MultiToggle selection={selection} />
-        </div>
-        <input type="search" placeholder="Filter: type code, tag, view" value={text} onChange={(e) => setText(e.target.value)} aria-label="Filter rules" />
+      <ListPane
+        label="Tag rules"
+        actions={<MultiToggle selection={selection} />}
+        search={<SearchBox value={text} onChange={setText} placeholder="Filter: type code, tag, view" label="Filter rules" />}
+      >
         {rows === null ? <p className="hint">Reading the rules…</p> : null}
         {rows?.length === 0 ? <p className="hint">No rules yet. Rules are learned from the tags on sheets exported with the Sheets or Blueprint button.</p> : null}
         {rows && rows.length > 0 && shown.length === 0 ? <p className="hint">No rule matches.</p> : null}
-        <ul>
+        <RowList>
           {shown.map((r) => (
-            <li key={r.id}>
-              <button
-                type="button"
-                className={isOn(r.id) ? "on" : ""}
-                aria-pressed={isOn(r.id)}
-                onClick={() => (selection.multi ? selection.toggle(r.id) : void open(r.id))}
-              >
-                <b>{ruleLabel(r)}</b>
-                <span>
-                  {r.key.viewport_type} · {r.tag_kind} · {scopeText(r.key, names)} · {r.sample_count} sample{r.sample_count === 1 ? "" : "s"}
-                </span>
-              </button>
-            </li>
+            <Row key={r.id} on={isOn(r.id)} onClick={() => (selection.multi ? selection.toggle(r.id) : void open(r.id))}>
+              <b>{ruleLabel(r)}</b>
+              <span>
+                {r.key.viewport_type} · {r.tag_kind} · {scopeText(r.key, names)} · {r.sample_count} sample{r.sample_count === 1 ? "" : "s"}
+              </span>
+            </Row>
           ))}
-        </ul>
-      </aside>
+        </RowList>
+      </ListPane>
       <main>
         {selection.multi ? (
-          <MultiPanel noun="rule" shown={shown.length} ticked={ticked.length} busy={busy} onAll={() => selection.set(shown.map((r) => r.id))} onNone={() => selection.set([])} onDelete={() => void removeTicked()} />
+          <MultiPanel noun="rule" shown={shown.length} ticked={ticked.length} busy={busy} onAll={() => selection.set(shown.map((r) => r.id))} onNone={() => selection.set([])}>
+            <button type="button" className="danger" disabled={busy || ticked.length === 0} onClick={() => void removeTicked()}>
+              Delete {ticked.length}
+            </button>
+          </MultiPanel>
         ) : rule ? (
           <div className="detail">
             <div className="toolbar">

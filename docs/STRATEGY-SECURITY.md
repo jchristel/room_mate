@@ -11,8 +11,8 @@ deliberately will **not**, and the invariants that must hold either way.
 Unlike the other strategy docs this one is *mostly* unbuilt by design: it
 describes a posture for a deployment that has not happened yet. The controls
 that already exist — the CORS policy, the `Host` guard, per-route body limits,
-path-safe id components — carry their own rationale in `src/main.rs` and
-`src/state.rs` and are not restated here. Deployment mechanics (firewall,
+path-safe id components — carry their own rationale in `src/guards.rs`, `src/main.rs` and
+`src/state/` and are not restated here. Deployment mechanics (firewall,
 container, volume snapshots) are ops, not code strategy.
 
 ## The deployment shift that motivates this doc

@@ -24,11 +24,12 @@ use crate::service::rls_tags::TagRequest;
 use crate::service::room_locator::RoomRef;
 use crate::service::sheet_suggest;
 use crate::service::task_build::{
-    populate_from_assignment, rls_from_sheet, rls_from_sheet_with, update_from_assignment, PopulateParams, UpdateParams,
+    aim_three_ds, populate_from_assignment, rls_from_sheet, rls_from_sheet_with, update_from_assignment,
+    PopulateParams, UpdateParams,
 };
 use crate::service::ServiceError;
 use crate::state::{AppState, Shared};
-use crate::tasks::{self, Report, ReportOutcome, Task, TaskState, TaskSummary, UpdateMode, ViewportMoves};
+use crate::tasks::{self, CameraAims, Report, ReportOutcome, Task, TaskState, TaskSummary, UpdateMode, ViewportMoves};
 
 const MAX_ROOMS_PER_REQUEST: usize = 200;
 
@@ -379,6 +380,20 @@ pub async fn http_move_task_viewports(
     tasks::move_viewports(&projects_dir(&state)?, &project_id, &id, body)
         .map(Json)
         .map_err(to_http)
+}
+
+/// A person aims a queued task's 3D views in plan (`tasks::replace_three_ds`): the walls to hide are worked out again.
+pub async fn http_aim_task_cameras(
+    State(state): State<Shared>,
+    UrlPath((project_id, id)): UrlPath<(String, String)>,
+    Json(body): Json<CameraAims>,
+) -> Result<Json<Task>, (StatusCode, String)> {
+    let projects = projects_dir(&state)?;
+    let task = tasks::load(&projects, &project_id, &id).map_err(to_http)?;
+    tasks::check_aimable(&task).map_err(to_http)?;
+    let aims: Vec<(usize, [f64; 2])> = body.cameras.iter().map(|c| (c.index, c.direction)).collect();
+    let plans = aim_three_ds(&state, &project_id, &task, &aims).map_err(service_error)?;
+    tasks::replace_three_ds(&projects, &project_id, &id, plans).map(Json).map_err(to_http)
 }
 
 #[cfg(test)]

@@ -123,6 +123,14 @@ pub struct RlsPlan {
     /// hides walls by its own rule and sees through nothing.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub three_ds: Vec<ThreeDPlan>,
+    /// This room's outline as the task was made, the target model's frame, mm: what the tasks page draws the 3D cameras
+    /// against, and what a camera is turned over again (`task_build::aim_three_ds`). Empty on a task made before it
+    /// existed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub room_outline: Vec<[f64; 2]>,
+    /// The footprints of the doors that open onto or out of this room, the same frame, for the same drawing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub doors: Vec<Vec<[f64; 2]>>,
     /// Where a person moved a viewport on the sheet (`tasks::move_viewports`), by the TEMPLATE viewport's id. Absent
     /// means every viewport goes where the template has it.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

@@ -36,5 +36,5 @@ nothing (`preview_rls`, `preview_rls_set`, `solve_sheets`, `solve_blueprint`), e
 [MCP](STRATEGY-MCP.md) and [docs/mcp-host-setup.md](mcp-host-setup.md).
 
 `static/` is found **beside the executable**, falling back to the working
-directory — which is what `cargo run` from the repository root relies on. See `main.rs`'s
+directory — which is what `cargo run` from the repository root relies on. See `guards.rs`'s
 `viewer_root` before moving either.

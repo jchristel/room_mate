@@ -371,6 +371,10 @@ def build(task, settings, values):
         # a turned plan turns its 3D views with it, so the camera faces the walls the template's faced
         v["forward"] = geo.turn_xy(v["forward"], turn)
         v["up"] = geo.turn_xy(v["up"], turn)
+        # a person aimed it in plan on the turned plan (`rls.three_ds[].direction`): that heading, at the template's pitch
+        aim = (v["server"] or {}).get("direction")
+        if aim and len(aim) == 2:
+            v["forward"], v["up"] = geo.aim_xy(v["forward"], v["up"], aim)
     plan = {
         "number": number,
         "name": rendered["sheet_name"],

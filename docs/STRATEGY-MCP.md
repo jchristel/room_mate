@@ -6,7 +6,7 @@ Part of the Roommate strategy docs: [Index](STRATEGY.md) ·
 [Entities](STRATEGY-ENTITIES.md) · [Security](STRATEGY-SECURITY.md)
 
 **Open work only.** The stdio MCP server is built and its rationale lives in
-`src/bin/mcp.rs`'s module header — the tool set, the stderr-only logging rule,
+`src/bin/mcp/`'s module header — the tool set, the stderr-only logging rule,
 the `ServiceError` → `McpError` mapping, and why settings tools are read-only.
 Host wiring is in [mcp-host-setup.md](mcp-host-setup.md).
 
@@ -23,7 +23,7 @@ Host wiring is in [mcp-host-setup.md](mcp-host-setup.md).
 
 ## The rule a new read route inherits
 
-`bin/mcp.rs` keeps **one tool per HTTP read route**, and its header states the
+`bin/mcp/` keeps **one tool per HTTP read route**, and its header states the
 count. A route added without its tool is how the two front doors drift, and the
 drift is invisible from either side alone — which is why
 `scripts/weekly_review.py` checks the claim on every run.

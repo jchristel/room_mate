@@ -20,7 +20,7 @@ comparison, pyRevit exporter). What is expensive to rediscover:
   that is the exact parallel-method-set failure R1 was written to prevent.
   `AppState` holds `Box<dyn SnapshotStore>`, so the trait must stay
   **object-safe**: a generic `put<T>` is out.
-- **Ingest streams to disk; the JSON framing lives in `state.rs`, not the
+- **Ingest streams to disk; the JSON framing lives in `state/` (`stream.rs`), not the
   store.** `put_streaming` hands back an append-only byte sink that publishes
   atomically, and `StreamingSnapshot` is what knows a snapshot is an object with
   an element array in it. A store that parsed the payload in order to write it
@@ -598,6 +598,16 @@ target model's frame, mm. The Tasks button's sheet handler reads it (`room_m/rls
   arithmetic (`sheetPreviews.ts`), and a viewport past the paper marks the task with a warning (`sheetStatus`, judged in the page from each queued sheet
   task, never stored). The preview sizes the plan, elevations and 3D views for the room (`fitToRoom`); a schedule keeps the template's size. **The plug-in
   side is not run in Revit, and the drag is not driven in a browser.**
+- **A person can aim a queued task's 3D views on the plan** (`POST .../tasks/{id}/cameras`, `task_build::aim_three_ds`, `tasks::replace_three_ds`): the body
+  is EVERY heading the task keeps, `{cameras: [{index, direction: [x, y]}]}` (index from 1, a plan heading in the target model's frame; `[]` puts every view back
+  to the template's). The server stores `direction` on the `rls.three_ds` entry and works the camera, the walls to hide and the items to see through out AGAIN
+  (`rls_three_d::three_ds` takes the aims), from the room's outline the task keeps (`rls.room_outline`, with `rls.doors`: the footprints of the doors that open
+  onto or out of the room, read once per request by `RlsReads::doors`; a task made before them cannot be aimed, 400). The template's PITCH is kept and the
+  view turned about the vertical; the plug-in does the same (`apply_geometry.aim_xy`, in `rls_task` after the plan's turn: forward and up). The page draws the
+  room, its doors and each camera as an arrow with a grip at each end (`SheetPreview`'s `room` and `onAim`; either grip sets the heading, the arrow is then
+  drawn from what the camera looks at, a fixed length back), sizes the 3D viewport for the new heading, and zooms (buttons, or Ctrl/Cmd with the wheel; drag
+  the paper to pan). A server's 3D index is 1-BASED: the preview once matched cameras from 0 and drew none. **The plug-in side is not run in Revit and the grips
+  are not driven in a browser.**
 - **Different coarse edge counts place nothing** (the blueprint rule) and say so as a finding; the sheet is still made.
 - `POST /projects/{id}/tasks/rls-preview` is the same read for one room and stores nothing, so a preview is the task. A request
   may override a view's depth (`depths`: `depth_mm`, or `to_wall`).
@@ -1207,7 +1217,7 @@ A workspace member so CI builds and tests it, and **the installer ships its `dro
 repository. `scripts/check_drofus_standalone.py` (a CI step) fails if that stops being true. It has 89 read tools over the dRofus Project API,
 API-key authentication and a write-approval gate that no tool uses; **untested against the live service**. Like `mcp.exe` the installer
 does not register it with a host, and the API key is the user's, supplied in the host's env. A session working on it follows
-`crates/drofus-mcp/CLAUDE.md` and touches nothing outside the crate. It is separate from `src/bin/mcp.rs` (the roommate data server) and from
+`crates/drofus-mcp/CLAUDE.md` and touches nothing outside the crate. It is separate from `src/bin/mcp/` (the roommate data server) and from
 the `reference` module (dRofus as uploaded CSV).
 
 ## Which document wins
@@ -1302,12 +1312,17 @@ with one, not here.
 
 - **Tests are inline**, never a `tests/` tree; a shared helper is duplicated per
   module rather than hoisted.
+- **The frontend's shared code is `src-js/ui/`** (2026-11-22; the old "two small copies" rule is retired): the server-call helpers, the
+  one filter rule (`match.ts`: every word typed must be found), `ListPane` and `useSelection` for the list pages, the sheet drawing
+  (`ui/sheet`) and `base.css` / `list-page.css`. A page keeps only its own layout and rules; a rule in a page's CSS that `ui/` already
+  has is a bug. See CODING-CONVENTIONS.md, "Frontend: what the pages share".
 - **Doc comments carry the *rationale***, not a restatement of the what. This is
   the single most visible house style; matching ordinary Rust terseness reads as
   foreign.
 - **`service/` is transport-agnostic** — never imports `axum` or `rmcp`.
-  `handlers.rs` and `bin/mcp.rs` are thin adapters over it, and `bin/mcp.rs`
-  keeps one tool per HTTP *read* route (update its count when you add one).
+  `handlers.rs` and `bin/mcp/` are thin adapters over it, and `bin/mcp/`
+  keeps one tool per HTTP *read* route (each `tools_*.rs` declares its own `#[tool_router]`, joined by `RoommateMcp::all_tools`;
+  update the count when you add one).
 - **A store's error becomes an HTTP answer in one place** (`http_error`): a store implements `StoreError` (what its error IS: not file
   backed, invalid, not found, conflict, internal) and its adapter calls `to_http` and `projects_dir`; do not write a per-adapter `match`.
   `settings_api` keeps its own mapping on purpose (404/422 and an internal error that shows its text).

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { canDismiss, canResend, countByState, findingText, modelsOf, needsAttention, newestFirst, roomsLabel, shortTime } from "./model.js";
+import { canDismiss, canResend, countByState, findingText, matchesTask, shownTasks, modelsOf, needsAttention, newestFirst, roomsLabel, shortTime } from "./model.js";
 import type { TaskSummary } from "./types.js";
 
 const row = (id: string, state: TaskSummary["state"], model = "m", at = "2026-10-20T09:00:00Z"): TaskSummary => ({
@@ -70,5 +70,29 @@ describe("findings and times", () => {
     expect(roomsLabel({ room: room("OFFICE") })).toBe("OFFICE");
     expect(roomsLabel({ room: room("OFFICE"), set_rooms: [room("OFFICE"), room("WC")] })).toBe("OFFICE + 1 room");
     expect(roomsLabel({ room: room("OFFICE"), set_rooms: [room("OFFICE"), room("WC"), room("HALL")] })).toBe("OFFICE + 2 rooms");
+  });
+});
+
+describe("filtering tasks", () => {
+  const t = { ...row("1", "queued", "House_A"), kind: "create_rls" as const, room: { room_id: "9", number: "00.01", name: "RUMPUS" }, blueprint: { name: "Rumpus bp", revision: 2 } } as TaskSummary;
+
+  it("needs every word, in any of the task's texts", () => {
+    expect(matchesTask(t, "")).toBe(true);
+    expect(matchesTask(t, "rumpus 00.01")).toBe(true);
+    expect(matchesTask(t, "RLS queued")).toBe(true);
+    expect(matchesTask(t, "rumpus kitchen")).toBe(false);
+  });
+});
+
+describe("the tasks the list shows", () => {
+  const rows = [row("a", "queued", "m1", "2026-10-20T09:00:00Z"), row("b", "failed", "m1", "2026-10-21T09:00:00Z"), row("c", "queued", "m2", "2026-10-22T09:00:00Z")];
+  const want = { model: "", states: new Set<TaskSummary["state"]>(), onlyWarnings: false, text: "", warns: () => false };
+
+  it("narrow by model, state, warning and words, newest first", () => {
+    expect(shownTasks(rows, want).map((t) => t.id)).toEqual(["c", "b", "a"]);
+    expect(shownTasks(rows, { ...want, model: "m1" }).map((t) => t.id)).toEqual(["b", "a"]);
+    expect(shownTasks(rows, { ...want, states: new Set(["queued"]) }).map((t) => t.id)).toEqual(["c", "a"]);
+    expect(shownTasks(rows, { ...want, onlyWarnings: true, warns: (id) => id === "b" }).map((t) => t.id)).toEqual(["b"]);
+    expect(shownTasks(rows, { ...want, text: "no such room" })).toEqual([]);
   });
 });

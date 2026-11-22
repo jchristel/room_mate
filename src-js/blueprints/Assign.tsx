@@ -21,9 +21,12 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { AssignCanvas } from "./AssignCanvas.js";
 import { AssignMany } from "./AssignMany.js";
+import { SearchBox } from "../ui/ListPane.js";
+import { matchesAll } from "../ui/match.js";
 import * as api from "./api.js";
 import { adjust, describe, encode, overrideFor, reset, sameOverrides } from "./overrides.js";
 import type { AssignmentRow, Blueprint, Finding, ItemOverride, Mapping, ResolveResponse, RoomRow } from "./types.js";
+import { message } from "../ui/api.js";
 
 export interface AssignProps {
   project: string;
@@ -35,7 +38,6 @@ export interface AssignProps {
   onClose(): void;
 }
 
-const message = (e: unknown): string => String((e as Error).message ?? e);
 
 const KIND_TEXT: Record<string, string> = {
   plain: "fits by shape",
@@ -185,8 +187,7 @@ export function Assign({ project, blueprint, revision, tagFields, onClose }: Ass
   const ofBlueprint = assigned.filter((a) => a.blueprint_id === blueprint.id);
   const assignedRoomIds = new Set(assigned.map((a) => a.room.room_id));
   const shown = useMemo(() => {
-    const f = filter.trim().toLowerCase();
-    return (rooms ?? []).filter((r) => !f || r.name.toLowerCase().includes(f)).slice(0, 80);
+    return (rooms ?? []).filter((r) => matchesAll(r.name, filter)).slice(0, 80);
   }, [rooms, filter]);
   const roomEdges = result?.outline.coarse.length ?? 0;
   const here = room ? assigned.find((a) => a.room.room_id === room.id) : undefined;
@@ -264,7 +265,7 @@ export function Assign({ project, blueprint, revision, tagFields, onClose }: Ass
           <>
         <h3>Room</h3>
         {!rooms ? <p className="hint">Reading the rooms…</p> : null}
-        <input type="search" placeholder="Filter rooms by name" value={filter} onChange={(e) => setFilter(e.target.value)} aria-label="Filter rooms" />
+        <SearchBox value={filter} onChange={setFilter} placeholder="Filter rooms by name" label="Filter rooms" />
         <ul className="picklist">
           {shown.map((r) => (
             <li key={r.id}>

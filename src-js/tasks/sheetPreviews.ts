@@ -5,22 +5,21 @@
 // viewports on that paper, each sized for the task's room (`fitToRoom`) and centred where the template had it. A set task's sheets are its own layout (each view's centre and size), turned into
 // the viewport shape the library preview reads. Nothing here places a view: the positions are the task's or the template's.
 
-import type { SheetRecord, ViewportInfo } from "../library/types.js";
-import { kindOf, previewOf } from "../library/preview.js";
-import type { RlsPlan, RlsSetPlan, SetSheetView, Task, ViewportMovesBody } from "./types.js";
+import type { SheetDrawing, ViewportInfo } from "../ui/sheet/types.js";
+import type { SheetRecord } from "../library/types.js";
+import { kindOf, previewOf } from "../ui/sheet/preview.js";
+import { aimed, boxExtent, headingOf, arrowLength, type Aims, type Vec } from "./camera.js";
+import { savedCentres, setKey, templateKey, type Centres } from "./saveBodies.js";
+import type { RlsPlan, RlsSetPlan, SetSheetView, Task } from "./types.js";
 
 export interface TaskSheetPreview {
   title: string;
   record: Pick<SheetRecord, "size_mm" | "sheet">;
   /** Each viewport's key, in the order of `record.sheet.view_ports`: what a move is saved against. */
   keys: (string | undefined)[];
+  /** This room's outline and its doors (model mm), drawn on the plan viewport; a create-RLS task made since the task kept them. */
+  room?: { outline: [number, number][]; doors: [number, number][][] };
 }
-
-/** Viewport centres a person set, by key (`taskSheetPreviews`), paper mm from the bottom left, y up. */
-export type Centres = ReadonlyMap<string, [number, number]>;
-
-const templateKey = (viewId: unknown): string | undefined => (typeof viewId === "number" ? `vp:${viewId}` : undefined);
-const setKey = (sheet: number, view: number): string => `set:${sheet}:${view}`;
 
 /** `p` with its box (size kept) centred on `centre`; its centre point follows, which the elevation lines and cameras drawn on the plan read. */
 function placedAt(p: ViewportInfo, centre: [number, number]): ViewportInfo {
@@ -81,26 +80,6 @@ function resized(box: Box, w: number, h: number): Box {
   return { min_x: cx - w / 2, max_x: cx + w / 2, min_y: cy - h / 2, max_y: cy + h / 2 };
 }
 
-type Vec = [number, number, number];
-
-const unit = (v: Vec): Vec => {
-  const n = Math.hypot(...v) || 1;
-  return [v[0] / n, v[1] / n, v[2] / n];
-};
-
-/**
- * How wide and tall (model mm) a box of `size` looks from a camera with these directions: the extent of its eight
- * corners along the view's right and up, which is what the plug-in crops the new 3D view to (duHast `_crop_to_box`).
- * Only the box's size matters, not where it stands, and a plan turned with its box and camera gives the same answer.
- */
-export function boxExtent(forward: Vec, up: Vec, size: Vec): [number, number] {
-  const f = unit(forward);
-  const u = unit(up);
-  const r: Vec = [f[1] * u[2] - f[2] * u[1], f[2] * u[0] - f[0] * u[2], f[0] * u[1] - f[1] * u[0]];
-  const along = (axis: Vec) => Math.abs(axis[0]) * size[0] + Math.abs(axis[1]) * size[1] + Math.abs(axis[2]) * size[2];
-  return [along(r), along(u)];
-}
-
 /**
  * The template 3D viewport sized for the task's footprint: the new view is cropped tight round its section box, whose
  * plan is the task's plan crop and whose height is the template's, seen along the template's camera. The paper size
@@ -108,13 +87,15 @@ export function boxExtent(forward: Vec, up: Vec, size: Vec): [number, number] {
  * A's sheets). The export gives a 3D view no scale (0), so the sheet's plan scale stands in for it: 50H sheets
  * draw their 3D view at the same scale as the plan. Null when any of those is unknown.
  */
-function threeDBox(p: ViewportInfo, rls: RlsPlan, scale: number | undefined): Box | null {
+function threeDBox(p: ViewportInfo, rls: RlsPlan, scale: number | undefined, heading: [number, number] | null): Box | null {
   const [v, box, crop, footprint] = [p.view, p.bounding_box, p.view?.bounding_box, rls.plan_crop];
   const [lo, hi, f, u] = [v?.section_box_min, v?.section_box_max, v?.forward_direction, v?.up_direction];
   if (!box || !crop || !footprint || !lo || !hi || !f || !u || !scale) return null;
+  // a camera a person aimed looks another way, so the box seen along it has another extent
+  const [forward, up] = heading ? aimed([f.x, f.y, f.z ?? 0], [u.x, u.y, u.z ?? 0], heading) : [[f.x, f.y, f.z ?? 0] as Vec, [u.x, u.y, u.z ?? 0] as Vec];
   const [w, h] = boxExtent(
-    [f.x, f.y, f.z ?? 0],
-    [u.x, u.y, u.z ?? 0],
+    forward,
+    up,
     [footprint.max[0] - footprint.min[0], footprint.max[1] - footprint.min[1], (hi.z ?? 0) - (lo.z ?? 0)],
   );
   const margin = [box.max_x - box.min_x - (crop.max_x - crop.min_x) / scale, box.max_y - box.min_y - (crop.max_y - crop.min_y) / scale];
@@ -129,7 +110,7 @@ function threeDBox(p: ViewportInfo, rls: RlsPlan, scale: number | undefined): Bo
  * The plan's crop, the elevation lines (and their crop's width) and each 3D camera are replaced with the task's so the lines and arrows the
  * preview draws on the plan agree with the boxes. A 3D view is sized by `threeDBox`.
  */
-export function fitToRoom(sheet: SheetRecord["sheet"], rls: RlsPlan | undefined): SheetRecord["sheet"] {
+export function fitToRoom(sheet: SheetRecord["sheet"], rls: RlsPlan | undefined, aims?: Aims): SheetRecord["sheet"] {
   if (!rls || !sheet.view_ports) return sheet;
   const lines = new Map<number, [[number, number], [number, number]]>();
   for (const m of rls.markers ?? []) for (const v of m.views) lines.set(v.view_id, [v.line_start, v.line_end]);
@@ -141,13 +122,17 @@ export function fitToRoom(sheet: SheetRecord["sheet"], rls: RlsPlan | undefined)
     const scale = p.view?.view_scale;
     const box = p.bounding_box;
     if (kind === "three_d") {
-      const cam = cameras.find((c) => c.index === threeD++);
+      // the server numbers a task's 3D views from 1
+      const cam = cameras.find((c) => c.index === ++threeD);
       if (!cam || !p.view) return p;
-      const sized = threeDBox(p, rls, scale || planScale);
-      // the preview draws a camera from its section box and direction: put the box where the task looks, half a
-      // diagonal (the eye's distance) across, so the arrow starts at the eye and ends at the room
-      const [dx, dy] = [cam.looks_at[0] - cam.eye[0], cam.looks_at[1] - cam.eye[1]];
-      const half = Math.hypot(dx, dy) / Math.SQRT2;
+      const heading = headingOf(cam, aims);
+      // a heading a person chose (saved or not) changes the view; the template's own turned direction does not
+      const chosen = aims?.get(cam.index) ?? cam.direction;
+      const sized = threeDBox(p, rls, scale || planScale, chosen ? heading : null);
+      // the preview draws a camera from its section box and direction: put the box where the task looks, with the
+      // arrow a fixed length across (not the eye's distance, which is far outside the plan), so it ends at the room
+      const [dx, dy] = heading ?? [0, 1];
+      const half = arrowLength(rls) / Math.SQRT2;
       const [lo, hi] = [
         { x: cam.looks_at[0] - half, y: cam.looks_at[1] - half },
         { x: cam.looks_at[0] + half, y: cam.looks_at[1] + half },
@@ -187,18 +172,11 @@ export function fitToRoom(sheet: SheetRecord["sheet"], rls: RlsPlan | undefined)
   return { ...sheet, view_ports };
 }
 
-/** The centres a `create_rls` task already holds (`rls.viewport_moves`), by key. */
-export function savedCentres(task: Task): Map<string, [number, number]> {
-  const out = new Map<string, [number, number]>();
-  for (const m of task.rls?.viewport_moves ?? []) out.set(`vp:${m.view_id}`, m.centre_mm);
-  return out;
-}
-
 /**
  * The drawings for `task`, one per sheet it makes or copies, in order; empty when it has none. `draft` holds centres a
  * person has set and not saved; they go over the ones the task holds. A set's saved centres are in its views already.
  */
-export function taskSheetPreviews(task: Task, draft?: Centres): TaskSheetPreview[] {
+export function taskSheetPreviews(task: Task, draft?: Centres, aims?: Aims): TaskSheetPreview[] {
   const set = task.rls_set;
   if (set) {
     const size_mm = set.paper_mm ? { width_mm: set.paper_mm[0], height_mm: set.paper_mm[1] } : paperOf(set.sheet_size);
@@ -221,7 +199,8 @@ export function taskSheetPreviews(task: Task, draft?: Centres): TaskSheetPreview
   const centres = new Map([...savedCentres(task), ...(draft ?? [])]);
   return task.sheets.map((s) => {
     const size_mm = asked ?? s.size_mm;
-    const fitted = (task.kind === "create_rls" ? fitToRoom(s.sheet as SheetRecord["sheet"], task.rls) : s.sheet) as SheetRecord["sheet"];
+    const fitted = (task.kind === "create_rls" ? fitToRoom(s.sheet as SheetRecord["sheet"], task.rls, aims) : s.sheet) as SheetRecord["sheet"];
+    const outline = task.kind === "create_rls" ? (task.rls?.room_outline ?? []) : [];
     const keys = (fitted.view_ports ?? []).map((p) => templateKey((p as { view_id?: unknown }).view_id));
     // the viewport keeps the size the room gave it and goes where it was put
     const view_ports = fitted.view_ports?.map((p, i) => {
@@ -233,30 +212,9 @@ export function taskSheetPreviews(task: Task, draft?: Centres): TaskSheetPreview
       title: `${s.sheet_number}${s.sheet_name ? ` ${s.sheet_name}` : ""}${asked ? ` on ${String(task.rls?.sheet_size).toUpperCase()}` : ""}`,
       record: size_mm ? { size_mm, sheet } : { sheet },
       keys,
+      ...(outline.length > 0 && { room: { outline, doors: task.rls?.doors ?? [] } }),
     };
   });
-}
-
-/**
- * What to send to save `draft`: a create-RLS task's whole list of moved viewports (what it holds with the draft over
- * it), a set's changed views. Null when there is nothing to save. `[]` for a create-RLS task is the way to put every
- * viewport back, so that is `clearMoves`, not this.
- */
-export function movesBody(task: Task, draft: Centres): ViewportMovesBody | null {
-  if (draft.size === 0) return null;
-  if (task.rls_set) {
-    const set_moves = [...draft].flatMap(([key, centre_mm]) => {
-      const m = /^set:(\d+):(\d+)$/.exec(key);
-      return m ? [{ sheet: Number(m[1]), view: Number(m[2]), centre_mm }] : [];
-    });
-    return set_moves.length > 0 ? { set_moves } : null;
-  }
-  const merged = new Map([...savedCentres(task), ...draft]);
-  const moves = [...merged].flatMap(([key, centre_mm]) => {
-    const m = /^vp:(-?\d+)$/.exec(key);
-    return m ? [{ view_id: Number(m[1]), centre_mm }] : [];
-  });
-  return moves.length > 0 ? { moves } : null;
 }
 
 /** Whether the task's sheets fit their paper: `clipping` when any viewport reaches past the edge. `unknown` for a task
@@ -267,10 +225,10 @@ export interface SheetStatus {
   clipped: number;
 }
 
-export function sheetStatus(task: Task, draft?: Centres): SheetStatus {
+export function sheetStatus(task: Task, draft?: Centres, aims?: Aims): SheetStatus {
   let measured = 0;
   let clipped = 0;
-  for (const p of taskSheetPreviews(task, draft)) {
+  for (const p of taskSheetPreviews(task, draft, aims)) {
     const preview = previewOf(p.record);
     if (!preview?.measured) continue;
     measured += 1;

@@ -1,5 +1,6 @@
 // Pure helpers for the library page: wording and filtering, with no DOM.
 
+import { matchesAll } from "../ui/match.js";
 import type { RoomSummary, RuleSummary, Sample, SheetSummary, Suggestion } from "./types.js";
 
 const trim = (s: string): string => s.trim();
@@ -39,24 +40,15 @@ export const mm = (v: number): string => (Math.round(v * 10) / 10).toString();
 
 /** Rules whose key contains every word of `text` (case-insensitive), in a stable order. */
 export function filterRules(rules: readonly RuleSummary[], text: string): RuleSummary[] {
-  const words = trim(text).toLowerCase().split(/\s+/).filter(Boolean);
-  const hay = (r: RuleSummary) => [r.key.tagged_category, r.key.type_code, r.key.tag_category, r.key.tag_family, r.key.tag_type, r.key.viewport_type, r.tag_kind].join(" ").toLowerCase();
+  const hay = (r: RuleSummary) => [r.key.tagged_category, r.key.type_code, r.key.tag_category, r.key.tag_family, r.key.tag_type, r.key.viewport_type, r.tag_kind].join(" ");
   return rules
-    .filter((r) => {
-      const h = hay(r);
-      return words.every((w) => h.includes(w));
-    })
+    .filter((r) => matchesAll(hay(r), text))
     .sort((a, b) => ruleLabel(a).localeCompare(ruleLabel(b)) || a.key.viewport_type.localeCompare(b.key.viewport_type));
 }
 
 /** Sheets whose number, name, document, rooms or room key contain every word of `text` (case-insensitive), in the order given. */
 export function filterSheets<T extends SheetSummary>(sheets: readonly T[], text: string): T[] {
-  const words = trim(text).toLowerCase().split(/\s+/).filter(Boolean);
-  const hay = (s: T) => [s.sheet_number, s.sheet_name, s.document_title, s.room_key ?? "", ...(s.rooms ?? [])].join(" ").toLowerCase();
-  return sheets.filter((s) => {
-    const h = hay(s);
-    return words.every((w) => h.includes(w));
-  });
+  return sheets.filter((s) => matchesAll([s.sheet_number, s.sheet_name, s.document_title, s.room_key ?? "", ...(s.rooms ?? [])].join(" "), text));
 }
 
 /** Where a sample was read: the sheet, the tag and the element, as Revit numbered them. */

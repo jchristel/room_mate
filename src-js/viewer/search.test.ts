@@ -76,4 +76,11 @@ describe("computeMatches", () => {
   it("collects ids over the whole payload, not one level", () => {
     expect([...computeMatches(rooms, "a", all, ["drofus"])!]).toEqual(["1", "2"]);
   });
+
+  it("needs every word, each in any field", () => {
+    const one = computeMatches(rooms, "a", all, ["drofus"])!;
+    const both = computeMatches(rooms, "a nothing-like-this", all, ["drofus"])!;
+    expect(one.size).toBeGreaterThan(0);
+    expect(both.size).toBe(0);
+  });
 });

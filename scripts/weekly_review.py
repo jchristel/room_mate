@@ -43,7 +43,7 @@ IGNORE_FILE = Path(__file__).resolve().parent / "weekly_review_ignore.toml"
 # holds `roommate-shared` — the settings types and `RoomBoundary` among them —
 # which the docs still cite as freely as anything in `src/`.
 SOURCE_TREES = ("src", "crates", "src-js", "static", "extractor", "scripts")
-SOURCE_SUFFIXES = {".rs", ".ts", ".js", ".py", ".html"}
+SOURCE_SUFFIXES = {".rs", ".ts", ".tsx", ".js", ".py", ".html"}
 
 # Generated, and megabytes of minified vendor code: it would match almost any
 # identifier by chance and silence real findings.
@@ -299,13 +299,13 @@ def check_paths(findings: Findings) -> None:
 # --------------------------------------------------------------------------
 
 def check_mcp_parity(findings: Findings) -> None:
-    """Every HTTP *read* route should have an MCP tool, per `bin/mcp.rs`'s claim.
+    """Every HTTP *read* route should have an MCP tool, per `bin/mcp/`'s claim.
 
     Mutating routes are deliberately absent from MCP (ingest, activate, settings
     writes) and are filtered out here rather than reported every week.
     """
     main = (ROOT / "src/main.rs").read_text(encoding="utf-8")
-    mcp = (ROOT / "src/bin/mcp.rs").read_text(encoding="utf-8")
+    mcp = "\n".join(p.read_text(encoding="utf-8") for p in sorted((ROOT / "src/bin/mcp").glob("*.rs")))
 
     routes: list[str] = []
     for m in re.finditer(r'\.route\(\s*"([^"]+)"\s*,\s*(.+?)\)\s*(?:\.layer|\n)', main, re.S):
@@ -345,6 +345,23 @@ def check_mcp_parity(findings: Findings) -> None:
         "/api/settings/projects": "list_project_settings",
         "/api/settings/projects/{id}": "get_project_settings",
         "/api/settings/resolve/{id}": "resolve_project_settings",
+        "/projects/{id}/blueprints": "list_blueprints",
+        "/projects/{id}/blueprints/capture": "capture_blueprint",
+        "/projects/{id}/blueprints/{blueprint}": "get_blueprint",
+        "/projects/{id}/blueprints/{blueprint}/bundle": "get_blueprint_bundle",
+        "/projects/{id}/blueprints/{blueprint}/resolve": "resolve_blueprint",
+        "/projects/{id}/assignments": "list_assignments",
+        "/projects/{id}/tasks": "list_tasks",
+        "/projects/{id}/tasks/{task}": "get_task",
+        "/projects/{id}/tagrules": "list_tag_rules",
+        "/projects/{id}/tagrules/{rule}": "get_tag_rule",
+        "/projects/{id}/sheets": "list_sheets",
+        "/projects/{id}/sheets/suggest": "suggest_sheets",
+        "/projects/{id}/sheets/{sheet}": "get_sheet",
+        "/projects/{id}/sheets/{sheet}/elevations": "get_sheet_elevations",
+        "/projects/{id}/reports/columns": "list_report_columns",
+        "/api/reports/projects/{project}": "list_saved_reports",
+        "/api/reports/projects/{project}/{report}": "get_saved_report",
     }
     for route in routes:
         tool = mapping.get(route, "?")
@@ -353,7 +370,7 @@ def check_mcp_parity(findings: Findings) -> None:
         elif tool is None:
             hits.append(f"{route:<58} no MCP tool (known gap -- is it still intended?)")
         elif f"fn {tool}(" not in mcp:
-            hits.append(f"{route:<58} maps to `{tool}`, which is gone from bin/mcp.rs")
+            hits.append(f"{route:<58} maps to `{tool}`, which is gone from bin/mcp/")
 
     numbers = {
         "Fourteen": 14, "Fifteen": 15, "Sixteen": 16, "Seventeen": 17, "Eighteen": 18,
@@ -362,7 +379,7 @@ def check_mcp_parity(findings: Findings) -> None:
     if claimed:
         said = numbers.get(claimed.group(1).capitalize())
         if said and said != tool_count:
-            hits.append(f"bin/mcp.rs header says {claimed.group(1)} tools; {tool_count} `#[tool(` found")
+            hits.append(f"bin/mcp/main.rs header says {claimed.group(1)} tools; {tool_count} `#[tool(` found")
 
     findings.add(
         "HTTP read routes without an MCP tool",

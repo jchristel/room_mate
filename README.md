@@ -140,7 +140,7 @@ not been run in Revit: [docs/EXTRACTOR.md](docs/EXTRACTOR.md).
 Two read-only [MCP](https://modelcontextprotocol.io) servers, so an assistant such as
 Claude Code can answer questions about RoomMate and compare it with live dRofus data.
 
-- **RoomMate** ([`src/bin/mcp.rs`](src/bin/mcp.rs), `mcp.exe`): one tool per read route,
+- **RoomMate** ([`src/bin/mcp/`](src/bin/mcp/), `mcp.exe`): one tool per read route,
   over stdio or, for a shared server on a closed network, HTTP (`--http`) behind a
   Host check and an optional token. Its one write is uploading a reference CSV.
 - **dRofus** ([`crates/drofus-mcp`](crates/drofus-mcp)): 89 read tools over the dRofus

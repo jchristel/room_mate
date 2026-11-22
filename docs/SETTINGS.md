@@ -3,7 +3,7 @@
 Every setting a project file or the server file accepts, with a sample of each.
 This is a **reference for people editing TOML**: what a setting is called, what
 values it takes and what it looks like. Why a setting behaves as it does lives
-in the type's doc comment (`crates/roommate-shared/src/settings/mod.rs`) and in
+in the type's doc comment (`crates/roommate-shared/src/settings/`) and in
 [Architecture & Strategy](STRATEGY.md) — this page does not restate it.
 
 Everything on this page is also editable at `/settings/`, which holds the whole

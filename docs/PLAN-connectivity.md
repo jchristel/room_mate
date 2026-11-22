@@ -171,7 +171,7 @@ covers are ringed dotted: step 1's worklist, on the plan (`OpenZoneOverlay`).
 
 - **Storage type of the authored connections.** A JSON document beside the settings
   for now (see "Storage inputs"). Decide it from that list; the one module that
-  owns the file is `src/connections.rs`.
+  owns the file is `src/connections/`.
 - **Stack view follow-ups.** Candidates ignore a room's type, so `STAIR PRES` and plant rooms
   rank on name alone; a third signal (room type, `classification`) would help. A stack with
   two rooms on its top level suggests from the first only.
@@ -315,7 +315,7 @@ requirement; the design must simply not break it.
 
 - **`get_connectivity`** — one tool for the one new read route, parameters
   mirroring the route (`project_id`, `building`, `milestone`, `filter`, `from`,
-  `to`, `metric`). Update the header count in `src/bin/mcp.rs` and the list in
+  `to`, `metric`). Update the header count in `src/bin/mcp/` and the list in
   [MCP](STRATEGY-MCP.md); `scripts/weekly_review.py` checks both.
 - **The description is the product here, as it was for windows and spaces.** It
   must say, in as many words: this graph is **doors only**; a room with no door
@@ -343,7 +343,7 @@ UI and how much a list in a file would do.
 
 ### The open zone (built; this replaced the pairwise edge)
 
-**Status: built** (`src/connections.rs`, `service::connectivity`, the viewer's
+**Status: built** (`src/connections/`, `service::connectivity`, the viewer's
 "Open zones" editor). The first design was a pairwise edge; it was replaced by a
 **zone**, a named set of rooms the user declares to be one open space, because
 what a person knows is "this whole area is open", not which of 47 wall segments
@@ -461,7 +461,7 @@ adding roles, so the record stayed small.
 
 **Status: built.** A vertical connection is **one explicit link between two
 rooms on different storeys, drawn by hand**, one floor-to-floor hop per link
-(`src/connections.rs`, `service::connectivity`, the editor's "Vertical link"
+(`src/connections/`, `service::connectivity`, the editor's "Vertical link"
 mode). A lift or stair is a run of links (level 1 to 2, 2 to 3, ...), never a jump
 from level 1 to 8.
 

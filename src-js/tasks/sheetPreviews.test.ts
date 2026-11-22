@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 
-import { previewOf } from "../library/preview.js";
-import { boxExtent, fitToRoom, movesBody, sheetStatus, paperOf, taskSheetPreviews } from "./sheetPreviews.js";
+import { previewOf } from "../ui/sheet/preview.js";
+import { aimed, boxExtent, headingOf } from "./camera.js";
+import { aimsBody, movesBody } from "./saveBodies.js";
+import { fitToRoom, sheetStatus, paperOf, taskSheetPreviews } from "./sheetPreviews.js";
 import type { Task } from "./types.js";
 
 const base = (over: Partial<Task>): Task =>
@@ -156,13 +158,98 @@ describe("3D viewport", () => {
     };
     const rls = {
       plan_crop: { min: [0, 0] as [number, number], max: [6000, 3000] as [number, number] },
-      three_ds: [{ index: 0, eye: [0, -3000] as [number, number], looks_at: [3000, 1500] as [number, number] }],
+      three_ds: [{ index: 1, eye: [0, -3000] as [number, number], looks_at: [3000, 1500] as [number, number] }],
     };
     const b = fitToRoom(sheet, rls).view_ports![1]!.bounding_box!;
     // 6000 mm across at 1:50 is 120 mm, plus the margin; the height is the template's, and it stays where it was
     expect(b.max_x - b.min_x).toBeCloseTo(126, 6);
     expect(b.max_y - b.min_y).toBeCloseTo(56, 6);
     expect((b.min_x + b.max_x) / 2).toBeCloseTo(43, 6);
+  });
+});
+
+describe("aiming the 3D views", () => {
+  const camera = { index: 1, eye: [0, -3000] as [number, number], looks_at: [3000, 1500] as [number, number] };
+  const sheet = {
+    view_ports: [
+      {
+        vp_type: "floor plan",
+        centre_point: { x: 100, y: 100 },
+        bounding_box: { min_x: 40, min_y: 70, max_x: 160, max_y: 130 },
+        view: { view_scale: 50, bounding_box: { min_x: 0, min_y: 0, max_x: 6000, max_y: 3000 } },
+      },
+      {
+        vp_type: "three d",
+        bounding_box: { min_x: 0, min_y: 0, max_x: 86, max_y: 56 },
+        view: {
+          view_scale: 0,
+          bounding_box: { min_x: 0, min_y: 0, max_x: 4000, max_y: 2500 },
+          forward_direction: { x: 0, y: 1, z: 0 },
+          up_direction: { x: 0, y: 0, z: 1 },
+          section_box_min: { x: 0, y: 0, z: 0 },
+          section_box_max: { x: 4000, y: 3000, z: 2500 },
+        },
+      },
+    ],
+  };
+  const rls = { plan_crop: { min: [0, 0] as [number, number], max: [6000, 3000] as [number, number] }, three_ds: [camera] };
+
+  it("take the heading from the person, else the task, else the eye", () => {
+    expect(headingOf(camera)).toEqual([3000 / Math.hypot(3000, 4500), 4500 / Math.hypot(3000, 4500)]);
+    expect(headingOf({ ...camera, direction: [0, 1] })).toEqual([0, 1]);
+    expect(headingOf({ ...camera, direction: [0, 1] }, new Map([[1, [1, 0]]]))).toEqual([1, 0]);
+    expect(headingOf({ ...camera, eye: camera.looks_at })).toBeNull();
+  });
+
+  it("turn a view to the heading at its own pitch, its up vector with it", () => {
+    const [f, u] = aimed([1, 0, -1], [-1, 0, 1], [0, 1]);
+    expect(f[0]).toBeCloseTo(0);
+    expect(f[1]).toBeCloseTo(1);
+    expect(f[2]).toBe(-1);
+    expect(u[0]).toBeCloseTo(0);
+    expect(u[1]).toBeCloseTo(-1);
+    expect(aimed([0, 0, -2], [0, 1, 0], [1, 0])[0]).toEqual([2, 0, -2]);
+  });
+
+  it("size the 3D viewport for the way it now looks", () => {
+    const across = (aims?: Map<number, [number, number]>) => {
+      const b = fitToRoom(sheet, rls, aims).view_ports![1]!.bounding_box!;
+      return b.max_x - b.min_x;
+    };
+    // north: the 6000 mm side faces the viewer (6000 / 50 + 6); east: the 3000 mm side does
+    expect(across()).toBeCloseTo(126, 6);
+    expect(across(new Map([[1, [1, 0]]]))).toBeCloseTo(66, 6);
+  });
+
+  it("draw the camera as an arrow ending where the task looks, with a grip frame to put it back in the model", () => {
+    const drawn = previewOf({ size_mm: { width_mm: 420, height_mm: 297 }, sheet: fitToRoom(sheet, rls, new Map([[1, [1, 0]]])) })!;
+    const arrow = drawn.arrows[0]!;
+    expect(arrow.index).toBe(1);
+    // east: the arrow runs left to right and ends at the room's middle, 3000 / 50 along the plan from its centre
+    expect(arrow.head[0]!.x).toBeGreaterThan(arrow.x1);
+    expect(arrow.head[0]!.y).toBeCloseTo(arrow.y1, 6);
+    const [mx, my] = drawn.frame!.toModel(arrow.head[0]!.x, arrow.head[0]!.y);
+    expect(mx).toBeCloseTo(3000, 3);
+    expect(my).toBeCloseTo(1500, 3);
+    expect(drawn.frame!.toPaper([mx, my])[0]).toBeCloseTo(arrow.head[0]!.x, 6);
+  });
+
+  it("send every heading the task keeps, the person's over its own", () => {
+    const task = base({ rls: { three_ds: [{ ...camera, direction: [0, 1] }, { ...camera, index: 2 }] } });
+    expect(aimsBody(task, new Map())).toBeNull();
+    expect(aimsBody(task, new Map([[2, [1, 0]]]))).toEqual({ cameras: [{ index: 1, direction: [0, 1] }, { index: 2, direction: [1, 0] }] });
+    expect(aimsBody(task, new Map([[1, [1, 0]]]))).toEqual({ cameras: [{ index: 1, direction: [1, 0] }] });
+  });
+
+  it("carry the room's outline and doors to the drawing", () => {
+    const withRoom = base({
+      kind: "create_rls",
+      rls: { room_outline: [[0, 0], [4000, 0], [4000, 3000]], doors: [[[0, 0], [900, 0], [900, 100]]] },
+      sheets: [{ revit_sheet_id: "1", document_title: "D", sheet_number: "S", sheet }],
+    });
+    expect(taskSheetPreviews(withRoom)[0]!.room?.outline.length).toBe(3);
+    expect(taskSheetPreviews(withRoom)[0]!.room?.doors.length).toBe(1);
+    expect(taskSheetPreviews(base({ kind: "create_rls", sheets: [{ revit_sheet_id: "1", document_title: "D", sheet_number: "S", sheet }] }))[0]!.room).toBeUndefined();
   });
 });
 

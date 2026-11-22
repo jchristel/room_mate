@@ -1,6 +1,7 @@
 // What the tasks page knows about a task that is not drawing: the words for a state, what a person
 // may do with a task in each state, and how a finding reads. Pure, so it is tested.
 
+import { matchesAll } from "../ui/match.js";
 import type { Finding, Task, TaskKind, TaskState, TaskSummary, UpdateMode } from "./types.js";
 
 export const STATES: readonly TaskState[] = [
@@ -34,6 +35,29 @@ export const KIND_TEXT: Record<TaskKind, string> = {
 export function roomsLabel(t: { room: { name: string }; set_rooms?: unknown[] }): string {
   const more = (t.set_rooms?.length ?? 0) - 1;
   return more > 0 ? `${t.room.name} + ${more} room${more === 1 ? "" : "s"}` : t.room.name;
+}
+
+/** Tasks whose room (every room of a set), room number, model, kind, state or blueprint contains every word of `text`. */
+export function matchesTask(t: TaskSummary, text: string): boolean {
+  const rooms = (t.set_rooms?.length ? t.set_rooms : [t.room]).flatMap((r) => [r.name, r.number ?? ""]);
+  return matchesAll([...rooms, t.model_id, KIND_TEXT[t.kind], STATE_TEXT[t.state], t.blueprint?.name ?? ""].join(" "), text);
+}
+
+/** The tasks the list shows, newest first: in the chosen model, in one of the chosen states (none chosen is all), with a
+ * sheet warning when asked for, and matching the words typed. */
+export function shownTasks(
+  rows: readonly TaskSummary[],
+  want: { model: string; states: ReadonlySet<TaskState>; onlyWarnings: boolean; text: string; warns(id: string): boolean },
+): TaskSummary[] {
+  return newestFirst(
+    rows.filter(
+      (r) =>
+        (!want.model || r.model_id === want.model) &&
+        (want.states.size === 0 || want.states.has(r.state)) &&
+        (!want.onlyWarnings || want.warns(r.id)) &&
+        matchesTask(r, want.text),
+    ),
+  );
 }
 
 export const UPDATE_MODE_TEXT: Record<UpdateMode, string> = {

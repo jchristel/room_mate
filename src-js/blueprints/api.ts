@@ -3,7 +3,10 @@
 // ordinary case for authored data, and the last writer winning unseen is what would make
 // anyone distrust it.
 
-import { apiGet, apiSend } from "./common.js";
+import { send, projectBase as base, type Sent } from "../ui/api.js";
+
+export type { Sent };
+import { apiGet } from "../ui/common.js";
 import { DEFAULT_TAG_FIELDS, tagFieldsOf } from "./tagText.js";
 import type {
   Bundle,
@@ -22,19 +25,6 @@ import type {
   SourceRoom,
 } from "./types.js";
 
-export type Sent<T> = { ok: true; value: T } | { ok: false; error: string };
-
-const base = (project: string) => `/projects/${encodeURIComponent(project)}`;
-
-async function send<T>(method: string, url: string, body: unknown): Promise<Sent<T>> {
-  const r = await apiSend(method, url, body);
-  if (!r.ok) return { ok: false, error: r.text || `HTTP ${r.status}` };
-  try {
-    return { ok: true, value: (r.text ? JSON.parse(r.text) : null) as T };
-  } catch {
-    return { ok: false, error: "the server's answer was not JSON" };
-  }
-}
 
 /** The project's `[tags] ffe` fields: the setting the main viewer's FF&E tags use. A project whose settings cannot
  *  be read gets the default, as the viewer does. */

@@ -24,7 +24,7 @@ fn_call_width = 90
 chain_width = 90
 single_line_if_else_max_width = 80
 
-# `bin/mcp.rs` carries the MCP tool descriptions as long single-string
+# `bin/mcp/` carries the MCP tool descriptions as long single-string
 # attributes. The default threshold wraps each one into a multi-line
 # `#[tool(\n    description = "…"\n)]`, which adds two lines per tool and helps
 # nothing — the string is long because the description is long.

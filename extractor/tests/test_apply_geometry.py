@@ -86,6 +86,21 @@ class Turns(unittest.TestCase):
         self.assertEqual(v[2], -1.0)
         self.assertEqual([1.0, 2.0, 3.0], g.turn_xy([1.0, 2.0, 3.0], 0.0))
 
+    def test_aim_xy_turns_the_view_to_the_heading_at_its_own_pitch(self):
+        # looking east and down at 45 degrees, up is up and a little west
+        forward, up = g.aim_xy([1.0, 0.0, -1.0], [-1.0, 0.0, 1.0], [0.0, 5.0])
+        self.assertAlmostEqual(0.0, forward[0])
+        self.assertAlmostEqual(1.0, forward[1])
+        self.assertEqual(-1.0, forward[2])
+        self.assertAlmostEqual(0.0, up[0])
+        self.assertAlmostEqual(-1.0, up[1])
+        self.assertEqual(1.0, up[2])
+
+    def test_aim_xy_gives_a_view_looking_straight_down_45_degrees_and_ignores_no_heading(self):
+        forward, _ = g.aim_xy([0.0, 0.0, -2.0], [0.0, 1.0, 0.0], [1.0, 0.0])
+        self.assertEqual([2.0, 0.0, -2.0], forward)
+        self.assertEqual(([1.0, 0.0, -1.0], [0.0, 0.0, 1.0]), g.aim_xy([1.0, 0.0, -1.0], [0.0, 0.0, 1.0], [0.0, 0.0]))
+
     def test_a_turned_box_reaches_past_its_unturned_corners(self):
         lo, hi = g.turned_extent([0.0, 0.0], [4.0, 2.0], 90.0)
         for got, want in zip(lo + hi, [1.0, -1.0, 3.0, 3.0]):

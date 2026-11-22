@@ -62,9 +62,10 @@ export function computeMatches(
   fields: ReadonlySet<string>,
   sources: readonly string[],
 ): Set<string> | null {
-  const q = query.trim().toLowerCase();
-  if (!q) return null;
+  const words = query.toLowerCase().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return null;
   const ids = new Set<string>();
-  for (const r of rooms) if (roomMatches(r, q, fields, sources)) ids.add(r.id);
+  // every word must be found, each in any enabled field: "bed 01" is a bedroom with 01 somewhere, not that exact text
+  for (const r of rooms) if (words.every((w) => roomMatches(r, w, fields, sources))) ids.add(r.id);
   return ids;
 }

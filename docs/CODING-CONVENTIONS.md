@@ -34,17 +34,14 @@ The recorded judgements are the ignore file's `[modules]` section; the rest of
 the backlog is whatever the check reports; two of them are worth naming because the answer is
 known and only the writing-down is missing:
 
-- **`roommate-shared`'s `settings/mod.rs` reads as unfinished.** The server's
-  `src/settings/mod.rs` is now the thin re-export the pattern describes, but
-  only because the types moved out *whole* into `crates/roommate-shared` — the
-  bulk moved with them rather than being split.
-  The types are already grouped by concern in the file (area policy, reference
-  field config, hierarchy, milestones, colour plans), so the seams exist.
-- **`areas.rs` and `rooms.rs` are cohesive by argument, not by accident** — one
-  geometry pipeline and one assembly pipeline, each with an invariant only
-  checkable by reading the parts together. That argument has never been written
-  into either header, so the next reader cannot tell it was decided rather than
-  deferred. Writing it is the whole task.
+- **`roommate-shared`'s `settings/mod.rs` was split along the seams the types already had** (2026-11-22): `appearance`,
+  `policy`, `reference`, `colour` and `milestone` beside `validate`. The server's `src/settings/mod.rs` stays the thin
+  re-export, so no path outside the crate changed.
+- **`areas` and `rooms` were cohesive by argument and have now been split along the seams that held** (2026-11-22):
+  `service/areas/` is the footprint geometry (`footprint`) and the hierarchy of groups (`hierarchy`) round the response
+  types and `assemble_areas`; `service/rooms/` is the filter language (`filter`) and the assembly (`assemble`) round the
+  response and the scope. Every module over the trigger is now either split like these or judged and recorded in
+  `scripts/weekly_review_ignore.toml`, with the reason also in its own header.
 
 ## Tests
 - Unit tests live **inline** as `#[cfg(test)] mod tests` at the bottom of the
@@ -124,14 +121,37 @@ The zero-build vanilla rule was a proof-of-concept-stage decision and is
   conversion, which on code with no test coverage is a refactor of shared
   mutable globals wearing a translation's clothes.
 
+## Frontend: what the pages share lives in `src-js/ui/`
+
+Until 2026-11-22 the pages followed a "two pages, two small copies, no shared module" rule: each page carried its own
+`common.ts`, `Sent`/`send`/`message`, filter rule and CSS. That was right for two pages and wrong for five: the copies
+had started to differ (three banner styles, a filter that took several words on one page and one on another), and every
+new page began by copying the last. **The rule is retired for the frontend.** (The Rust-side rule that a small *test*
+helper is duplicated per module is unchanged.)
+
+- **A page keeps only what is its own**: its layout, its types, its rules (`model.ts`), its endpoints. Anything a second
+  page needs goes to `src-js/ui/`, imported by relative path, and the page's copy is deleted, not left beside it.
+- **`ui/` holds** `common.ts` (the typed face of `static/common.js`), `api.ts` (`Sent`, `send`, `message`), `match.ts` (the one
+  filter rule: every word typed must be found), `Selection.tsx` (single or multiple choice), `ListPane.tsx` (the left pane
+  of a list page: actions, filter box, preset chips, rows) and `sheet/` (the sheet drawing: `previewOf`, `SheetPreview` and
+  its zoom).
+- **CSS has three layers**, loaded in this order by a page's `main.tsx`: `ui/base.css` (shell, buttons, chips, tags,
+  banners, the rule between sections: every page), `ui/list-page.css` (the two-pane list layout: tasks and the library),
+  then the page's own `style.css`. A page's stylesheet that repeats a rule already in `ui/` is a bug. Colours are
+  `static/tokens.css` variables only (`--danger` for something to act on; never a fallback hex).
+- **What is NOT shared on purpose**: the viewer's own CSS and store (its own world), the settings page's form controls, and
+  anything only one page uses. Move it to `ui/` when a *second* page wants it, not before.
+- **A new list page** uses `ListPane`, `SearchBox`, `Chips`/`Chip`, `RowList`/`Row` and `useSelection`, so it looks and
+  filters like the others without a line of its own CSS for them.
+
 ## Dependency direction is the seam
 - `service/` is transport-agnostic: it never imports `axum`, `rmcp`, or
-  `reqwest`. `handlers` (HTTP) and `bin/mcp.rs` (MCP) are thin adapters — each
+  `reqwest`. `handlers` (HTTP) and `bin/mcp/` (MCP) are thin adapters — each
   extracts its own input form, calls exactly one `service` function, and
   translates the result to its wire format.
 - Neither binary's transport crate leaks into the other: `main.rs` never
-  imports `rmcp`/`reqwest`, `mcp.rs` never imports `axum`. (An HTTP *client* in
-  `mcp.rs` is fine — the rule is about server frameworks.)
+  imports `rmcp`/`reqwest`, `bin/mcp/` never imports `axum`. (An HTTP *client* in
+  `bin/mcp/` is fine — the rule is about server frameworks.)
 - `bootstrap` (settings files → a running `AppState`) is shared verbatim by
   both binaries so they can't drift on how the store is picked or data is seeded.
 

@@ -1,0 +1,33 @@
+/* The sheet drawing (`SheetPreview`): paper, a box per viewport coloured by kind, the elevation lines, the 3D cameras
+   with their grips, the room and its doors, and the zoom bar. Import it where the drawing is used; the viewer has its
+   own rules for its RLS panel and does not load this. */
+
+.preview { margin: 0; max-width: 42rem; }
+.preview svg { width: 100%; height: auto; display: block; background: var(--paper); }
+.preview .paper { fill: none; stroke: var(--ink); stroke-width: 0.8; }
+.preview .port rect { stroke-width: 0.6; stroke: var(--ink); fill-opacity: 0.35; }
+.preview g.port rect.view-crop { fill: none; stroke-dasharray: 1.5 1.5; stroke-width: 0.5; }
+.preview g.port rect.annotation-crop { fill: none; stroke-dasharray: 5 2; stroke-width: 0.5; }
+.preview .port.clipped rect:first-child { stroke: var(--danger); stroke-width: 1.4; }
+.preview.editable .port { cursor: grab; touch-action: none; }
+.preview.editable .port.dragging { cursor: grabbing; opacity: 0.8; }
+.preview .port text { fill: var(--ink); font-family: var(--mono); pointer-events: none; }
+.preview .port.plan rect, .preview .key.plan::before { fill: var(--accent); background: var(--accent); }
+.preview .port.elevation rect, .preview .key.elevation::before { fill: var(--ink); background: var(--ink); }
+.preview .port.three_d rect, .preview .key.three_d::before { fill: var(--ok); background: var(--ok); }
+.preview .port.schedule rect, .preview .key.schedule::before { fill: var(--rule); background: var(--rule); }
+.preview .port.other rect, .preview .key.other::before { fill: var(--fill-hover); background: var(--fill-hover); }
+.preview .elevation-line line { stroke: var(--danger); stroke-width: 1.2; }
+.preview .elevation-line text { fill: var(--danger); font-family: var(--mono); pointer-events: none; }
+.preview .camera-arrow line { stroke: var(--ok); stroke-width: 1.2; }
+.preview .camera-arrow polygon { fill: var(--ok); stroke: none; }
+.preview .camera-arrow text { fill: var(--ok); font-family: var(--mono); pointer-events: none; }
+.preview .zoom-bar { display: flex; gap: 0.3rem; align-items: baseline; margin-bottom: 0.3rem; }
+.preview .zoom-bar button { min-width: 2rem; }
+.preview.zoomed svg { cursor: grab; touch-action: none; }
+.preview .room-outline { fill: none; stroke: var(--ink); stroke-width: 0.5; pointer-events: none; }
+.preview .door { fill: var(--accent); fill-opacity: 0.6; stroke: var(--accent); stroke-width: 0.4; pointer-events: none; }
+.preview .camera-arrow .grip { fill: var(--paper); stroke: var(--ok); stroke-width: 0.8; cursor: grab; touch-action: none; }
+.preview .camera-arrow .grip.dragging { fill: var(--ok); cursor: grabbing; }
+.preview .key { margin-right: 0.8rem; }
+.preview .key::before { content: ""; display: inline-block; width: 0.7em; height: 0.7em; margin-right: 0.3em; opacity: 0.6; }

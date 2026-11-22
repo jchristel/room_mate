@@ -7,7 +7,7 @@
 
 import { useEffect, useState } from "react";
 
-import { SheetPreview } from "../../library/SheetPreview.js";
+import { SheetPreview } from "../../ui/sheet/SheetPreview.js";
 import type { Room } from "../../renderer/types.js";
 import {
   autoBatches,
