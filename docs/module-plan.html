@@ -601,7 +601,7 @@
     contract_spaces: [105, 395, 115, 156],
     contract_surfaces: [268, 610, 252, 38],
     contract_windows: [106, 371, 116, 130],
-    docsdir: [2026, 2401, 0, 0],
+    docsdir: [2023, 2398, 0, 0],
     elev_facing: [263, 501, 75, 140],
     ex_doors: [51, 147, 72, 0],
     ex_ffe: [52, 195, 112, 0],
@@ -915,13 +915,13 @@
       deps: []
     },
     {
-      id: "main", name: "main.rs", path: "src/main.rs", zone: "entry", lang: "Rust",
-      blurb: "The Axum HTTP binary, deliberately thin: parse args, build state, wire the router. <code>build_router</code> is split out of main so the CORS policy is reachable from a test — a security control with no regression test is one refactor from reverting to permissive. The CORS policy, the Host check and the viewer root live in <code>src/guards.rs</code>.",
+      id: "main", name: "main.rs + guards.rs", path: "src/main.rs", zone: "entry", lang: "Rust",
+      blurb: "The Axum HTTP binary, deliberately thin: parse args, build state, wire the router. <code>build_router</code> is split out of main so the CORS policy is reachable from a test — a security control with no regression test is one refactor from reverting to permissive. The CORS policy, the Host check and the viewer root live in <code>src/guards.rs</code>. Split: <code>main.rs</code> (args, routes, startup) and <code>guards.rs</code> (CORS, Host check, viewer root).",
       deps: ["bootstrap", "handlers", "settings_api", "state", "bp_api", "assign_api", "sheets_api", "tag_rules_api", "tasks_api", "scoped_push", "network"]
     },
     {
-      id: "mcp", name: "bin/mcp.rs", path: "src/bin/mcp.rs", zone: "entry", lang: "Rust",
-      blurb: "The MCP stdio server: eighteen tools, one per HTTP <em>read</em> route plus three settings reads and one forwarded mutation. Writes stay HTTP-only — a separate process could not hot-swap this one's registry, which is instant split-brain.",
+      id: "mcp", name: "bin/mcp/", path: "src/bin/mcp/", zone: "entry", lang: "Rust",
+      blurb: "The MCP stdio server: eighteen tools, one per HTTP <em>read</em> route plus three settings reads and one forwarded mutation. Writes stay HTTP-only — a separate process could not hot-swap this one's registry, which is instant split-brain. Split into: <code>errors.rs</code>, <code>main.rs</code>, <code>params.rs</code>, <code>results.rs</code>, <code>tools_authored.rs</code>, <code>tools_data.rs</code>, <code>tools_geometry.rs</code>, <code>tools_settings.rs</code>, <code>tools_snapshots.rs</code>.",
       deps: ["bootstrap", "svc_mod", "svc_rooms", "svc_openings", "svc_items", "svc_spaces", "settings_api", "state", "blueprints", "assignments", "sheets", "tag_rules", "tasks", "connections", "svc_connectivity", "svc_reach"]
     },
     {
@@ -937,8 +937,8 @@
       deps: ["contract", "reference", "svc_mod", "svc_rooms", "svc_openings", "svc_items", "svc_spaces", "svc_scope", "svc_areas", "svc_adj", "svc_cmp", "svc_val", "svc_snap", "svc_proj", "svc_mile", "svc_ref", "state", "storage"]
     },
     {
-      id: "settings_api", name: "settings_api.rs", path: "src/settings_api.rs", zone: "transport", lang: "Rust",
-      blurb: "The machinery behind the settings UI, laid out as the codebase's handler/service split inside one module: transport-agnostic core at the top, Axum adapters at the bottom. The TOML files stay the single source of truth — reads parse fresh, a save validates before it lands, and writes every setting that has a default (<code>Settings::fill_defaults</code>) so a saved file lists what the project runs on.",
+      id: "settings_api", name: "settings_api/", path: "src/settings_api/", zone: "transport", lang: "Rust",
+      blurb: "The machinery behind the settings UI, laid out as the codebase's handler/service split inside one module: transport-agnostic core at the top, Axum adapters at the bottom. The TOML files stay the single source of truth — reads parse fresh, a save validates before it lands, and writes every setting that has a default (<code>Settings::fill_defaults</code>) so a saved file lists what the project runs on. Split into: <code>http.rs</code>, <code>mod.rs</code>, <code>render.rs</code>.",
       deps: ["bootstrap", "contract", "reference", "settings", "state", "storage"]
     },
 
@@ -949,8 +949,8 @@
       deps: []
     },
     {
-      id: "svc_rooms", name: "service/rooms.rs", path: "src/service/rooms.rs", zone: "service", lang: "Rust",
-      blurb: "The <code>/rooms</code> derive: reference join, classification, level dedup. Moved verbatim out of the handler — the logic never depended on Query or Json, so the only real change was the signature.",
+      id: "svc_rooms", name: "service/rooms/", path: "src/service/rooms/", zone: "service", lang: "Rust",
+      blurb: "The <code>/rooms</code> derive: reference join, classification, level dedup. Moved verbatim out of the handler — the logic never depended on Query or Json, so the only real change was the signature. Split into: <code>assemble.rs</code>, <code>filter.rs</code>, <code>mod.rs</code>.",
       deps: ["classify", "contract", "reference", "settings", "state", "storage"]
     },
     {
@@ -969,13 +969,13 @@
       deps: ["contract", "contract_spaces", "settings", "state", "storage", "svc_cmp", "svc_rooms", "svc_scope"]
     },
     {
-      id: "svc_scope", name: "service/entity_scope.rs", path: "src/service/entity_scope.rs", zone: "service", lang: "Rust",
-      blurb: "The scoping, pinning and geometry <strong>every</strong> entity read shares — named for entities rather than openings once FF&amp;E proved the shape was general. <code>scope_snapshots</code> is one implementation for every opening-shaped entity, with the milestone pin map arriving as a closure rather than a <code>SnapshotKind</code> it would have to match on: <code>Milestone</code> carries four independent maps, and a match here would be a second place to keep in step.",
+      id: "svc_scope", name: "service/entity_scope/", path: "src/service/entity_scope/", zone: "service", lang: "Rust",
+      blurb: "The scoping, pinning and geometry <strong>every</strong> entity read shares — named for entities rather than openings once FF&amp;E proved the shape was general. <code>scope_snapshots</code> is one implementation for every opening-shaped entity, with the milestone pin map arriving as a closure rather than a <code>SnapshotKind</code> it would have to match on: <code>Milestone</code> carries four independent maps, and a match here would be a second place to keep in step. Split into: <code>candidates.rs</code>, <code>mod.rs</code>, <code>storey.rs</code>.",
       deps: ["contract", "settings", "state", "storage"]
     },
     {
-      id: "svc_areas", name: "service/areas.rs", path: "src/service/areas.rs", zone: "service", lang: "Rust",
-      blurb: "The first geometry service, and the one place the <em>definition</em> of the output is contested rather than read off the model — what a wall belongs to is a convention, and two prior designs were reversed over exactly that. Per group per level: the rooms, plus the wall bands the group encloses alone.",
+      id: "svc_areas", name: "service/areas/", path: "src/service/areas/", zone: "service", lang: "Rust",
+      blurb: "The first geometry service, and the one place the <em>definition</em> of the output is contested rather than read off the model — what a wall belongs to is a convention, and two prior designs were reversed over exactly that. Per group per level: the rooms, plus the wall bands the group encloses alone. Split into: <code>footprint.rs</code>, <code>hierarchy.rs</code>, <code>mod.rs</code>.",
       deps: ["classify", "contract", "settings", "state", "storage", "svc_rooms"]
     },
     {
@@ -984,8 +984,8 @@
       deps: ["classify", "contract", "reference", "settings", "state", "storage", "svc_rooms"]
     },
     {
-      id: "svc_cmp", name: "service/comparison.rs", path: "src/service/comparison.rs", zone: "service", lang: "Rust",
-      blurb: "A <em>star</em> diff of N milestones against one baseline, never all-pairs. A new consumer of existing machinery rather than a reimplementation: assemble_rooms already resolves a milestone's pinned snapshots, so a qualified reference field diffs the pinned values with no new resolution logic.",
+      id: "svc_cmp", name: "service/comparison/", path: "src/service/comparison/", zone: "service", lang: "Rust",
+      blurb: "A <em>star</em> diff of N milestones against one baseline, never all-pairs. A new consumer of existing machinery rather than a reimplementation: assemble_rooms already resolves a milestone's pinned snapshots, so a qualified reference field diffs the pinned values with no new resolution logic. Split into: <code>doors.rs</code>, <code>mod.rs</code>.",
       deps: ["contract", "settings", "state", "storage", "svc_rooms", "svc_openings"]
     },
     {
@@ -1020,8 +1020,8 @@
     },
 
     {
-      id: "svc_reports", name: "service/reports.rs", path: "src/service/reports.rs", zone: "service", lang: "Rust",
-      blurb: "Tabular reports: a schedule of one entity, or one entity BY ROOM. Projects to the columns asked for, which is why it exists at all -- /ffe is 133 MB for one Sample Project storey and a report of it is a few. It never recomputes an attribution: which room a ceiling lies over or a door belongs to is read off that entity's own answer. Renders CSV too, so a download and an MCP host cannot differ.",
+      id: "svc_reports", name: "service/reports/", path: "src/service/reports/", zone: "service", lang: "Rust",
+      blurb: "Tabular reports: a schedule of one entity, or one entity BY ROOM. Projects to the columns asked for, which is why it exists at all -- /ffe is 133 MB for one Sample Project storey and a report of it is a few. It never recomputes an attribution: which room a ceiling lies over or a door belongs to is read off that entity's own answer. Renders CSV too, so a download and an MCP host cannot differ. Split into: <code>catalog.rs</code>, <code>filter.rs</code>, <code>mod.rs</code>, <code>read.rs</code>, <code>rows.rs</code>.",
       deps: ["svc_rooms", "svc_openings", "svc_items", "svc_spaces", "svc_surfaces", "svc_mod", "state"]
     },
 
@@ -1068,8 +1068,8 @@
       deps: ["contract"]
     },
     {
-      id: "state", name: "state.rs", path: "src/state.rs", zone: "core", lang: "Rust",
-      blurb: "State no longer owns the store's mechanism — it holds a <code>Box&lt;dyn SnapshotStore&gt;</code> and delegates, so the trait must stay object-safe. The JSON framing for streamed ingest lives here, not in the store: a store that parsed the payload to write it would be the first crack in bytes-at-the-boundary.",
+      id: "state", name: "state/", path: "src/state/", zone: "core", lang: "Rust",
+      blurb: "State no longer owns the store's mechanism — it holds a <code>Box&lt;dyn SnapshotStore&gt;</code> and delegates, so the trait must stay object-safe. The JSON framing for streamed ingest lives here, not in the store: a store that parsed the payload to write it would be the first crack in bytes-at-the-boundary. Split into: <code>codec.rs</code>, <code>mod.rs</code>, <code>pending.rs</code>, <code>reference.rs</code>, <code>registry.rs</code>, <code>stream.rs</code>.",
       deps: ["contract", "reference", "settings", "storage"]
     },
     {
@@ -1107,8 +1107,8 @@
       deps: []
     },
     {
-      id: "settings", name: "shared settings/mod.rs", path: "crates/roommate-shared/src/settings/mod.rs", zone: "config", lang: "Rust",
-      blurb: "Config a human hand-edits (hence TOML, with comments); the data it points at stays JSON. Everything resolves once at startup and fails fast — better a loud startup error than a surprise on the first request. In roommate-shared, away from the server's runtime; the server's settings/mod.rs is a glob re-export plus the loaders. Every section is written, defaults included: only a setting whose default is <em>none</em> is left out, and the loader still fills an absent one, so older files load unchanged.",
+      id: "settings", name: "shared settings/", path: "crates/roommate-shared/src/settings/", zone: "config", lang: "Rust",
+      blurb: "Config a human hand-edits (hence TOML, with comments); the data it points at stays JSON. Everything resolves once at startup and fails fast — better a loud startup error than a surprise on the first request. In roommate-shared, away from the server's runtime; the server's settings/mod.rs is a glob re-export plus the loaders. Every section is written, defaults included: only a setting whose default is <em>none</em> is left out, and the loader still fills an absent one, so older files load unchanged. Split into: <code>appearance.rs</code>, <code>colour.rs</code>, <code>milestone.rs</code>, <code>mod.rs</code>, <code>policy.rs</code>, <code>reference.rs</code>, <code>validate.rs</code>.",
       deps: ["shared"]
     },
     {
@@ -1411,8 +1411,8 @@
       deps: ["settings", "shared", "state", "storage"]
     },
     {
-      id: "blueprints", name: "blueprints.rs", path: "src/blueprints.rs", zone: "authored", lang: "Rust",
-      blurb: "Authored blueprints, one JSON file each: append-only revisions, pushed revisions held <strong>pending</strong> with the sheets and tags that came with them, import and export. <strong>A blueprint holds only its room</strong> and is never deleted, only marked not in use.",
+      id: "blueprints", name: "blueprints/", path: "src/blueprints/", zone: "authored", lang: "Rust",
+      blurb: "Authored blueprints, one JSON file each: append-only revisions, pushed revisions held <strong>pending</strong> with the sheets and tags that came with them, import and export. <strong>A blueprint holds only its room</strong> and is never deleted, only marked not in use. Split into: <code>mod.rs</code>, <code>revisions.rs</code>, <code>store.rs</code>, <code>validate.rs</code>.",
       deps: ["backups", "bp_capture", "bp_model", "state"]
     },
     {
@@ -1426,23 +1426,23 @@
       deps: ["backups", "blueprints", "bp_model", "state"]
     },
     {
-      id: "sheets", name: "sheets.rs", path: "src/sheets.rs", zone: "authored", lang: "Rust",
-      blurb: "The sheet library, one file per sheet, kept by identity (Revit sheet id plus document title). A sheet is <strong>generic or bound to one room blueprint</strong>; it carries its measured paper size, the figures of the rooms it covers and, when generic, a key built from their size and item count. A renumbered push waits for a person.",
+      id: "sheets", name: "sheets/", path: "src/sheets/", zone: "authored", lang: "Rust",
+      blurb: "The sheet library, one file per sheet, kept by identity (Revit sheet id plus document title). A sheet is <strong>generic or bound to one room blueprint</strong>; it carries its measured paper size, the figures of the rooms it covers and, when generic, a key built from their size and item count. A renumbered push waits for a person. Split into: <code>mod.rs</code>, <code>push.rs</code>, <code>store.rs</code>.",
       deps: ["backups", "state"]
     },
     {
-      id: "tag_rules", name: "tag_rules.rs", path: "src/tag_rules.rs", zone: "authored", lang: "Rust",
-      blurb: "Where a tag goes, learned from tags in Revit views. <strong>Keyed by the item's type code</strong>, never names or ids; generic or bound to a blueprint and one of its items; one rule per key as the median of its samples, a sample living in exactly one rule. A room tag also carries its place against the room boundary.",
+      id: "tag_rules", name: "tag_rules/", path: "src/tag_rules/", zone: "authored", lang: "Rust",
+      blurb: "Where a tag goes, learned from tags in Revit views. <strong>Keyed by the item's type code</strong>, never names or ids; generic or bound to a blueprint and one of its items; one rule per key as the median of its samples, a sample living in exactly one rule. A room tag also carries its place against the room boundary. Split into: <code>geometry.rs</code>, <code>mod.rs</code>, <code>observe.rs</code>, <code>rules.rs</code>, <code>store.rs</code>.",
       deps: ["backups", "state", "tag_rule_binding"]
     },
     {
-      id: "tasks", name: "tasks.rs", path: "src/tasks.rs", zone: "authored", lang: "Rust",
-      blurb: "Room tasks: a RECORD of what a Revit session is told, as it was when made (placements in the target model's frame, the sheets, the rules, the findings). States queued, in progress and the four outcomes; one live task per kind per room.",
+      id: "tasks", name: "tasks/", path: "src/tasks/", zone: "authored", lang: "Rust",
+      blurb: "Room tasks: a RECORD of what a Revit session is told, as it was when made (placements in the target model's frame, the sheets, the rules, the findings). States queued, in progress and the four outcomes; one live task per kind per room. Split into: <code>edits.rs</code>, <code>mod.rs</code>, <code>store.rs</code>.",
       deps: ["backups", "bp_model", "rls_plan", "state", "tag_rules"]
     },
     {
-      id: "connections", name: "connections.rs", path: "src/connections.rs", zone: "authored", lang: "Rust",
-      blurb: "Authored connections: open zones, passages, vertical links, saved routes and saved reaches in one document per project. A save that leaves a list out keeps it; only an explicit empty list clears.",
+      id: "connections", name: "connections/", path: "src/connections/", zone: "authored", lang: "Rust",
+      blurb: "Authored connections: open zones, passages, vertical links, saved routes and saved reaches in one document per project. A save that leaves a list out keeps it; only an explicit empty list clears. Split into: <code>mod.rs</code>, <code>resolve.rs</code>, <code>validate.rs</code>.",
       deps: ["backups", "state", "storage", "svc_locator", "svc_mod", "svc_reach", "svc_rooms", "http_error"]
     },
     {
@@ -1456,13 +1456,13 @@
       deps: ["bp_geom", "sheets"]
     },
     {
-      id: "bp_capture", name: "service/blueprint_capture.rs", path: "src/service/blueprint_capture.rs", zone: "service", lang: "Rust",
-      blurb: "Capture: a room and the FF&E in it written as recipes, with the rules measured on House A and Sample Project (an item belongs to the edge it lies beside; nested components are left out).",
+      id: "bp_capture", name: "service/blueprint_capture/", path: "src/service/blueprint_capture/", zone: "service", lang: "Rust",
+      blurb: "Capture: a room and the FF&E in it written as recipes, with the rules measured on House A and Sample Project (an item belongs to the edge it lies beside; nested components are left out). Split into: <code>mod.rs</code>, <code>reads.rs</code>.",
       deps: ["bp_geom", "bp_model", "shared", "state", "svc_items", "svc_locator", "svc_openings", "svc_rooms"]
     },
     {
-      id: "bp_resolve", name: "service/blueprint_resolve.rs", path: "src/service/blueprint_resolve.rs", zone: "service", lang: "Rust",
-      blurb: "The resolver, <strong>one function for every consumer</strong>: a revision and a target room to where each item goes. It always returns what it could place and reports the rest as findings.",
+      id: "bp_resolve", name: "service/blueprint_resolve/", path: "src/service/blueprint_resolve/", zone: "service", lang: "Rust",
+      blurb: "The resolver, <strong>one function for every consumer</strong>: a revision and a target room to where each item goes. It always returns what it could place and reports the rest as findings. Split into: <code>doors.rs</code>, <code>fit.rs</code>, <code>mod.rs</code>.",
       deps: ["assignments", "bp_capture", "bp_geom", "bp_model", "state", "svc_locator"]
     },
     {
@@ -1491,8 +1491,8 @@
       deps: ["bp_geom", "rls_plan", "rls_tags"]
     },
     {
-      id: "rls_tags", name: "service/rls_tags.rs", path: "src/service/rls_tags.rs", zone: "service", lang: "Rust",
-      blurb: "Which items of a room an RLS tags, in which view, and which it leaves for a person. A prototype. An item takes the rule of the blueprint item it stands for, else the generic rule of its type code; an item with no code is left out and says why.",
+      id: "rls_tags", name: "service/rls_tags/", path: "src/service/rls_tags/", zone: "service", lang: "Rust",
+      blurb: "Which items of a room an RLS tags, in which view, and which it leaves for a person. A prototype. An item takes the rule of the blueprint item it stands for, else the generic rule of its type code; an item with no code is left out and says why. Split into: <code>mod.rs</code>, <code>types.rs</code>.",
       deps: ["bp_geom", "bp_model", "rls_plan", "tag_rules"]
     },
     {
@@ -1506,8 +1506,8 @@
       deps: ["bp_geom", "bp_resolve", "tag_rules"]
     },
     {
-      id: "task_build", name: "service/task_build.rs", path: "src/service/task_build.rs", zone: "service", lang: "Rust",
-      blurb: "Making a task: the resolver's answer and the sheets frozen as what a Revit session is told. Placements leave in the target model's own frame, undone from the project frame in this one place.",
+      id: "task_build", name: "service/task_build/", path: "src/service/task_build/", zone: "service", lang: "Rust",
+      blurb: "Making a task: the resolver's answer and the sheets frozen as what a Revit session is told. Placements leave in the target model's own frame, undone from the project frame in this one place. Split into: <code>mod.rs</code>, <code>populate.rs</code>, <code>rls.rs</code>.",
       deps: ["assignments", "blueprints", "bp_capture", "bp_model", "bp_resolve", "elev_facing", "rls_place", "rls_plan", "rls_tags", "rls_3d", "shared", "sheet_suggest", "sheets", "state", "svc_items", "svc_locator", "svc_placement", "svc_rooms", "tag_rules", "tasks"]
     },
     {
@@ -1516,18 +1516,18 @@
       deps: ["shared", "state"]
     },
     {
-      id: "svc_connectivity", name: "service/connectivity.rs", path: "src/service/connectivity.rs", zone: "service", lang: "Rust",
-      blurb: "Door connectivity and routes: the graph of rooms joined by doors, open zones, passages and vertical links, and the shortest route between two rooms. The graph is shared with reach.",
+      id: "svc_connectivity", name: "service/connectivity/", path: "src/service/connectivity/", zone: "service", lang: "Rust",
+      blurb: "Door connectivity and routes: the graph of rooms joined by doors, open zones, passages and vertical links, and the shortest route between two rooms. The graph is shared with reach. Split into: <code>clearance.rs</code>, <code>edges.rs</code>, <code>graph.rs</code>, <code>heights.rs</code>, <code>mod.rs</code>, <code>paths.rs</code>, <code>types.rs</code>.",
       deps: ["connections", "settings", "shared", "state", "storage", "svc_adj", "svc_locator", "svc_openings", "svc_rooms", "svc_routing", "svc_surfaces"]
     },
     {
-      id: "svc_routing", name: "service/routing.rs + geodesic.rs", path: "src/service/routing.rs", zone: "service", lang: "Rust",
-      blurb: "How a route is computed once the graph is known (the method) and the shortest walk between two points inside one room; the geometry under the door-to-door method.",
+      id: "svc_routing", name: "service/routing/ + geodesic.rs", path: "src/service/routing/", zone: "service", lang: "Rust",
+      blurb: "How a route is computed once the graph is known (the method) and the shortest walk between two points inside one room; the geometry under the door-to-door method. Split into: <code>field.rs</code>, <code>mod.rs</code>.",
       deps: ["shared", "svc_connectivity"]
     },
     {
-      id: "svc_reach", name: "service/reach.rs", path: "src/service/reach.rs", zone: "service", lang: "Rust",
-      blurb: "How far a walk reaches from one or more start points, as a grid over the plan: the router's own graph and walk, never a second one. Three cell states: no room, beyond the limit, or whole millimetres.",
+      id: "svc_reach", name: "service/reach/", path: "src/service/reach/", zone: "service", lang: "Rust",
+      blurb: "How far a walk reaches from one or more start points, as a grid over the plan: the router's own graph and walk, never a second one. Three cell states: no room, beyond the limit, or whole millimetres. Split into: <code>grid.rs</code>, <code>mod.rs</code>.",
       deps: ["connections", "shared", "state", "storage", "svc_connectivity", "svc_locator", "svc_routing"]
     },
     {

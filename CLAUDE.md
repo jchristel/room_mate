@@ -20,7 +20,7 @@ comparison, pyRevit exporter). What is expensive to rediscover:
   that is the exact parallel-method-set failure R1 was written to prevent.
   `AppState` holds `Box<dyn SnapshotStore>`, so the trait must stay
   **object-safe**: a generic `put<T>` is out.
-- **Ingest streams to disk; the JSON framing lives in `state.rs`, not the
+- **Ingest streams to disk; the JSON framing lives in `state/` (`stream.rs`), not the
   store.** `put_streaming` hands back an append-only byte sink that publishes
   atomically, and `StreamingSnapshot` is what knows a snapshot is an object with
   an element array in it. A store that parsed the payload in order to write it
@@ -1217,7 +1217,7 @@ A workspace member so CI builds and tests it, and **the installer ships its `dro
 repository. `scripts/check_drofus_standalone.py` (a CI step) fails if that stops being true. It has 89 read tools over the dRofus Project API,
 API-key authentication and a write-approval gate that no tool uses; **untested against the live service**. Like `mcp.exe` the installer
 does not register it with a host, and the API key is the user's, supplied in the host's env. A session working on it follows
-`crates/drofus-mcp/CLAUDE.md` and touches nothing outside the crate. It is separate from `src/bin/mcp.rs` (the roommate data server) and from
+`crates/drofus-mcp/CLAUDE.md` and touches nothing outside the crate. It is separate from `src/bin/mcp/` (the roommate data server) and from
 the `reference` module (dRofus as uploaded CSV).
 
 ## Which document wins
@@ -1320,8 +1320,9 @@ with one, not here.
   the single most visible house style; matching ordinary Rust terseness reads as
   foreign.
 - **`service/` is transport-agnostic** — never imports `axum` or `rmcp`.
-  `handlers.rs` and `bin/mcp.rs` are thin adapters over it, and `bin/mcp.rs`
-  keeps one tool per HTTP *read* route (update its count when you add one).
+  `handlers.rs` and `bin/mcp/` are thin adapters over it, and `bin/mcp/`
+  keeps one tool per HTTP *read* route (each `tools_*.rs` declares its own `#[tool_router]`, joined by `RoommateMcp::all_tools`;
+  update the count when you add one).
 - **A store's error becomes an HTTP answer in one place** (`http_error`): a store implements `StoreError` (what its error IS: not file
   backed, invalid, not found, conflict, internal) and its adapter calls `to_http` and `projects_dir`; do not write a per-adapter `match`.
   `settings_api` keeps its own mapping on purpose (404/422 and an internal error that shows its text).

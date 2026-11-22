@@ -10,7 +10,7 @@ internal unit is the foot. An item's `facing` is a unit vector in plan; its LEFT
 turned a quarter turn counter-clockwise. A tag rule is in paper millimetres in the element's
 own frame (x along its facing, y to its left), so a tag's place on this sheet is the element's
 point plus the rule's offset times the view scale, turned with the facing. See
-`src/tag_rules.rs`.
+`src/tag_rules/`.
 """
 
 import math

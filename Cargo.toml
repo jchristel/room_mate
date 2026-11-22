@@ -32,7 +32,7 @@ roommate-shared = { path = "crates/roommate-shared" }
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
 # `set-header` is what puts `cache-control: no-cache` on the viewer's static
-# files — see `viewer_cache_control` in main.rs for why serving them without it
+# files — see `viewer_cache_control` in guards.rs for why serving them without it
 # was a bug rather than a missing nicety.
 tower-http = { version = "0.6", features = ["fs", "cors", "trace", "decompression-gzip", "set-header"] }
 # `rc` is for property keys and type-property bags, which are `Arc`-shared in

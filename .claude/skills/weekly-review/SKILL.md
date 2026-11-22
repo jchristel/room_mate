@@ -106,7 +106,8 @@ differ only in an entity name are the shape to look for.
 
 `CODING-CONVENTIONS.md:54-57` asks that a module which stays whole past the
 ~500-line trigger say so in its header, the way `service/adjacency.rs` does.
-`rooms.rs` and `areas.rs` were named specifically and still have not.
+`rooms` and `areas` were the two named first; both are now split, and every module still whole has its reason in the header and in
+`scripts/weekly_review_ignore.toml`.
 
 ### 4. Do two live docs now disagree with each other?
 

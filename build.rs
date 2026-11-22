@@ -2,7 +2,7 @@
 //!
 //! **The drift this exists to stop.** `roommate.exe` prefers a `static/`
 //! directory beside the executable over the working directory (see
-//! `viewer_root` in `src/main.rs` -- that preference is what makes an installed
+//! `viewer_root` in `src/guards.rs` -- that preference is what makes an installed
 //! build work from any working directory, so it is not the thing to change).
 //! The consequence is that `target/release/roommate.exe` serves
 //! `target/release/static/`, and nothing used to put the repo's files there.

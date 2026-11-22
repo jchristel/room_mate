@@ -10,7 +10,7 @@ spike was on LEVEL 00 while all the visual work had been on LEVEL 01.
 
 It is a *diagnostic*, not a test. It reports; it does not assume a threshold is
 a specification. The two invariants cheap enough to state absolutely -- no
-spikes, and simple rings -- are also inline Rust tests in `areas.rs`; the other
+spikes, and simple rings -- are also inline Rust tests in `service/areas/`; the other
 checks need a whole real model to mean anything, which is exactly what a unit
 test cannot supply.
 
@@ -373,7 +373,7 @@ def check_additivity(report, groups):
             continue
         total = sum(k["area"] for k in kids)
         # 0.5% slack: the close's bevel at the level's outer boundary is a known,
-        # bounded residual (see areas.rs), and it is proportional to perimeter.
+        # bounded residual (see `service/areas/`), and it is proportional to perimeter.
         if parent["area"] < total * 0.995:
             report.fail(
                 "additivity",

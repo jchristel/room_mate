@@ -34,12 +34,9 @@ The recorded judgements are the ignore file's `[modules]` section; the rest of
 the backlog is whatever the check reports; two of them are worth naming because the answer is
 known and only the writing-down is missing:
 
-- **`roommate-shared`'s `settings/mod.rs` reads as unfinished.** The server's
-  `src/settings/mod.rs` is now the thin re-export the pattern describes, but
-  only because the types moved out *whole* into `crates/roommate-shared` — the
-  bulk moved with them rather than being split.
-  The types are already grouped by concern in the file (area policy, reference
-  field config, hierarchy, milestones, colour plans), so the seams exist.
+- **`roommate-shared`'s `settings/mod.rs` was split along the seams the types already had** (2026-11-22): `appearance`,
+  `policy`, `reference`, `colour` and `milestone` beside `validate`. The server's `src/settings/mod.rs` stays the thin
+  re-export, so no path outside the crate changed.
 - **`areas` and `rooms` were cohesive by argument and have now been split along the seams that held** (2026-11-22):
   `service/areas/` is the footprint geometry (`footprint`) and the hierarchy of groups (`hierarchy`) round the response
   types and `assemble_areas`; `service/rooms/` is the filter language (`filter`) and the assembly (`assemble`) round the
