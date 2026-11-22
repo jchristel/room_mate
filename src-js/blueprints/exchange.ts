@@ -8,6 +8,7 @@
 
 import type { Sent } from "./api.js";
 import * as api from "./api.js";
+import { safeName } from "../ui/file.js";
 import type { Blueprint, BlueprintDoor, BlueprintItem, BlueprintSummary, Bundle, Outline, SourceRoom } from "./types.js";
 
 export const FILE_FORMAT = "roommate-blueprint";
@@ -92,5 +93,4 @@ export async function importInto(
 }
 
 /** A file name that is safe on every platform, from a blueprint's name. */
-export const fileNameFor = (name: string, revision: number): string =>
-  `${name.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "") || "blueprint"}.r${revision}.blueprint.json`;
+export const fileNameFor = (name: string, revision: number): string => `${safeName(name, "blueprint")}.r${revision}.blueprint.json`;

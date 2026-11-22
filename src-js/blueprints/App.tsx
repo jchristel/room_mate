@@ -25,6 +25,7 @@ import { persistSelection, seedProjectId } from "../ui/common.js";
 import { attentionReasons } from "./common.js";
 import { alignEdge, dominantAngle, rotatePoint } from "./boxEdit.js";
 import { sameItems } from "./draft.js";
+import { saveJson } from "../ui/file.js";
 import { fileNameFor, toFile, type Imported } from "./exchange.js";
 import { pt, type Pt } from "./geometry.js";
 import { DEFAULT_TAG_FIELDS } from "./tagText.js";
@@ -197,12 +198,7 @@ export function App() {
     const bundle = await api.getBundle(projectId, blueprint.id).catch(() => undefined);
     const file = toFile(blueprint, viewing, projectId, bundle);
     if (!file) return;
-    const url = URL.createObjectURL(new Blob([JSON.stringify(file, null, 2)], { type: "application/json" }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = fileNameFor(blueprint.name, viewing);
-    a.click();
-    URL.revokeObjectURL(url);
+    saveJson(fileNameFor(blueprint.name, viewing), file);
     setNotice(`Exported r${viewing}.`);
   };
 

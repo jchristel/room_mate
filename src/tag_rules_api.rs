@@ -23,6 +23,7 @@ use crate::service::elevation_facing::model_room_ring;
 use crate::service::room_tag_place::boundary_of;
 use crate::sheets::SheetRoom;
 use crate::state::Shared;
+use crate::tag_rule_binding::{self, ImportOutcome, ImportedRule};
 use crate::tag_rules::{
     self, Boundary, ObservationOutcome, ObservationsRequest, ObserveContext, RuleSummary, TagRule, P3,
 };
@@ -142,6 +143,25 @@ fn blueprint_item_ids(
         .flat_map(|r| r.content.items.iter())
         .map(|i| i.id.clone())
         .collect())
+}
+
+#[derive(serde::Deserialize)]
+pub struct ImportRequest {
+    pub rules: Vec<ImportedRule>,
+}
+
+/// The library page's Import: rules from a file, taken in as generic rules (see `tag_rule_binding::import_generic`).
+/// 200 with how many rules and samples that was, and how many rules this project's settings will not use.
+pub async fn http_import_tag_rules(
+    State(state): State<Shared>,
+    UrlPath(project_id): UrlPath<String>,
+    Json(request): Json<ImportRequest>,
+) -> Result<Json<ImportOutcome>, (StatusCode, String)> {
+    let registry = state.settings();
+    let parameter = registry.settings_for(&project_id).and_then(|b| b.tag_type_code.clone());
+    tag_rule_binding::import_generic(&projects_dir(&state)?, &project_id, request.rules, parameter.as_deref())
+        .map(Json)
+        .map_err(to_http)
 }
 
 pub async fn http_delete_tag_rule(

@@ -637,21 +637,21 @@
     js_viewport: [17, 262, 87, 127],
     js_window: [176, 567, 204, 133],
     lib: [31, 97, 49, 12],
-    main: [282, 998, 302, 386],
+    main: [285, 1001, 302, 386],
     mcp: [1957, 2902, 551, 233],
     network: [84, 224, 37, 90],
-    p_blueprints: [2522, 3636, 309, 452],
+    p_blueprints: [2518, 3632, 309, 452],
     p_bundle: [930, 1134, 45, 0],
     p_common: [44, 112, 56, 0],
     p_generated: [189, 1586, 1317, 0],
     p_graph: [506, 1101, 264, 224],
     p_index: [10094, 18288, 3370, 3208],
-    p_library: [809, 1069, 63, 82],
+    p_library: [1072, 1558, 92, 228],
     p_reports: [2045, 3086, 352, 409],
     p_settings: [2939, 3616, 392, 78],
     p_tasks: [1361, 2089, 165, 373],
     p_tokens: [22, 24, 0, 0],
-    p_ui: [665, 1077, 134, 169],
+    p_ui: [691, 1133, 140, 185],
     post_authored: [275, 482, 111, 0],
     post_common: [237, 593, 262, 0],
     post_doors: [28, 111, 67, 0],
@@ -712,9 +712,9 @@
     svc_surfaces: [215, 353, 105, 0],
     svc_type_table: [55, 147, 33, 52],
     svc_val: [965, 3612, 795, 1739],
-    tag_rule_binding: [126, 159, 26, 0],
+    tag_rule_binding: [243, 477, 40, 180],
     tag_rules: [816, 1853, 182, 772],
-    tag_rules_api: [119, 526, 22, 371],
+    tag_rules_api: [135, 546, 24, 371],
     task_build: [652, 795, 72, 29],
     tasks: [616, 1109, 118, 314],
     tasks_api: [329, 415, 44, 16],
@@ -1567,12 +1567,12 @@
     },
     {
       id: "p_ui", name: "ui/ (shared)", path: "src-js/ui/", zone: "pages", lang: "TypeScript + React + CSS",
-      blurb: "What the pages share, so a page keeps only what is its own (2026-11-22; before it each page carried its own copy of all of this and the copies had started to differ). <code>common.ts</code> types the project picker and fetch helpers of static/common.js; <code>api.ts</code> is the write result (<code>Sent</code>), <code>send</code> and <code>message</code>; <code>match.ts</code> is the one filter rule (every word typed must be found); <code>Selection.tsx</code> is single or multiple choice in a list; <code>ListPane.tsx</code> is the left pane (actions, filter box, preset chips, rows) of the tasks, blueprints, sheets and tag rules. <code>base.css</code> is the shell, buttons, chips, tags and banners; <code>list-page.css</code> the two-pane layout. <code>sheet/</code> is the sheet drawing (<code>previewOf</code>, <code>SheetPreview</code> with drag, zoom and 3D camera grips, <code>sheet/preview.css</code>), used by the library, the tasks page and the viewer's RLS panel.",
+      blurb: "What the pages share, so a page keeps only what is its own (2026-11-22; before it each page carried its own copy of all of this and the copies had started to differ). <code>common.ts</code> types the project picker and fetch helpers of static/common.js; <code>api.ts</code> is the write result (<code>Sent</code>), <code>send</code> and <code>message</code>; <code>match.ts</code> is the one filter rule (every word typed must be found); <code>Selection.tsx</code> is single or multiple choice in a list; <code>ListPane.tsx</code> is the left pane (actions, filter box, preset chips, rows) of the tasks, blueprints, sheets and tag rules. <code>base.css</code> is the shell, buttons, chips, tags and banners; <code>list-page.css</code> the two-pane layout. <code>sheet/</code> is the sheet drawing (<code>previewOf</code>, <code>SheetPreview</code> with drag, zoom and 3D camera grips, <code>sheet/preview.css</code>), used by the library, the tasks page and the viewer's RLS panel. <code>file.ts</code> hands a person a JSON file and makes its name safe. <code>batch.ts</code> splits many items into requests a small body can carry.",
       deps: ["p_common", "p_tokens"]
     },
     {
       id: "p_library", name: "library/ (React)", path: "src-js/library/", zone: "pages", lang: "TypeScript + React",
-      blurb: "The sheet library and tag rules at /library/: each sheet's paper size, outline-and-viewport preview (the shared sheet drawing in ui/sheet), rooms covered and blueprint or generic key, renumbered pushes to accept or reject, suggest, a word filter and select-several with delete on sheets and rules, and the rules by type code.",
+      blurb: "The sheet library and tag rules at /library/: each sheet's paper size, outline-and-viewport preview (the shared sheet drawing in ui/sheet), rooms covered and blueprint or generic key, renumbered pushes to accept or reject, suggest, a word filter and select-several with delete on sheets and rules, and the rules by type code. Sheets export to and import from a room-agnostic file (<code>exchange.ts</code>): no room or blueprint link, and the import is the extractor's own push, in batches. Sheets and tag rules export to and import from room-agnostic files (<code>exchange.ts</code>, <code>rulesExchange.ts</code>), in batches.",
       deps: ["p_ui", "p_tokens"]
     },
     {
@@ -1602,7 +1602,7 @@
     },
     {
       id: "tag_rule_binding", name: "tag_rule_binding.rs", path: "src/tag_rule_binding.rs", zone: "authored", lang: "Rust",
-      blurb: "What moves tag rules and their samples between the generic and the blueprint-bound scope: a sample's move (it lives in exactly one rule), a blueprint's rules for export and import, and unlinking the rules a re-push no longer writes into the generic rule of their key. Split from tag_rules to keep that module to the rule itself.",
+      blurb: "What moves tag rules and their samples between the generic and the blueprint-bound scope: a sample's move (it lives in exactly one rule), a blueprint's rules for export and import, and unlinking the rules a re-push no longer writes into the generic rule of their key. Split from tag_rules to keep that module to the rule itself. <code>import_generic</code> takes rules from a library file in as generic ones, merging samples by where they were read.",
       deps: ["tag_rules", "backups"]
     },
     {

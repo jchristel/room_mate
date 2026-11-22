@@ -63,6 +63,8 @@ export type { PaperBox, Point3, ViewInfo, ViewportInfo } from "../ui/sheet/types
 
 export interface SheetRecord extends Omit<SheetSummary, "viewports" | "pending"> {
   phase?: string;
+  /** The outline of the ONE room the sheet was made for, mm in the sheet's model frame; what carries its views to another room. */
+  room_outline?: [number, number][];
   received_at: string;
   /** The sheet as duHast exports it: opaque here beyond its viewports. */
   sheet: SheetDrawing["sheet"];
@@ -152,6 +154,10 @@ export interface Sample {
   leader_end_condition: string;
   elbow?: Offset;
   end?: Offset;
+  /** A room tag's head against the room's boundary, when it was read in a room the server held. */
+  boundary?: Boundary;
+  /** Elevations: the offsets are from the item's bounding-box centre, not its insertion point. */
+  from_centre?: boolean;
 }
 
 export interface TagRule extends RuleSummary {
