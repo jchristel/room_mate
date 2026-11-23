@@ -9,7 +9,7 @@ fit in. Symbols are named, never lines.
 Revit model; the type-code parameter is the content identity; tolerances are settings (5 mm place, 600 mm near, 5 degrees
 turn); only elements the ledger proves are ours are ever removed; an update is chosen room by room with "all not overridden"
 as a quick choice; a host whose kit differs is never `in_place`; **a nested family can only be changed through its host**, and
-**a kit change is cured by reloading the family** (section 5.4); **the first iteration supports level-based and work-plane
+**a kit change is reported and never acted on, and reloading a family is refused** (section 5.4); **the first iteration supports level-based and work-plane
 (level) placement only**, wall-hosted and face-hosted items are flagged and left alone (section 5.6); **an item with no type
 code is flagged and nothing else** (section 5.1).
 
@@ -175,7 +175,7 @@ the right place".
 | ledgered element, item gone from the pinned revision | n/a | `retired` | The blueprint no longer has it. | `Items` mode removes it |
 | ledger row, element gone from a newer snapshot | n/a | `removed_by_hand` | A person took it out. | report; offer "make this an exclude override"; never silently re-add |
 | ledger row, owner room differs | n/a | `moved_out` | A person moved it to another room. | report; never touched |
-| matches on code and place | in tolerance | `kit_differs` (not `in_place`) | Right host, different parts inside. | `reload` the family (section 5.4); report-only when the family file is not available |
+| matches on code and place | in tolerance | `kit_differs` (not `in_place`) | Right host, different parts inside. | **report only** (section 5.4): the author reloads the family in Revit; no action of any kind |
 | element or item with no type code | n/a | `no_code` | A modelling issue: the type has no code, so nothing can be matched. | **flag only**; no action of any kind |
 | element or item hosted on a wall or a face | n/a | `unsupported_host` | Out of scope in this iteration (section 5.6). | **flag only**; not compared, added, moved, retyped or removed |
 
@@ -203,8 +203,9 @@ what they contain, which a person cannot see on the plan.
 | `component_edited` | A nested instance has an instance property different from the blueprint's. Reported; **it can only be fixed through its host**. |
 
 **Detecting a change in a nested family means finding its host.** The finding is attributed to the host through
-`super_component_id` / `parent_id` (any depth: the top host is acted on). From that point it is a *host finding*, and the
-cure is a **family reload** (section 5.4): a nested instance is part of its host's family, so the family is what changes.
+`super_component_id` / `parent_id` (any depth: the top host is acted on). From that point it is a *host finding*, and it is
+**reported only** (section 5.4): a nested instance is part of its host's family, so the family is what changed, and a family
+is not reloaded from here.
 
 **Consequences for the other sections.**
 
@@ -216,10 +217,10 @@ cure is a **family reload** (section 5.4): a nested instance is part of its host
 - **A pushed component whose host is not in the room** (host in a linked model, or another room's) is not this room's content.
 - **A component whose family is not loaded** is the host family missing: one warning at the host.
 
-### 5.4 One action per host, and a reload is a family action
+### 5.4 One action per host, and a reload is refused
 
-A change found on a host can need a *host* action (move, retype, set properties, replace) or a *family* action (reload).
-They are different in scope, so they are planned differently.
+A change found on a host is acted on with a *host* action (move, retype, set properties, replace). A *family* action
+(reload) is not offered: see the end of this section.
 
 **Host actions, strongest first. The strongest on a host wins and absorbs the weaker ones.**
 
@@ -243,25 +244,21 @@ retype becomes a substitution) so the layout reproduces it. A replace writes a n
 `replaced_from` the old key and keeps the old row as history; otherwise the next audit would read the old key as
 `removed_by_hand`.
 
-**`reload`: a kit change, or a changed nested family, is cured by reloading the family (decided).** The family file comes
-from the library the Revit side already reads (`ROOMMATE_FAMILY_LIBRARY`, a folder of `<family>.rfa`).
+**A family reload is refused (decided 2026-11-23).** A kit change, or a changed nested family, is reported as `kit_differs`
+with the family, the host and the parts that differ, and the plan does nothing about it. The author reloads the family in
+Revit and the next audit reads the result. Why:
 
-- **A reload keeps the instances**: same elements, same `UniqueId`s, no ledger change. So it does **not** absorb or replace
-  a `move` or `retype` on the same host; those still run, after the reload.
-- **A reload is per family per model, not per host.** It changes every instance of that family in the model, including
-  hosts in rooms this update does not cover and in other projects' rooms of the same model. One reload serves all of them,
-  so the plan states it once per family with the **count of instances it touches outside the update's rooms**, and the
-  person approves the family, not the host. This is a wider effect than anything else in this plan and is shown first.
-- **What a reload may disturb, to be measured in Revit:** nested instance parameters set by hand on a component, tags on a
-  nested component whose family part is removed, and anything attached to a part that no longer exists. Listed as "may" in
-  the plan until a Revit run says which actually happen.
-- **No family file in the library:** the reload cannot run, the finding stays `kit_differs`, reported with the family name,
-  and nothing is replaced instead. (A replace is only ever for a different family, never a substitute for a missing file.)
-- **After a reload the host is judged again** against the blueprint's kit; a kit that still differs is reported
-  (`kit_still_differs`) rather than retried.
+- A reload is per family per model: it changes every instance, including hosts in rooms this update does not cover.
+- It may update parameters and move tags on those instances. Undoing that would mean storing the tag positions of the whole
+  family across the model before the reload and putting them back after it, a mechanism larger than everything else in this
+  plan, with no way for the plan to check it restored them.
+- It breaks the rule that the host is the only unit of action; a reload acts on hosts the person never selected.
 
-**Where the decision is made.** The server plans every action it can prove (family differs, kit differs, position differs)
-and the plug-in reports what it did; nothing in the plan depends on the plug-in choosing between a reload and a replace.
+A host with a kit that differs still gets its host actions (move, retype, set properties); a `replace` is for a different
+family only. Lifting this later means the tag-position store above, and a Revit run to say what a reload disturbs.
+
+**Where the decision is made.** The server plans every action it can prove (family differs, position differs, type differs)
+and the plug-in reports what it did; nothing in the plan depends on the plug-in choosing between actions.
 
 ### 5.5 Requirements the match puts on the data
 
@@ -275,8 +272,6 @@ and the plug-in reports what it did; nothing in the plan depends on the plug-in 
 | **Kit on both sides**: blueprint item and content each carry `sub_components` | exported on every door/window/FF&E; `BlueprintItem` has **no** `sub_components` field | **new**: capture stores each item's kit beside its properties. Without it, `kit_unknown` everywhere; a blueprint captured before has none until pushed again. |
 | Host/component link for pushed components | `super_component_id` on the item, `parent_id` on a sub component | none; the audit groups components under hosts by it |
 | **Hosting kind of every item** (level-based / work-plane vs wall or face) | only the `host` display string, read by `item_facts`, not yet run in Revit | classify from `host`: a level (or no host) is supported; anything else, **and anything that cannot be read, is `unsupported_host`** (the safe side). Needs a Revit run to confirm the strings. |
-| Family files for reload | `ROOMMATE_FAMILY_LIBRARY` on the Revit side | none new; a family with no file cannot be reloaded |
-| Instances of a family elsewhere in the model | `/ffe` holds every instance with its family | count them for the reload line of the plan |
 | Tolerances | none | the three settings of section 5.1 |
 
 ### 5.6 Scope of the first iteration: level-based and work-plane (level) placement only
@@ -382,7 +377,7 @@ numbers; nothing else is stored.
 | Item moved in the blueprint, no override | TRACKED | `move`; if it had `drifted` by hand first, listed and left unless the person resets |
 | Item moved, room has a nudge on it | TRACKED | `override_stale`: **held until the person confirms** (keep the nudge on the new recipe, or drop it) |
 | Item type changed | TRACKED | `retype` (same family) or `replace` (another family), section 5.4; `Locations` mode reports it |
-| Nested family changed, or kit changed, type code did not | TRACKED | host finding `kit_differs` -> `reload` the family, stated once per family with the instances it touches elsewhere; a move or retype on the same host still runs after it |
+| Nested family changed, or kit changed, type code did not | TRACKED | host finding `kit_differs`, **report only**; a move or retype on the same host still runs |
 | Item added in the blueprint | any | `missing`; added; in an UNTRACKED room matched first, so an existing equivalent is adopted, not duplicated |
 | Item retired in the blueprint | TRACKED | ledgered element removed in `Items` mode; unledgered match reported only |
 | Item retired, room has an addition cloned from it | TRACKED | `clone_of` dangling: addition kept as a free-standing item and flagged; never deleted silently |
@@ -415,8 +410,8 @@ resolver cannot map the edges, the audit says so rather than inventing a mapping
 | 11 | A person moved a placed item to another room | audit shows `moved_out` | never touched, never re-added in this room until the person decides | owner room per push |
 | 12 | Plug-in cannot run the update kind | update stays queued | today: planner aborts the unknown kind | plug-in `update_room` handler |
 | 13 | Revit session dies mid-task | task `in_progress` | resend (existing); a re-run finds placed elements by ledger and does not duplicate | ledger |
-| 14 | A nested family changed in the model, or a family was reloaded with other parts | host finding `kit_differs`; **family reload** from the library; instances keep their `UniqueId`s; the host is judged again | no family file: stays `kit_differs`, reported; other instances of the family elsewhere in the model change too, counted and shown first; parts of a nested family may lose settings or tags (measured in Revit) | section 5.4 |
-| 15 | A nested part was edited by hand, update moves its host | the part moves with the host | a reload on the same host may overwrite the edit; `component_edited` is reported before approval | section 5.4 |
+| 14 | A nested family changed in the model, or a family was reloaded with other parts | host finding `kit_differs`, **report only**: family, host and differing parts named; the author reloads in Revit | the next audit reads the result; the plan never reloads | section 5.4 |
+| 15 | A nested part was edited by hand, update moves its host | the part moves with the host | `component_edited` is reported before approval; a `replace` of the host would lose it | section 5.4 |
 | 19 | Family differs from the layout's (not a kit change) | `replace`: new element, new `UniqueId`, `replaced_from` recorded | hand edits, tags and absorbed changes on the old element are lost: listed before approval | section 5.4, ledger |
 | 20 | An item or element has no type code | **flagged, nothing else** | the author gives the type a code in Revit and pushes again | none |
 | 21 | A switch or any wall- or face-hosted item is in the blueprint or the room | **flagged `unsupported_host`, left alone** | outside the first iteration | section 5.6 |
@@ -439,7 +434,7 @@ resolver cannot map the edges, the audit says so rather than inventing a mapping
 4. **Ledger and `UniqueId`**: the extractor exports `unique_id`; the task report returns the placed ids; the ledger store and
    adoption; the audit switches ledgered rooms to key matching. **Needs a run in Revit.**
 5. **`update_room` in the plug-in**: `Items` and `Locations` from the plan, removal only for ledgered elements, `replace`
-   for a different family, and **family reload** from the library (once per family, with its elsewhere-count).
+   for a different family. No family reload.
 6. **Approve flow in the viewer**: the impact list per blueprint, per-room tick with "all not overridden", queues the tasks.
 
 Steps 1 to 3 are server and viewer only and testable on House A (`samples/house-a/`: assignments, the blueprint and a task
@@ -449,14 +444,12 @@ already exist). 4 and 5 depend on Revit.
 
 Decided (2026-11-23): identity by ledger and `UniqueId`, no Revit marker; type code is the content identity; tolerances 5 mm /
 600 mm / 5 degrees as user settings; remove only ledgered elements; update scope is ticked rooms with "all not overridden"; a
-kit mismatch is never `in_place`; nested families are acted on only through their host; **a kit change is a family reload**;
+kit mismatch is never `in_place`; nested families are acted on only through their host; **a kit change is reported only and a family reload is refused**;
 **level-based and work-plane (level) placement only in the first iteration**; **no-code items are flagged and nothing else**.
 
 Still open:
 
-1. **The first Revit run** has three things to measure before the numbers and rules here are final: whether ledgered
-   level-based elements read `in_place` at 5 mm straight after placing; what a family reload does to nested instance
-   parameters and tags; and the exact `host` strings that separate level-based from wall- and face-hosted items.
-2. **Reload scope:** a reload changes every instance of the family in the model. This plan shows the count and asks per
-   family. Whether a project wants a stricter rule (refuse a reload that touches instances outside the assigned rooms) is
-   the author's call once a real count is seen.
+1. **The first Revit run** has two things to measure before the numbers and rules here are final: whether ledgered
+   level-based elements read `in_place` at 5 mm straight after placing; and the exact `host` strings that separate level-based from wall- and face-hosted items.
+2. **Lifting the reload refusal** needs a store of tag positions per family across the model and a Revit run saying what a
+   reload disturbs (section 5.4); until then it stays refused.
