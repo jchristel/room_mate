@@ -255,7 +255,7 @@ Revit and the next audit reads the result. Why:
 - It breaks the rule that the host is the only unit of action; a reload acts on hosts the person never selected.
 
 A host with a kit that differs still gets its host actions (move, retype, set properties); a `replace` is for a different
-family only. Lifting this later means the tag-position store above, and a Revit run to say what a reload disturbs.
+family only.
 
 **Where the decision is made.** The server plans every action it can prove (family differs, position differs, type differs)
 and the plug-in reports what it did; nothing in the plan depends on the plug-in choosing between actions.
@@ -451,5 +451,3 @@ Still open:
 
 1. **The first Revit run** has two things to measure before the numbers and rules here are final: whether ledgered
    level-based elements read `in_place` at 5 mm straight after placing; and the exact `host` strings that separate level-based from wall- and face-hosted items.
-2. **Lifting the reload refusal** needs a store of tag positions per family across the model and a Revit run saying what a
-   reload disturbs (section 5.4); until then it stays refused.
