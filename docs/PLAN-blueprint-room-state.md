@@ -28,7 +28,7 @@ Verified in the code, not assumed:
 | An assignment **pins a revision** (items only) and reports `newer_revision`. | `assignments::Assignment`, `AssignmentRow` | Nothing re-resolves or diffs when the blueprint moves on. |
 | An item is matched in another room by family, then type name, then instance properties (decision 5); tags match by **type code** only (decision 27, `tag_type_code`). | decisions 5, 27 | **Decided: the type code is the identity for content too.** |
 | **Shared nested families are instances Revit will not let anyone move, delete or retype on their own**; they follow the host. Every door, window and FF&E item carries `sub_components` (flat, every depth, each with `parent_id`, category, family, type) **whether or not the nested instance was pushed**; a pushed one is an item with `super_component_id` (`is_component`). Capture excludes them (decision 16) and a blueprint holds none. | `contract::SubComponent`, `room_m/utils/nesting.py`, `[ffe] nested_components` | The unit of placement is the **host**; what comes with it is the host's family definition. |
-| Blueprint item placement is plan-only (edge, along, off, facing); height lives in the instance properties (`Elevation from Level`, `Mounting Height`). The kind of hosting is only a display string (`host`, e.g. `Level : LEVEL 1`), read by `item_facts` and not yet run in Revit. | `blueprint_model::Placement` | **First iteration: level-based and work-plane (level) items only** (section 5.6). A wall- or face-hosted item cannot be judged from a plan point, so it is out of scope, flagged, not acted on. |
+| Blueprint item placement is plan-only (edge, along, off, facing); height lives in the instance properties (`Elevation from Level`, `Mounting Height`). The kind of hosting is the extractor's `host` (`ItemHost`: the host's category, id and `face_hosted`), absent for a level-hosted instance, read by `item_facts` and not yet run in Revit; the family's placement type (`FamilyPlacementType`) is not read at all yet. | `blueprint_model::Placement` | **First iteration: level-based and work-plane (level) items only** (section 5.6). A wall- or face-hosted item cannot be judged from a plan point, so it is out of scope, flagged, not acted on. |
 
 ## 2. Vocabulary
 
@@ -271,7 +271,7 @@ and the plug-in reports what it did; nothing in the plan depends on the plug-in 
 | Height | in properties only | compare as number with the unit trap the ceiling offset taught (display strings). |
 | **Kit on both sides**: blueprint item and content each carry `sub_components` | exported on every door/window/FF&E; `BlueprintItem` has **no** `sub_components` field | **new**: capture stores each item's kit beside its properties. Without it, `kit_unknown` everywhere; a blueprint captured before has none until pushed again. |
 | Host/component link for pushed components | `super_component_id` on the item, `parent_id` on a sub component | none; the audit groups components under hosts by it |
-| **Hosting kind of every item** (level-based / work-plane vs wall or face) | only the `host` display string, read by `item_facts`, not yet run in Revit | classify from `host`: a level (or no host) is supported; anything else, **and anything that cannot be read, is `unsupported_host`** (the safe side). Needs a Revit run to confirm the strings. |
+| **Hosting kind of every item** (level-based / work-plane vs wall or face) | `ItemHost` (`kind`, `id`, `face_hosted`), absent when `FamilyInstance.Host` is None; read by `item_facts`, not yet run in Revit | classify from the family's placement type (level-based, work-plane, two-level) if the probe shows it separates the cases, else from `host`; anything else, **and anything that cannot be read, is `unsupported_host`** (the safe side). `scripts/probe_room_state.py` says which rule holds. |
 | Tolerances | none | the three settings of section 5.1 |
 
 ### 5.6 Scope of the first iteration: level-based and work-plane (level) placement only
@@ -450,4 +450,4 @@ kit mismatch is never `in_place`; nested families are acted on only through thei
 Still open:
 
 1. **The first Revit run** has two things to measure before the numbers and rules here are final: whether ledgered
-   level-based elements read `in_place` at 5 mm straight after placing; and the exact `host` strings that separate level-based from wall- and face-hosted items.
+   level-based elements read `in_place` at 5 mm straight after placing; and which rule separates level-based from wall- and face-hosted items (placement type or `host`; a work-plane family may report a level as its `Host`). Both are measured by `scripts/probe_room_state.py` and read by `scripts/analyse_room_state_probe.py`.
