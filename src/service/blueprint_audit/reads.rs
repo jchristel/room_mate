@@ -15,7 +15,7 @@ use super::super::ServiceError;
 use super::{audit, Audit, Element, Layout};
 use crate::assignments::{self, RoomKey};
 use crate::blueprints::{self, BlueprintError};
-use crate::service::blueprint_model::Property;
+use crate::service::blueprint_model::{BlueprintItem, Property};
 use crate::state::AppState;
 
 /// One assignment's audit, with what it was measured against.
@@ -89,27 +89,42 @@ pub fn audit_assignment(
         return Ok(None);
     };
 
-    let layout: Vec<Layout> = resolution
-        .placements
-        .iter()
-        .filter_map(|p| {
-            let source = revision.content.items.iter().find(|i| i.id == p.item_id)?;
-            Some(Layout {
-                id: p.item_id.clone(),
-                code: type_code_of(&parameter, &source.type_properties, &source.properties),
-                type_name: p.type_name.clone(),
-                family_name: source.family_name.clone(),
-                centre: (p.centre.x, p.centre.y),
-                facing: (p.facing.x, p.facing.y),
-                hosting: source.hosting.clone(),
-                class: source.class,
-                kit: source.kit.clone(),
+    let judge_location = matches!(resolution.fit.kind, FitKind::Plain | FitKind::Manual | FitKind::Framed);
+    let layout_item = |source: &BlueprintItem, centre: Pt, facing: Pt| Layout {
+        id: source.id.clone(),
+        code: type_code_of(&parameter, &source.type_properties, &source.properties),
+        type_name: source.type_name.clone(),
+        family_name: source.family_name.clone(),
+        centre,
+        facing,
+        hosting: source.hosting.clone(),
+        class: source.class,
+        kit: source.kit.clone(),
+    };
+    let layout: Vec<Layout> = if judge_location {
+        resolution
+            .placements
+            .iter()
+            .filter_map(|p| {
+                let source = revision.content.items.iter().find(|i| i.id == p.item_id)?;
+                Some(layout_item(source, (p.centre.x, p.centre.y), (p.facing.x, p.facing.y)))
             })
-        })
-        .collect();
+            .collect()
+    } else {
+        // The blueprint does not fit the room, so the resolver placed NOTHING and there are no positions. The
+        // layout is still the blueprint's items (less the ones it or this room leaves out), which is all a
+        // by-code comparison needs; building it from the placements would compare against an empty layout and
+        // call every element foreign.
+        revision
+            .content
+            .items
+            .iter()
+            .filter(|i| !i.excluded && !assignment.overrides.iter().any(|o| o.exclude && o.item_id == i.id))
+            .map(|i| layout_item(i, (0.0, 0.0), (1.0, 0.0)))
+            .collect()
+    };
 
     let elements = room_elements(state, project, &room, &parameter)?;
-    let judge_location = matches!(resolution.fit.kind, FitKind::Plain | FitKind::Manual | FitKind::Framed);
     Ok(Some(AssignmentAudit {
         assignment_id: assignment.id.clone(),
         blueprint_id: blueprint.id.clone(),

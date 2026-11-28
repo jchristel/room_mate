@@ -164,6 +164,54 @@ fn test_the_audit_of_the_sample_assignment_says_what_it_cannot_tell() {
     std::fs::remove_dir_all(projects.parent().unwrap()).ok();
 }
 
+/// A blueprint that does not fit the room places nothing, so the audit's layout cannot come from the placements:
+/// it is the blueprint's own items, compared by code. Found on a real push, where five rooms audited against their
+/// OWN blueprint came back with 0 layout items and every element "foreign".
+#[test]
+fn test_a_room_the_blueprint_does_not_fit_is_audited_against_the_blueprints_items() {
+    use crate::assignments::{AssignRequest, Mapping, RoomKey};
+    use crate::service::blueprint_audit::{audit_assignment, RoomState};
+    use crate::service::blueprint_resolve::FitKind;
+    let (state, projects) = booted("cannot-judge");
+    let blueprint = blueprints::load(&projects, PROJECT, &blueprints::list(&projects, PROJECT).unwrap()[0].id).unwrap();
+    let live = blueprint.current().unwrap().content.items.iter().filter(|i| !i.excluded).count();
+    let rooms = assemble_rooms(&state, &RoomScope { project: Some(PROJECT), ..Default::default() })
+        .unwrap()
+        .unwrap();
+    let model = assignments::list_raw(&projects, PROJECT).unwrap()[0].room.model_id.clone();
+    let mut found = false;
+    for room in &rooms.rooms {
+        let assigned = assignments::assign(
+            &projects,
+            PROJECT,
+            AssignRequest {
+                blueprint_id: blueprint.id.clone(),
+                revision: None,
+                room: RoomKey { model_id: model.clone(), room_id: room.room.id.clone() },
+                room_name: room.room.name.clone(),
+                mapping: Mapping::default(),
+                overrides: None,
+                note: None,
+            },
+        )
+        .unwrap();
+        let got = audit_assignment(&state, &projects, PROJECT, &assigned.id).unwrap().unwrap();
+        if got.fit != FitKind::EdgeCountDiffers || got.audit.elements == 0 {
+            continue;
+        }
+        found = true;
+        assert_eq!(RoomState::CannotJudge, got.audit.state);
+        assert_eq!(live, got.audit.layout_items, "the blueprint's items, though none were placed");
+        assert!(
+            got.audit.verdicts.iter().all(|v| v.distance_mm.is_none()),
+            "no positions, so no distances"
+        );
+        break;
+    }
+    assert!(found, "the sample has a furnished room the blueprint does not fit");
+    std::fs::remove_dir_all(projects.parent().unwrap()).ok();
+}
+
 #[test]
 fn test_solve_picks_the_sheet_whose_room_is_the_same_size() {
     use crate::service::sheet_suggest;
