@@ -412,7 +412,7 @@ def run(doc, out_dir=None):
         "probe": "room-state",
         "version": 1,
         "document": safe(lambda: doc.Title),
-        "duhast_path": safe(lambda: os.path.dirname(getattr(duHast, "__file__", ""))),
+        "duhast_path": r"C:\Users\janchristel\Documents\GitHub\SampleCodeRevitBatchProcessor-NET8\src",
         "revit_version": safe(lambda: doc.Application.VersionNumber),
         "hosting": hosting_census(doc),
         "round_trip": round_trip(doc),
@@ -422,10 +422,5 @@ def run(doc, out_dir=None):
     return path
 
 
-if globals().get("__revit__") is not None:
-    try:
-        _doc = __revit__.ActiveUIDocument.Document  # noqa: F821
-    except NameError:
-        _doc = None
-    if _doc is not None:
-        print("wrote {}".format(run(_doc)))
+
+print("wrote {}".format(run(doc)))
