@@ -154,15 +154,23 @@ function Get-DuHast {
         New-Item -ItemType Directory -Force -Path $cache | Out-Null
         # A bare init + fetch of the one commit: cloning that repository for a
         # subfolder pulls its DLLs and sample data as well.
+        #
+        # git writes its progress ("From https://...") to stderr even when it succeeds, and Windows
+        # PowerShell 5.1 turns anything a native command writes to stderr into a TERMINATING error
+        # under 'Stop' once it is redirected with 2>&1. So this block runs under 'Continue' and every
+        # step is judged by its exit code, which is the only honest answer git gives.
+        $stopBefore = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
         git -C $cache init --quiet 2>&1 | Out-Null
         git -C $cache remote add origin $lock.repo 2>&1 | Out-Null
         git -C $cache config core.sparseCheckout true
         git -C $cache sparse-checkout init --cone 2>&1 | Out-Null
         git -C $cache sparse-checkout set $lock.path 2>&1 | Out-Null
         git -C $cache fetch --depth 1 origin $lock.commit 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "Could not fetch $($lock.commit) from $($lock.repo)" }
+        if ($LASTEXITCODE -ne 0) { $ErrorActionPreference = $stopBefore; throw "Could not fetch $($lock.commit) from $($lock.repo)" }
         git -C $cache checkout --quiet FETCH_HEAD 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw "Could not check out $($lock.commit)" }
+        if ($LASTEXITCODE -ne 0) { $ErrorActionPreference = $stopBefore; throw "Could not check out $($lock.commit)" }
+        $ErrorActionPreference = $stopBefore
 
         # The pin is only a pin if the thing fetched IS the commit named.
         $head = (git -C $cache rev-parse HEAD).Trim()
