@@ -780,7 +780,7 @@ checked before anything is made, then one transaction group per task (`duHast...
 - **The Revit calls live in duHast** (PR in the duHast repo): `Family/family_symbol_lookup`, `Views/views_names`, `viewports_create`,
   `schedules_create`, `elevation_marker`, `Annotation/independent_tags_create`, `Rooms/room_tags_create` and `Common/transaction.in_transaction_group`,
   plus fixes to `sheets_create` (unicode text, activate the title block), `plan_view_create` and `elevation_view_create` (optional phase, the crop went to
-  the plan view). **`extractor/duhast.lock` is at `abbbebef`** (2026-11-12: duHast release `v1.0.5+net8` plus PR #116, `views_crop.rotate_view_crop` and a turned 3D section box), which has all of these and `Family/family_instance_create.place_a_line_based_detail_family_instance_in_view` for the 2D grid; `-DuHastPath` is for a duHast newer still.
+  the plan view). **`extractor/duhast.lock` is at `8aa3c574`** (2026-11-28: duHast release `v1.0.7+net8` plus PR #137, line-based instances exported as items at their curve's midpoint with `location_curve`; it carries PR #116, `views_crop.rotate_view_crop` and a turned 3D section box), which has all of these and `Family/family_instance_create.place_a_line_based_detail_family_instance_in_view` for the 2D grid; `-DuHastPath` is for a duHast newer still.
 
 ## Tag rules: where a tag goes, learned from tags in Revit views
 
