@@ -159,6 +159,20 @@ pub struct Hosting {
     pub face_hosted: bool,
 }
 
+/// One shared nested family inside an item, as its host's family defines it: what comes with the host.
+///
+/// **By family, type and depth, never by element id**: an id names an instance in one model, and the question is
+/// whether two hosts carry the same parts. Depth is how many families down it sits (1 for a direct child), so a
+/// bracket nested in a bracket is not the same part as one beside it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct KitPart {
+    pub depth: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_name: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BlueprintItem {
     /// The Revit element id in the model it was captured from. Identifies the item within
@@ -188,6 +202,12 @@ pub struct BlueprintItem {
     /// How it was hosted when captured (see `Hosting`); absent on a blueprint captured before this existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub hosting: Option<Hosting>,
+    /// What its family brings with it, sorted. **`None` is "not recorded", which is not "no parts"**: an item
+    /// captured from a snapshot that cannot say (see `blueprint_capture::kit_of`) and a blueprint captured before
+    /// this existed both read `None`, and the audit then says `kit_unknown` rather than agreeing. `Some(vec![])`
+    /// is a family with no nested parts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kit: Option<Vec<KitPart>>,
 }
 
 /// A door of the room the blueprint was captured from. **Orientation only**: doors are already

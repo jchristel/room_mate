@@ -435,7 +435,7 @@ resolver cannot map the edges, the audit says so rather than inventing a mapping
 
 0. **Built (2026-11-28):** `placement_type` and `unique_id` on every FF&E item (duHast `get_item_facts`, `Item`), and `BlueprintItem::hosting`.
    **Built, and in `CLAUDE.md` under Blueprints: step 1's audit read** (`service::blueprint_audit`, the `[blueprint_audit]` settings, the HTTP read and
-   `audit_assignment`) **without** the ledger rows, the kit check (`BlueprintItem.sub_components`, step 1b) and `height_differs`; those stay below.
+   `audit_assignment`) **without** the ledger rows and `height_differs`. **Step 1b is built too** (`BlueprintItem::kit`, `kit_differs`); `component_edited` is not, because a blueprint stores no nested instances.
 1. **Audit read** (`service::blueprint_audit`, `GET .../assignments/{id}/audit`, one MCP read): effective layout vs content,
    verdicts of section 5.2 by code and location, hosts only, level-based items only, with `no_code` and `unsupported_host`
    counted and listed. Everything is UNTRACKED until a ledger exists. Settings

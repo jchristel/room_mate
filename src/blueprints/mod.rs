@@ -305,6 +305,7 @@ mod tests {
                     facing: Some((0.0, 1.0)),
                     nested: false,
                     hosting: None,
+                    kit: None,
                     properties: vec![],
                     type_properties: vec![],
                 }

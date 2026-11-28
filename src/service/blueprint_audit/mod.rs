@@ -15,8 +15,8 @@
 //! elements Revit placed from a task, because nothing records that (the ledger, build step 4), so every room is
 //! `Empty`, `Untracked` or `CannotJudge` and a verdict about a found element is an inference from code and
 //! place, never a proof. The ledger-only verdicts (`drifted`, `retired`, `removed_by_hand`, `moved_out`), the
-//! kit check (`kit_differs`: the blueprint item carries no `sub_components` yet) and the height check
-//! (`height_differs`) are not here either.
+//! `component_edited` (a nested instance's own properties differ: the blueprint stores no nested instances) and the
+//! height check (`height_differs`) are not here either.
 //!
 //! The pure part is [`audit`] over [`Layout`] and [`Element`], so it is tested without a server; `reads` makes
 //! those from an assignment and the project's FF&E.
@@ -26,7 +26,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 
 use super::blueprint_geometry::Pt;
-use super::blueprint_model::{Hosting, ItemClass};
+use super::blueprint_model::{Hosting, ItemClass, KitPart};
 use roommate_shared::settings::BlueprintAuditPolicy;
 
 mod reads;
@@ -110,6 +110,8 @@ pub struct Layout {
     /// How it was hosted when captured; `None` on a blueprint captured before that was recorded.
     pub hosting: Option<Hosting>,
     pub class: ItemClass,
+    /// What its family brings with it; `None` when the blueprint was captured before that was recorded.
+    pub kit: Option<Vec<KitPart>>,
 }
 
 impl Layout {
@@ -136,6 +138,8 @@ pub struct Element {
     pub centre: Option<Pt>,
     pub facing: Option<Pt>,
     pub hosting: Hosting,
+    /// What its family brings with it; `None` when the snapshot cannot say (see `blueprint_capture::kit_of`).
+    pub kit: Option<Vec<KitPart>>,
 }
 
 /// What a verdict says. Ordered so a summary reads from fine to needs-a-person.
@@ -144,6 +148,10 @@ pub struct Element {
 pub enum VerdictKind {
     /// Right thing, right place and facing.
     InPlace,
+    /// Right host, right place, different parts inside: a nested family changed, or the family was reloaded
+    /// with other parts. **Never `in_place`**, because a person cannot see it on the plan. Reported only: a
+    /// nested instance can be changed through its host alone, and a family reload is refused.
+    KitDiffers,
     /// Right thing, near its place but not in it (or facing the wrong way).
     Moved,
     /// Right code, found in the room, but with no location to judge (the room's fit is unusable).
@@ -200,6 +208,58 @@ pub struct Verdict {
     pub side: Option<Side>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub unsupported: Option<Unsupported>,
+    /// For a matched pair: whether the two hosts carry the same parts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kit: Option<KitState>,
+    /// For a pair whose kits differ: the parts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kit_diff: Option<KitDiff>,
+}
+
+/// Whether a matched host carries the blueprint's parts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum KitState {
+    Same,
+    Differs,
+    /// One side cannot say (an older snapshot or blueprint): no evidence, **never agreement**, as a door gap
+    /// with no door on either side is not agreement.
+    Unknown,
+}
+
+/// What differs between a layout item's parts and an element's.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct KitDiff {
+    /// In the blueprint's kit and not the element's.
+    pub missing: Vec<KitPart>,
+    /// In the element's and not the blueprint's.
+    pub extra: Vec<KitPart>,
+}
+
+/// The parts one list has and the other lacks, as multisets: two of the same part against one is one part short.
+fn multiset_difference(a: &[KitPart], b: &[KitPart]) -> Vec<KitPart> {
+    let mut left: Vec<&KitPart> = b.iter().collect();
+    let mut out = Vec::new();
+    for part in a {
+        if let Some(at) = left.iter().position(|q| *q == part) {
+            left.swap_remove(at);
+        } else {
+            out.push(part.clone());
+        }
+    }
+    out
+}
+
+fn compare_kit(layout: Option<&[KitPart]>, element: Option<&[KitPart]>) -> (KitState, Option<KitDiff>) {
+    let (Some(want), Some(have)) = (layout, element) else {
+        return (KitState::Unknown, None);
+    };
+    let (missing, extra) = (multiset_difference(want, have), multiset_difference(have, want));
+    if missing.is_empty() && extra.is_empty() {
+        (KitState::Same, None)
+    } else {
+        (KitState::Differs, Some(KitDiff { missing, extra }))
+    }
 }
 
 /// How much the audit can say about the room.
@@ -229,6 +289,8 @@ pub struct Audit {
     /// Layout items judged on a hosting the blueprint did not record (an older blueprint): an assumption,
     /// counted so it is visible.
     pub placement_assumed: usize,
+    /// Matched hosts whose kit could not be compared because one side cannot say.
+    pub kit_unknown: usize,
     pub counts: BTreeMap<VerdictKind, usize>,
     pub verdicts: Vec<Verdict>,
 }
@@ -331,6 +393,8 @@ fn verdict_for_element(kind: VerdictKind, e: &Element) -> Verdict {
         turn_deg: None,
         side: None,
         unsupported: None,
+        kit: None,
+        kit_diff: None,
     }
 }
 
@@ -346,6 +410,8 @@ fn verdict_for_item(kind: VerdictKind, l: &Layout) -> Verdict {
         turn_deg: None,
         side: None,
         unsupported: None,
+        kit: None,
+        kit_diff: None,
     }
 }
 
@@ -363,6 +429,7 @@ fn flag(kind: VerdictKind, side: Side, why: Option<Unsupported>, mut v: Verdict)
 pub fn audit(layout: &[Layout], elements: &[Element], judge_location: bool, policy: &BlueprintAuditPolicy) -> Audit {
     let mut verdicts: Vec<Verdict> = Vec::new();
     let mut placement_assumed = 0_usize;
+    let mut kit_unknown = 0_usize;
 
     // Partition both sides. Order matters: an unsupported item is not asked for its code, because its code says
     // nothing the audit may act on.
@@ -418,6 +485,7 @@ pub fn audit(layout: &[Layout], elements: &[Element], judge_location: bool, poli
 
     if judge_location {
         match_by_place(&items, &found, policy, &mut verdicts);
+        kit_unknown = verdicts.iter().filter(|v| v.kit == Some(KitState::Unknown)).count();
     } else {
         match_by_code(&items, &found, &mut verdicts);
     }
@@ -442,6 +510,7 @@ pub fn audit(layout: &[Layout], elements: &[Element], judge_location: bool, poli
         layout_items: layout.len(),
         elements: elements.len(),
         placement_assumed,
+        kit_unknown,
         counts,
         verdicts,
     }
@@ -488,10 +557,19 @@ fn match_by_place(items: &[&Layout], found: &[&Element], policy: &BlueprintAudit
             } else {
                 VerdictKind::Moved
             };
+            let (kit, kit_diff) = compare_kit(l.kit.as_deref(), es[j].kit.as_deref());
+            // In place and in the right place, but not the same thing inside: never `in_place`.
+            let kind = if kind == VerdictKind::InPlace && kit == KitState::Differs {
+                VerdictKind::KitDiffers
+            } else {
+                kind
+            };
             let mut v = verdict_for_element(kind, es[j]);
             v.item_id = Some(l.id.clone());
             v.distance_mm = Some(d);
             v.turn_deg = turn;
+            v.kit = Some(kit);
+            v.kit_diff = kit_diff;
             out.push(v);
         }
         for (j, e) in es.iter().enumerate() {
@@ -501,34 +579,7 @@ fn match_by_place(items: &[&Layout], found: &[&Element], policy: &BlueprintAudit
         }
     }
 
-    // Substitution: something of ANOTHER code stands where an item should (within the place tolerance). It is
-    // one finding, not a `foreign` plus a `missing`.
-    let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
-    for (i, l) in loose_items.iter().enumerate() {
-        for (j, e) in loose_elements.iter().enumerate() {
-            if e.code != l.code
-                && let Some(c) = e.centre
-            {
-                let d = dist(l.centre, c);
-                if d <= policy.place_tolerance_mm {
-                    pairs.push((d, i, j));
-                }
-            }
-        }
-    }
-    pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let (mut item_done, mut element_done) = (vec![false; loose_items.len()], vec![false; loose_elements.len()]);
-    for (d, i, j) in pairs {
-        if item_done[i] || element_done[j] {
-            continue;
-        }
-        item_done[i] = true;
-        element_done[j] = true;
-        let mut v = verdict_for_element(VerdictKind::Substituted, loose_elements[j]);
-        v.item_id = Some(loose_items[i].id.clone());
-        v.distance_mm = Some(d);
-        out.push(v);
-    }
+    let (item_done, element_done) = substitutions(&loose_items, &loose_elements, policy, out);
 
     // What is left, by code. Both sides left over: the same kind of thing is in the room but not where any item
     // is (extra) and the item is missing. Only elements left over: more than the layout wants (surplus), or a
@@ -556,6 +607,43 @@ fn match_by_place(items: &[&Layout], found: &[&Element], policy: &BlueprintAudit
         out.extend(ul.iter().map(|l| verdict_for_item(VerdictKind::Missing, l)));
         out.extend(ue.iter().map(|e| verdict_for_element(extra_kind, e)));
     }
+}
+
+/// Substitution: something of ANOTHER code stands where an item should (within the place tolerance). It is one
+/// finding, not a `foreign` plus a `missing`. Returns which loose items and elements it used.
+fn substitutions(
+    loose_items: &[&Layout],
+    loose_elements: &[&Element],
+    policy: &BlueprintAuditPolicy,
+    out: &mut Vec<Verdict>,
+) -> (Vec<bool>, Vec<bool>) {
+    let mut pairs: Vec<(f64, usize, usize)> = Vec::new();
+    for (i, l) in loose_items.iter().enumerate() {
+        for (j, e) in loose_elements.iter().enumerate() {
+            if e.code != l.code
+                && let Some(c) = e.centre
+            {
+                let d = dist(l.centre, c);
+                if d <= policy.place_tolerance_mm {
+                    pairs.push((d, i, j));
+                }
+            }
+        }
+    }
+    pairs.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let (mut item_done, mut element_done) = (vec![false; loose_items.len()], vec![false; loose_elements.len()]);
+    for (d, i, j) in pairs {
+        if item_done[i] || element_done[j] {
+            continue;
+        }
+        item_done[i] = true;
+        element_done[j] = true;
+        let mut v = verdict_for_element(VerdictKind::Substituted, loose_elements[j]);
+        v.item_id = Some(loose_items[i].id.clone());
+        v.distance_mm = Some(d);
+        out.push(v);
+    }
+    (item_done, element_done)
 }
 
 /// Presence by code, for a room the blueprint does not fit: no expected positions, so no pairing by place and

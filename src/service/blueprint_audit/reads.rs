@@ -4,7 +4,7 @@
 
 use serde::Serialize;
 
-use super::super::blueprint_capture::{loop_mm, properties_of, FT_TO_MM};
+use super::super::blueprint_capture::{kit_of, loop_mm, properties_of, FT_TO_MM};
 use super::super::blueprint_geometry::{centroid, Pt};
 use super::super::blueprint_resolve::{resolve_in_room_with, FitKind};
 use super::super::items::{assemble_items, ItemScope};
@@ -103,6 +103,7 @@ pub fn audit_assignment(
                 facing: (p.facing.x, p.facing.y),
                 hosting: source.hosting.clone(),
                 class: source.class,
+                kit: source.kit.clone(),
             })
         })
         .collect();
@@ -154,6 +155,7 @@ fn room_elements(
             centre: element_centre(&it.item),
             facing: it.item.facing.as_ref().map(|f| (f.x, f.y)),
             hosting: super::super::blueprint_capture::hosting_of(&it.item),
+            kit: kit_of(&it.item),
         });
     }
     Ok(out)

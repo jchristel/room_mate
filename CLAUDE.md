@@ -462,8 +462,8 @@ get wrong:
   /projects/{id}/assignments/{assignment}/audit`, MCP `audit_assignment`; plan: [`PLAN-blueprint-room-state.md`](docs/PLAN-blueprint-room-state.md)).
   Hosts only (a nested component is its host's), matched by the project's `tag_type_code` and then by place (Hungarian, never greedy
   nearest), judged by `[blueprint_audit]` (5 mm in place, 600 mm same item, 5 degrees). **Nothing records what Revit placed**, so every room
-  is `empty`, `untracked` or `cannot_judge` and a verdict is an inference, never a proof; the ledger-only verdicts, the kit check and
-  height are not built. What is expensive to get wrong:
+  is `empty`, `untracked` or `cannot_judge` and a verdict is an inference, never a proof; the ledger-only verdicts, a nested instance's
+  own properties (`component_edited`) and height are not built. What is expensive to get wrong:
   - **"Level-based or work-plane on a level" needs BOTH facts, measured on a real model (822 instances): the family's `FamilyPlacementType`
     (`Item::placement_type`) AND the host (`Item::host`).** The placement type alone accepts about 90 face-hosted work-plane items; `host`
     alone accepts wall-hosted and line-based ones, whose `Host` is empty; a work-plane family must name a `Levels` host. `blueprint_audit::supported` is
@@ -472,6 +472,11 @@ get wrong:
     as "nothing judged" (the House A sample does exactly that, and `sample_data` pins it).
   - **A blueprint item with no recorded hosting** (`BlueprintItem::hosting`, filled at capture since 2026-11-28) is judged by its class: a wall device is
     unsupported, a free item is ASSUMED level-based and counted in `placement_assumed`.
+  - **The kit check compares what a host's family brings with it, by depth, family and type, never by element id** (`KitPart`,
+    `blueprint_capture::kit_of`). A right-place host whose parts differ is `kit_differs`, never `in_place`, and is reported only: a nested
+    instance changes through its host alone and a family reload is refused (reloading changes every instance in the model and may move
+    tags). **`None` is "not recorded", never "no parts"**: an empty `sub_components` is left out of the JSON, so an item with no placement type
+    (exported before nesting was read) reads `None`, and an unknown kit is `kit: unknown`, never agreement.
   - **`no_code` and `unsupported_host` are flags and nothing else**: no match, no suggestion, no action. A project with no `tag_type_code` is refused,
     because flagging every item `no_code` would be a wrong answer dressed as a finding.
   - **`placement_type` and `unique_id` come from duHast's `get_item_facts`** (an older duHast returns neither and the extractor sends neither). **Not run in Revit.**

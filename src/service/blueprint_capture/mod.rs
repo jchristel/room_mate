@@ -25,8 +25,8 @@ use super::blueprint_geometry::{
     inside, rotate, simplify, sub, unit, Edge, Pt, FINE_TOLERANCE_MM,
 };
 use super::blueprint_model::{
-    AlongMode, BlueprintDoor, BlueprintItem, Follow, Hosting, ItemClass, OffMode, Outline, Placement, Point, Property,
-    RevisionContent, Skipped,
+    AlongMode, BlueprintDoor, BlueprintItem, Follow, Hosting, ItemClass, KitPart, OffMode, Outline, Placement, Point,
+    Property, RevisionContent, Skipped,
 };
 use super::items::{assemble_items, ItemScope};
 use super::openings::{assemble_openings, OpeningKind, OpeningScope};
@@ -68,6 +68,8 @@ pub struct SourceItem {
     pub type_properties: Vec<Property>,
     /// How the model hosts it (`Hosting`); `None` when the source does not say.
     pub hosting: Option<Hosting>,
+    /// What its family brings with it (`kit_of`); `None` when the source cannot say.
+    pub kit: Option<Vec<KitPart>>,
 }
 
 /// How an FF&E item is hosted, as the audit reads it on both sides (`blueprint_audit::supported`): copied
@@ -78,6 +80,48 @@ pub fn hosting_of(item: &crate::contract::Item) -> Hosting {
         host_kind: item.host.as_ref().and_then(|h| h.kind.clone()),
         face_hosted: item.host.as_ref().is_some_and(|h| h.face_hosted),
     }
+}
+
+/// What an item's family brings with it: its shared nested families by depth, family and type, sorted so two kits
+/// compare as equal multisets.
+///
+/// **`None` when the snapshot cannot say.** An item with no nested parts has an empty `sub_components`, which is
+/// left out of the JSON, so an item from a snapshot exported before nesting was read looks identical. What tells
+/// them apart is the placement type: it was added after nesting, so an item that carries one comes from an export
+/// that did read nesting, and its empty list means "no parts". An item with no placement type is "not recorded",
+/// and the audit says `kit_unknown` for it instead of agreeing.
+///
+/// Depth is read from the parent chain: a part whose `parent_id` is the host's id is depth 1, one nested in that
+/// part depth 2. A part whose parent is not in the list (it cannot happen in a well-formed export) counts as depth 1.
+pub fn kit_of(item: &crate::contract::Item) -> Option<Vec<KitPart>> {
+    item.placement_type.as_ref()?;
+    let parent_of: std::collections::BTreeMap<&str, &str> =
+        item.sub_components.iter().map(|c| (c.id.as_str(), c.parent_id.as_str())).collect();
+    let depth = |start: &str| -> u32 {
+        let (mut depth, mut at) = (1_u32, start);
+        // A bounded walk: a cycle in a malformed export must not spin.
+        for _ in 0..64 {
+            match parent_of.get(at) {
+                Some(&parent) if parent != item.id => {
+                    depth += 1;
+                    at = parent;
+                }
+                _ => break,
+            }
+        }
+        depth
+    };
+    let mut kit: Vec<KitPart> = item
+        .sub_components
+        .iter()
+        .map(|c| KitPart {
+            depth: depth(&c.id),
+            family_name: c.family_name.clone(),
+            type_name: c.type_name.clone(),
+        })
+        .collect();
+    kit.sort();
+    Some(kit)
 }
 
 /// A door of the room, as capture reads it: only where it is. Millimetres, project-local frame.
@@ -326,6 +370,7 @@ pub(super) fn place_item(s: SourceItem, origin: Pt, coarse: &[Pt], es: &[Edge]) 
             properties: s.properties,
             type_properties: s.type_properties,
             hosting: s.hosting,
+            kit: s.kit,
         },
         Measured { ht, hn, corners: box_corners(c, f, hu, hv), area: 4.0 * hu * hv },
     )
@@ -416,6 +461,7 @@ mod tests {
             facing: Some(f),
             nested: false,
             hosting: None,
+            kit: None,
             properties: vec![],
             type_properties: vec![],
         }

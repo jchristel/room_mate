@@ -22,6 +22,7 @@ fn item(id: &str, code: Option<&str>, at: Pt) -> Layout {
         facing: (1.0, 0.0),
         hosting: Some(level_hosting()),
         class: ItemClass::Free,
+        kit: None,
     }
 }
 
@@ -35,6 +36,7 @@ fn element(id: &str, code: Option<&str>, at: Pt) -> Element {
         centre: Some(at),
         facing: Some((1.0, 0.0)),
         hosting: level_hosting(),
+        kit: None,
     }
 }
 
@@ -356,4 +358,166 @@ fn an_element_with_no_position_is_never_paired() {
     let a = audit(&layout, &[lost], true, &policy());
     assert_eq!(1, count(&a, VerdictKind::Missing));
     assert_eq!(1, count(&a, VerdictKind::Extra));
+}
+
+fn part(depth: u32, family: &str, type_name: &str) -> KitPart {
+    KitPart {
+        depth,
+        family_name: Some(family.to_string()),
+        type_name: Some(type_name.to_string()),
+    }
+}
+
+fn with_kit(mut l: Layout, kit: Option<Vec<KitPart>>) -> Layout {
+    l.kit = kit;
+    l
+}
+
+fn with_element_kit(mut e: Element, kit: Option<Vec<KitPart>>) -> Element {
+    e.kit = kit;
+    e
+}
+
+#[test]
+fn the_same_parts_are_the_same_kit_and_the_verdict_stays_in_place() {
+    let kit = vec![part(1, "Handle", "H1"), part(1, "Handle", "H1"), part(2, "Screw", "S")];
+    let a = audit(
+        &[with_kit(item("a", Some("C"), (0.0, 0.0)), Some(kit.clone()))],
+        &[with_element_kit(element("e", Some("C"), (0.0, 0.0)), Some(kit))],
+        true,
+        &policy(),
+    );
+    assert_eq!(VerdictKind::InPlace, a.verdicts[0].kind);
+    assert_eq!(Some(KitState::Same), a.verdicts[0].kit);
+    assert_eq!(0, a.kit_unknown);
+}
+
+#[test]
+fn right_place_different_parts_is_kit_differs_never_in_place_and_names_the_parts() {
+    // Two handles against one, and a part one level deeper than it should be.
+    let want = vec![part(1, "Handle", "H1"), part(1, "Handle", "H1")];
+    let have = vec![part(1, "Handle", "H1"), part(2, "Handle", "H1")];
+    let a = audit(
+        &[with_kit(item("a", Some("C"), (0.0, 0.0)), Some(want))],
+        &[with_element_kit(element("e", Some("C"), (0.0, 0.0)), Some(have))],
+        true,
+        &policy(),
+    );
+    let v = &a.verdicts[0];
+    assert_eq!(VerdictKind::KitDiffers, v.kind);
+    let diff = v.kit_diff.as_ref().unwrap();
+    assert_eq!(vec![part(1, "Handle", "H1")], diff.missing, "one handle short at depth 1");
+    assert_eq!(
+        vec![part(2, "Handle", "H1")],
+        diff.extra,
+        "and one at depth 2 that the blueprint does not have"
+    );
+    assert_eq!(1, count(&a, VerdictKind::KitDiffers));
+    assert_eq!(0, count(&a, VerdictKind::InPlace));
+}
+
+#[test]
+fn a_kit_that_one_side_cannot_state_is_unknown_never_agreement() {
+    for (want, have) in [
+        (None, Some(vec![])),
+        (Some(vec![]), None),
+        (None, None),
+        (Some(vec![part(1, "H", "1")]), None),
+    ] {
+        let a = audit(
+            &[with_kit(item("a", Some("C"), (0.0, 0.0)), want)],
+            &[with_element_kit(element("e", Some("C"), (0.0, 0.0)), have)],
+            true,
+            &policy(),
+        );
+        assert_eq!(VerdictKind::InPlace, a.verdicts[0].kind, "no evidence is not a difference");
+        assert_eq!(Some(KitState::Unknown), a.verdicts[0].kit);
+        assert_eq!(1, a.kit_unknown);
+    }
+}
+
+#[test]
+fn a_family_with_no_parts_on_both_sides_is_the_same_kit() {
+    let a = audit(
+        &[with_kit(item("a", Some("C"), (0.0, 0.0)), Some(vec![]))],
+        &[with_element_kit(element("e", Some("C"), (0.0, 0.0)), Some(vec![]))],
+        true,
+        &policy(),
+    );
+    assert_eq!(Some(KitState::Same), a.verdicts[0].kit);
+}
+
+#[test]
+fn a_moved_host_keeps_its_verdict_and_carries_the_kit_difference_beside_it() {
+    let a = audit(
+        &[with_kit(
+            item("a", Some("C"), (0.0, 0.0)),
+            Some(vec![part(1, "H", "1")]),
+        )],
+        &[with_element_kit(element("e", Some("C"), (300.0, 0.0)), Some(vec![]))],
+        true,
+        &policy(),
+    );
+    assert_eq!(VerdictKind::Moved, a.verdicts[0].kind, "where it is is the bigger finding");
+    assert_eq!(Some(KitState::Differs), a.verdicts[0].kit);
+}
+
+fn host_item(parts: &[(&str, &str, &str, &str)], placement: Option<&str>) -> crate::contract::Item {
+    let sub: Vec<serde_json::Value> = parts
+        .iter()
+        .map(|(id, parent, family, type_name)| {
+            serde_json::json!({ "id": id, "parent_id": parent, "family_name": family, "type_name": type_name })
+        })
+        .collect();
+    serde_json::from_value(serde_json::json!({
+        "id": "host", "level_id": "1", "category": "Casework", "type_id": "t", "type_name": "Cupboard",
+        "placement_type": placement, "sub_components": sub,
+    }))
+    .unwrap()
+}
+
+#[test]
+fn a_kit_is_read_by_depth_from_the_parent_chain_and_sorted() {
+    use crate::service::blueprint_capture::kit_of;
+    let item = host_item(
+        &[
+            ("3", "2", "Screw", "S"),
+            ("1", "host", "Handle", "H1"),
+            ("2", "1", "Cap", "C"),
+            ("4", "host", "Handle", "H1"),
+        ],
+        Some("OneLevelBased"),
+    );
+    assert_eq!(
+        Some(vec![
+            part(1, "Handle", "H1"),
+            part(1, "Handle", "H1"),
+            part(2, "Cap", "C"),
+            part(3, "Screw", "S")
+        ]),
+        kit_of(&item),
+        "a direct child is depth 1, a part nested in it 2, and so on; element ids are not part of the kit"
+    );
+}
+
+#[test]
+fn an_item_from_a_snapshot_that_cannot_say_has_no_recorded_kit_not_an_empty_one() {
+    use crate::service::blueprint_capture::kit_of;
+    assert_eq!(
+        None,
+        kit_of(&host_item(&[], None)),
+        "no placement type: exported before nesting was read, so unknown"
+    );
+    assert_eq!(
+        Some(vec![]),
+        kit_of(&host_item(&[], Some("OneLevelBased"))),
+        "a newer export with no parts has none"
+    );
+}
+
+#[test]
+fn a_cycle_in_a_malformed_kit_does_not_spin() {
+    use crate::service::blueprint_capture::kit_of;
+    let item = host_item(&[("1", "2", "A", "a"), ("2", "1", "B", "b")], Some("OneLevelBased"));
+    assert_eq!(2, kit_of(&item).unwrap().len(), "read, bounded, not hung");
 }
