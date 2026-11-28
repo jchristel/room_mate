@@ -400,8 +400,24 @@ def round_trip(doc):
     }
 
 
+def use_duhast_at(path):
+    """Put a duHast checkout's `src` folder first on `sys.path`, so the probe measures THAT duHast.
+
+    Set `DUHAST_PATH` below, or the `ROOMMATE_DUHAST_PATH` environment variable, to the folder that
+    CONTAINS the `duHast` package (`...\\src`, not `...\\src\\duHast`). Empty uses whatever the pyRevit
+    session already imported. **A session that has already imported duHast keeps it** (restart Revit
+    to change it), which is why `run` records where the loaded one actually came from."""
+    if path and path not in sys.path:
+        sys.path.insert(0, path)
+
+
+# Edit this line on your machine, or set ROOMMATE_DUHAST_PATH. Leave empty to use the loaded duHast.
+DUHAST_PATH = ""
+
+
 def run(doc, out_dir=None):
     """Both parts, written to `room-state-probe.json`. Returns the path."""
+    use_duhast_at(os.environ.get("ROOMMATE_DUHAST_PATH") or DUHAST_PATH)
     out_dir = out_dir or default_out_dir()
     if not os.path.isdir(out_dir):
         os.makedirs(out_dir)
@@ -413,7 +429,7 @@ def run(doc, out_dir=None):
         "probe": "room-state",
         "version": 1,
         "document": safe(lambda: doc.Title),
-        "duhast_path": r"C:\Users\janchristel\Documents\GitHub\SampleCodeRevitBatchProcessor-NET8\src",
+        "duhast_path": safe(lambda: list(duHast.__path__)[0]),
         "revit_version": safe(lambda: doc.Application.VersionNumber),
         "hosting": hosting_census(doc),
         "round_trip": round_trip(doc),
