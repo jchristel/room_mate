@@ -115,6 +115,9 @@ pub struct ProjectSettings {
 
     /// Where a route's size checks read their data from. Read by `service::connectivity`.
     pub routing: roommate_shared::settings::RoutingPolicy,
+
+    /// How the room-state audit judges place, nearness and turn. Read by `service::blueprint_audit`.
+    pub blueprint_audit: roommate_shared::settings::BlueprintAuditPolicy,
 }
 
 /// One immutable snapshot of every project's settings. Swapped wholesale

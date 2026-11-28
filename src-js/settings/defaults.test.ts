@@ -11,6 +11,7 @@ describe("defaultSettings", () => {
     expect(s.routing.door_height_properties).toEqual(["Height", "Door Height"]);
     expect(s.doors.room_attribution).toBe("to_room_then_from_room");
     expect(s.ffe.nested_components).toBe("exclude");
+    expect(s.blueprint_audit).toEqual({ place_tolerance_mm: 5, near_tolerance_mm: 600, turn_tolerance_deg: 5 });
     expect(s.room_label).toEqual(["$name", "$id"]);
   });
 

@@ -115,6 +115,10 @@ pub fn load_settings(path: &Path) -> anyhow::Result<Settings> {
         .routing
         .validate()
         .with_context(|| format!("bad [routing] policy in {}", path.display()))?;
+    settings
+        .blueprint_audit
+        .validate()
+        .with_context(|| format!("bad [blueprint_audit] policy in {}", path.display()))?;
     Ok(settings)
 }
 

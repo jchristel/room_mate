@@ -211,6 +211,7 @@ mod tests {
             ffe: Default::default(),
             hierarchy_exclusions: vec![],
             routing: Default::default(),
+            blueprint_audit: Default::default(),
         };
         let state = AppState::new(Box::new(MemStore::new()), [("p1".to_string(), settings)].into(), None);
         std::sync::Arc::new(match dir {
