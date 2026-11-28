@@ -50,6 +50,12 @@ const DEFAULT_GAP_MM: f64 = 150.0;
 /// An item's type code: the project's type-code parameter, read from the type's properties and, for
 /// a model that put it on the instance, from the instance's. A blank value is no value, and a
 /// blank type value does not stop a real instance one (the tiering rule, as for doors).
+///
+/// **The word `None` is blank too.** duHast's `getter_string_as_string` starts from the string `"None"` and keeps it
+/// for an empty text parameter, so a type with no code arrives as `"None"`: 272 of 642 types on a real model. Taken
+/// as a code, every one of them would be "the same thing" (a shelf, a drawer and a hamper alike) and a tag rule or an
+/// audit would pair them. `classify` already reads the word as unset for the same reason. The cost is a type whose real
+/// code is the word "None", which could not be told from an empty one anyway.
 pub fn type_code_of(parameter: &str, type_properties: &[Property], properties: &[Property]) -> Option<String> {
     let wanted = parameter.trim();
     if wanted.is_empty() {
@@ -58,7 +64,7 @@ pub fn type_code_of(parameter: &str, type_properties: &[Property], properties: &
     [type_properties, properties]
         .iter()
         .flat_map(|tier| tier.iter())
-        .find(|p| p.name.trim().eq_ignore_ascii_case(wanted) && !p.value.trim().is_empty())
+        .find(|p| p.name.trim().eq_ignore_ascii_case(wanted) && !p.value.trim().is_empty() && p.value.trim() != "None")
         .map(|p| p.value.trim().to_string())
 }
 
@@ -670,6 +676,16 @@ mod tests {
         let inst = [p("assembly code", "X")];
         assert_eq!(type_code_of("assembly code", &ty, &inst).as_deref(), Some("B-01"));
         assert_eq!(type_code_of("Assembly Code", &[p("Assembly Code", " ")], &inst).as_deref(), Some("X"));
+        // duHast writes an empty text parameter as the word "None": that is no code, and it does not shadow a real one.
+        assert_eq!(type_code_of("Assembly Code", &[p("Assembly Code", "None")], &[]), None);
+        assert_eq!(
+            type_code_of("Assembly Code", &[p("Assembly Code", " None ")], &inst).as_deref(),
+            Some("X")
+        );
+        assert_eq!(
+            type_code_of("Assembly Code", &[p("Assembly Code", "None")], &[p("Assembly Code", "None")]),
+            None
+        );
         assert_eq!(type_code_of("", &ty, &inst), None);
         assert_eq!(type_code_of("Nope", &ty, &inst), None);
     }
