@@ -68,10 +68,15 @@ def hosting(report):
     unreadable = [r for r in hosts if r["placement_type"] is None]
     if unreadable:
         print("  {} instance(s) with an unreadable placement type (the plan flags these unsupported).".format(len(unreadable)))
-    nolocation = [r for r in hosts if r["location_class"] != "LocationPoint"]
+    curve = [r for r in hosts if r["location_class"] == "LocationCurve"]
+    if curve:
+        print("  {} line-based instance(s) (LocationCurve): exported at the curve MIDPOINT since duHast 2026-11-28, so a".format(len(curve)))
+        print("    point comparison would treat each as a point item. The plan flags them unsupported (section 5.6).")
+        print("    placement types: {}".format(sorted(set(r["placement_type"] for r in curve))))
+    nolocation = [r for r in hosts if r["location_class"] not in ("LocationPoint", "LocationCurve")]
     if nolocation:
-        print("  {} instance(s) with no point location (the export drops them): {}".format(
-            len(nolocation), sorted(set(r["location_class"] for r in nolocation))))
+        print("  {} instance(s) with neither a point nor a curve location (the export drops them): {}".format(
+            len(nolocation), sorted(set(str(r["location_class"]) for r in nolocation))))
     print()
 
 

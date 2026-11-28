@@ -176,10 +176,16 @@ pub struct Item {
     /// measurable footprint can still be drawn at, which is the difference
     /// between "we do not know its shape" and "it silently is not there".
     ///
-    /// `Option` is not the producer hedging — duHast refuses any instance whose
-    /// `Location` is not a `LocationPoint`, so a pushed item always has one. It
-    /// is because every stored snapshot re-parses through this type at boot, the
-    /// same permissive-type / strict-producer split every payload here uses.
+    /// **A line-based instance (a rail, a linear fitting) reports the MIDPOINT of its
+    /// location curve** (duHast `get_location_xyz`, 2026-11-28), and its facing is the
+    /// instance's own X axis. The curve's start and end are in the export
+    /// (`location_curve`) and are not carried here, so a line-based item reads as a
+    /// point item with no length.
+    ///
+    /// `Option` is not the producer hedging — duHast refuses any instance with neither
+    /// a point nor a curve location, so a pushed item always has one. It is because
+    /// every stored snapshot re-parses through this type at boot, the same
+    /// permissive-type / strict-producer split every payload here uses.
     #[serde(default)]
     pub insertion_point: Option<Point2D>,
 

@@ -271,7 +271,7 @@ and the plug-in reports what it did; nothing in the plan depends on the plug-in 
 | Height | in properties only | compare as number with the unit trap the ceiling offset taught (display strings). |
 | **Kit on both sides**: blueprint item and content each carry `sub_components` | exported on every door/window/FF&E; `BlueprintItem` has **no** `sub_components` field | **new**: capture stores each item's kit beside its properties. Without it, `kit_unknown` everywhere; a blueprint captured before has none until pushed again. |
 | Host/component link for pushed components | `super_component_id` on the item, `parent_id` on a sub component | none; the audit groups components under hosts by it |
-| **Hosting kind of every item** (level-based / work-plane vs wall or face) | `ItemHost` (`kind`, `id`, `face_hosted`), absent when `FamilyInstance.Host` is None; read by `item_facts`, not yet run in Revit | classify from the family's placement type (level-based, work-plane, two-level) if the probe shows it separates the cases, else from `host`; anything else, **and anything that cannot be read, is `unsupported_host`** (the safe side). `scripts/probe_room_state.py` says which rule holds. |
+| **Hosting kind of every item** (level-based / work-plane vs wall or face) | `ItemHost` (`kind`, `id`, `face_hosted`), absent when `FamilyInstance.Host` is None; read by `item_facts`, not yet run in Revit | classify from the family's placement type (level-based, work-plane, two-level supported; hosted, face, curve-based not), because `host` alone cannot see a line-based item (its `Host` is empty); the probe shows whether `host` is still needed beside it; anything else, **and anything that cannot be read, is `unsupported_host`** (the safe side). `scripts/probe_room_state.py` says which rule holds. |
 | Tolerances | none | the three settings of section 5.1 |
 
 ### 5.6 Scope of the first iteration: level-based and work-plane (level) placement only
@@ -285,6 +285,10 @@ changed by the same update.
   retyped or removed by an update.
 - Such an item in the blueprint is flagged on the audit (`unsupported_host` on the item) so the author sees what the layout
   cannot cover; it is neither dropped from the blueprint nor placed by an update task.
+- **A line-based item (placement type `CurveBased`: a rail, a linear fitting) is the same.** duHast exports it at the midpoint
+  of its location curve (2026-11-28) with the start and end in the export, and the server stores the midpoint only, so it
+  looks like a point item with no length. A point comparison would call it `moved` or `missing` wrongly, so it is
+  `unsupported_host` too, found by the family's placement type (the host rule alone cannot see it: `Host` is empty).
 - This does not change populate: how a populate places a wall-hosted item today (nearest wall within 450 mm, face-hosted
   reported not placed) is as built and is outside this plan.
 - Lifting wall devices into scope later means a hosting kind on the blueprint item and a comparison along the host; that is a
