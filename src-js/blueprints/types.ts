@@ -179,6 +179,8 @@ export interface Placed {
   size_mm: [number, number];
   edge: number;
   rule: string;
+  /** For a room's addition (`item_id` begins `add-`): the blueprint item it copies. */
+  clone_of?: string;
 }
 
 export type Finding =
@@ -189,7 +191,10 @@ export type Finding =
   | { kind: "mirror_image"; message: string }
   | { kind: "shape_mismatch"; message: string }
   | { kind: "doors_disagree"; message: string }
-  | { kind: "override_unused"; item: string };
+  | { kind: "override_unused"; item: string }
+  /** A nudge or turn made against a recipe the item no longer has: held, not applied. */
+  | { kind: "override_stale"; item: string }
+  | { kind: "addition_unused"; item: string; reason: string };
 
 export interface ResolveResponse {
   blueprint_id: string;
@@ -223,7 +228,23 @@ export interface ItemOverride {
   exclude?: boolean;
   dx_mm?: number;
   dy_mm?: number;
+  /** Along the edge the item stands against, and into the room (the item's own frame: follows a turned room). */
+  along_mm?: number;
+  off_mm?: number;
+  /** The recipe the override was made against; the server fills it in and never overwrites one sent. */
+  base?: string;
   rotate_deg?: number;
+}
+
+/** An item this room has that the blueprint does not: a copy of a blueprint item on the ROOM's own coarse edge
+ *  (src/assignments.rs `ItemAddition`). Whole mm and degrees. `id` begins `add-`. */
+export interface ItemAddition {
+  id: string;
+  clone_of: string;
+  edge: number;
+  along_mm: number;
+  off_mm: number;
+  facing_deg?: number;
 }
 
 export interface AssignmentRow {
@@ -235,6 +256,8 @@ export interface AssignmentRow {
   mapping: Mapping;
   /** This room's changes to single items. Absent when there are none. */
   overrides?: ItemOverride[];
+  /** Items this room has that the blueprint does not. Absent when there are none. */
+  additions?: ItemAddition[];
   note?: string | null;
   taken_at: string;
   blueprint_name: string | null;
@@ -270,3 +293,63 @@ export interface AssignOutcome {
   assigned: boolean;
   error?: string;
 }
+
+// --- What a revision would change in every assigned room (`service::blueprint_impact`): a dry run ---
+
+export type Action = "add" | "move" | "report";
+
+export type RoomStatus = "error" | "room_gone" | "cannot_judge" | "needs_decision" | "changes" | "no_change";
+
+export type ChangeKind = "moved" | "type_changed" | "kit_changed" | "properties_changed" | "added" | "retired";
+
+export interface ItemDiff {
+  item_id: string;
+  old_item_id?: string;
+  matched?: "by_id" | "by_position";
+  type_name: string;
+  family_name?: string;
+  changes: ChangeKind[];
+  moved_mm?: number;
+}
+
+/** The audit's verdict a planned action came from; only what the list shows is typed. */
+export interface PlanVerdict {
+  kind: string;
+  item_id?: string;
+  element_id?: string;
+  type_name: string;
+  distance_mm?: number;
+}
+
+export interface PlannedAction {
+  action: Action;
+  verdict: PlanVerdict;
+}
+
+export interface RoomImpact {
+  assignment_id: string;
+  room: { model_id: string; room_id: string };
+  room_name: string;
+  pinned_revision: number;
+  status: RoomStatus;
+  reason?: string;
+  fit?: FitKind;
+  held: string[];
+  findings: Finding[];
+  item_changes: ItemDiff[];
+  plan: PlannedAction[];
+  plan_counts: Partial<Record<Action, number>>;
+}
+
+export interface BlueprintImpact {
+  blueprint_id: string;
+  blueprint_name: string;
+  current_revision: number;
+  /** The revision the target is, or would become if accepted. */
+  target: { revision: number; pending_id?: number };
+  outline: { old_edges: number; new_edges: number; changed: boolean };
+  rooms: RoomImpact[];
+  status_counts: Partial<Record<RoomStatus, number>>;
+}
+
+export type UpdateMode = "items" | "locations";

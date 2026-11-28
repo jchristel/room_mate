@@ -304,13 +304,10 @@ changed by the same update.
 
 ## 6. Overrides: what is left
 
-The server side is built and described in `CLAUDE.md` under Blueprints: exclude, nudge and turn, **additions** (the third corner
+This is built and described in `CLAUDE.md` under Blueprints: exclude, nudge and turn, **additions** (the third corner
 guard), the **`base`** recipe hash with `override_stale`, and **item-frame nudges**. What remains:
 
-- **The assign view** cannot add an addition, preview one, or write item-frame nudges: it still writes plan-frame `dx_mm`/`dy_mm`
-  (the resolve read already takes `additions`). "Add one here" on the plan, with the clone chosen from the blueprint's items.
-- **Resolving a stale override**: today it is held and reported. The person needs "keep it on the new recipe" (send it again with no
-  `base`, which the server re-stamps) or "drop it", as a button, and `override_stale` shown on the item.
+- **Built, not driven in a browser:** the assign view adds, edits and previews additions, writes item-frame nudges, and resolves a held nudge (keep or drop).
 - **Substitution**: a room that takes another type of the same item. It must report its kit effect before it is saved (section 5.3),
   so it waits for the kit comparison to be usable from an editor.
 - **An addition survives a replace** (section 5.4): the replacement is built from the effective layout, which includes it. True by

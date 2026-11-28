@@ -13,9 +13,12 @@ import type {
   AssignmentRow,
   AssignOutcome,
   Blueprint,
+  BlueprintImpact,
   BlueprintSummary,
+  ItemAddition,
   ItemOverride,
   Mapping,
+  UpdateMode,
   Point,
   ProjectRow,
   ResolveResponse,
@@ -87,20 +90,21 @@ export const decidePending = (project: string, id: string, pendingId: number, ba
   );
 
 /** Where a blueprint revision's items go in one room. A read: nothing is stored. */
-export const resolve = (project: string, id: string, roomId: string, revision: number, mapping: Mapping, overrides?: string) => {
+export const resolve = (project: string, id: string, roomId: string, revision: number, mapping: Mapping, overrides?: string, additions?: string) => {
   const q = new URLSearchParams({ room_id: roomId, revision: String(revision) });
   if (mapping.frame) q.set("frame", JSON.stringify(mapping.frame));
   else if (mapping.edge_map) q.set("edge_map", mapping.edge_map.join(","));
   else if (mapping.shift !== undefined) q.set("shift", String(mapping.shift));
   if (overrides) q.set("overrides", overrides);
+  if (additions) q.set("additions", additions);
   return apiGet<ResolveResponse>(`${base(project)}/blueprints/${encodeURIComponent(id)}/resolve?${q.toString()}`);
 };
 
 export const listAssignments = (project: string) => apiGet<AssignmentRow[]>(`${base(project)}/assignments`);
 
 /** Put a blueprint revision in a room, replacing the room's assignment if it has one. */
-export const assign = (project: string, blueprintId: string, revision: number, roomId: string, mapping: Mapping, note?: string, overrides: ItemOverride[] = []) =>
-  send<unknown>("POST", `${base(project)}/assignments`, { blueprint_id: blueprintId, revision, room_id: roomId, mapping, note, overrides });
+export const assign = (project: string, blueprintId: string, revision: number, roomId: string, mapping: Mapping, note?: string, overrides: ItemOverride[] = [], additions: ItemAddition[] = [], modelId?: string) =>
+  send<unknown>("POST", `${base(project)}/assignments`, { blueprint_id: blueprintId, revision, room_id: roomId, model_id: modelId, mapping, note, overrides, additions });
 
 export const deleteAssignment = (project: string, id: string) =>
   send<null>("DELETE", `${base(project)}/assignments/${encodeURIComponent(id)}`, null);
@@ -112,3 +116,22 @@ export const solve = (project: string, id: string, revision: number, roomIds: st
 /** Put a revision in each of several rooms at the best fit, replacing each room's assignment. */
 export const assignMany = (project: string, blueprintId: string, revision: number, roomIds: string[], note?: string) =>
   send<AssignOutcome[]>("POST", `${base(project)}/assignments/many`, { blueprint_id: blueprintId, revision, room_ids: roomIds, note });
+
+/** What moving the blueprint's assignments to an accepted revision, or to a pushed one still pending, would change in
+ *  each room. A dry run: nothing is stored or queued. */
+export const impact = (project: string, id: string, target: { revision?: number; pending?: number }) => {
+  const q = new URLSearchParams();
+  if (target.pending !== undefined) q.set("pending", String(target.pending));
+  else if (target.revision !== undefined) q.set("revision", String(target.revision));
+  return apiGet<BlueprintImpact>(`${base(project)}/blueprints/${encodeURIComponent(id)}/impact?${q.toString()}`);
+};
+
+/** Queue an `update_room` task per assignment (the Tasks page's own request). */
+export const queueUpdates = (project: string, assignmentIds: string[], phase: string, mode: UpdateMode, dryRun: boolean) =>
+  send<{ subject: string; room_name: string; refused?: string }[]>("POST", `${base(project)}/tasks`, {
+    kind: "update_room",
+    assignment_ids: assignmentIds,
+    phase,
+    mode,
+    dry_run: dryRun,
+  });

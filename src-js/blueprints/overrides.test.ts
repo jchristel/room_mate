@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { adjust, describe as say, encode, overrideFor, reset, sameOverrides } from "./overrides.js";
+import { adjust, describe as say, encode, keep, overrideFor, reset, sameOverrides } from "./overrides.js";
 
 describe("item overrides", () => {
   it("accumulate nudges and turns on one item", () => {
@@ -47,6 +47,29 @@ describe("item overrides", () => {
 
   it("say what was done", () => {
     expect(say({ item_id: "1", exclude: true })).toBe("left out of this room");
-    expect(say({ item_id: "1", dx_mm: 150, dy_mm: -50, rotate_deg: 90 })).toBe("moved 150, -50 mm, turned 90 degrees");
+    expect(say({ item_id: "1", dx_mm: 150, dy_mm: -50, rotate_deg: 90 })).toBe("moved 150, -50 mm on the plan, turned 90 degrees");
+  });
+
+  it("writes a nudge in the item's own frame and describes it that way", () => {
+    const l = adjust(adjust([], "7", { along_mm: 50 }), "7", { off_mm: -20 });
+    expect(l).toEqual([{ item_id: "7", along_mm: 50, off_mm: -20 }]);
+    expect(say(l[0]!)).toBe("moved 50 along its wall, -20 into the room");
+  });
+
+  it("drops the base a person's edit was not made against, and keeps it for a leave-out", () => {
+    const held = [{ item_id: "7", along_mm: 40, base: "abc" }];
+    expect(adjust(held, "7", { along_mm: 10 })[0]).toEqual({ item_id: "7", along_mm: 50 });
+    const out = adjust([{ item_id: "7", base: "abc", exclude: false, rotate_deg: 0 }], "7", { exclude: true });
+    expect(out[0]).toEqual({ item_id: "7", exclude: true, base: "abc" });
+  });
+
+  it("keeps a held nudge on the new recipe by forgetting its base", () => {
+    const l = keep([{ item_id: "7", along_mm: 40, base: "abc" }, { item_id: "8", dx_mm: 5, base: "z" }], "7");
+    expect(l[0]).toEqual({ item_id: "7", along_mm: 40 });
+    expect(l[1]?.base).toBe("z");
+  });
+
+  it("does not call two lists the same when only the base differs", () => {
+    expect(sameOverrides([{ item_id: "7", along_mm: 4, base: "a" }], [{ item_id: "7", along_mm: 4 }])).toBe(false);
   });
 });
