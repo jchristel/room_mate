@@ -164,6 +164,74 @@ fn test_the_audit_of_the_sample_assignment_says_what_it_cannot_tell() {
     std::fs::remove_dir_all(projects.parent().unwrap()).ok();
 }
 
+/// A room's addition is a room-local copy of a blueprint item, and it must reach everything that reads an assignment:
+/// the task a Revit session is handed (which is what places it) and the audit (which says it is missing until it is).
+#[test]
+fn test_a_rooms_addition_reaches_the_task_and_the_audit_as_a_copy_of_its_item() {
+    use crate::assignments::{AssignRequest, ItemAddition};
+    use crate::service::blueprint_audit::{audit_assignment, VerdictKind};
+    let (state, projects) = booted("additions");
+    let before = assignments::list_raw(&projects, PROJECT).unwrap().remove(0);
+    let blueprint = blueprints::load(&projects, PROJECT, &before.blueprint_id).unwrap();
+    let original = blueprint
+        .revision(before.revision)
+        .unwrap()
+        .content
+        .items
+        .iter()
+        .find(|i| !i.excluded)
+        .unwrap()
+        .clone();
+    let params = PopulateParams {
+        phase: "New Construction".into(),
+        overwrite_layout: false,
+        create_rls: false,
+        overwrite_rls: false,
+    };
+    let task_before = populate_from_assignment(&state, &projects, PROJECT, &before, &params).unwrap();
+
+    let after = assignments::assign(
+        &projects,
+        PROJECT,
+        AssignRequest {
+            blueprint_id: before.blueprint_id.clone(),
+            revision: Some(before.revision),
+            room: before.room.clone(),
+            room_name: before.room_name.clone(),
+            mapping: before.mapping.clone(),
+            overrides: None,
+            additions: Some(vec![ItemAddition {
+                id: "add-1".into(),
+                clone_of: original.id.clone(),
+                edge: 0,
+                along_mm: 600,
+                off_mm: 400,
+                facing_deg: 0,
+            }]),
+            note: None,
+        },
+    )
+    .unwrap();
+    let task = populate_from_assignment(&state, &projects, PROJECT, &after, &params).unwrap();
+    assert_eq!(task.items.len(), task_before.items.len() + 1, "one more item for the session to place");
+    let added = task.items.iter().find(|i| i.item_id == "add-1").expect("the addition is in the task");
+    assert_eq!(added.type_name, original.type_name, "a copy of the item it clones");
+    assert_eq!(added.family_name, original.family_name);
+
+    let audit = audit_assignment(&state, &projects, PROJECT, &after.id).unwrap().unwrap();
+    assert_eq!(
+        audit.audit.layout_items,
+        task.items.len(),
+        "the audit judges the same layout the task places"
+    );
+    assert!(
+        audit.audit.verdicts.iter().any(|v| v.item_id.as_deref() == Some("add-1")
+            && matches!(v.kind, VerdictKind::Missing | VerdictKind::NoCode | VerdictKind::UnsupportedHost)),
+        "the addition is a layout item like any other: not in the room until a session places it"
+    );
+    std::fs::remove_dir_all(projects.parent().unwrap()).ok();
+}
+
 #[test]
 fn test_solve_picks_the_sheet_whose_room_is_the_same_size() {
     use crate::service::sheet_suggest;

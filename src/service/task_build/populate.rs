@@ -71,8 +71,15 @@ pub fn populate_from_assignment(
         return refuse("the room is not in the model any more");
     };
     let mapping = edge_map_of(&assignment.mapping);
-    let Some((_, resolution)) =
-        resolve_in_room_with(state, project, &revision.content, &room, &mapping, &assignment.overrides)?
+    let Some((_, resolution)) = resolve_in_room_changes(
+        state,
+        project,
+        &revision.content,
+        &room,
+        &mapping,
+        &assignment.overrides,
+        &assignment.additions,
+    )?
     else {
         return refuse("the room is not in the model any more");
     };
@@ -89,7 +96,9 @@ pub fn populate_from_assignment(
         .placements
         .iter()
         .filter_map(|p| {
-            let source = revision.content.items.iter().find(|i| i.id == p.item_id)?;
+            // A room's addition is a copy: its family and properties are the item it clones.
+            let source_id = p.clone_of.as_deref().unwrap_or(&p.item_id);
+            let source = revision.content.items.iter().find(|i| i.id == source_id)?;
             let (x_mm, y_mm) = to_model.point((p.centre.x, p.centre.y));
             let (facing_x, facing_y) = to_model.direction((p.facing.x, p.facing.y));
             let host = source.properties.iter().find(|q| q.name == "Host").map(|q| q.value.clone());

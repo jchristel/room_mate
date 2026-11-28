@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use super::super::blueprint_capture::{kit_of, loop_mm, properties_of, FT_TO_MM};
 use super::super::blueprint_geometry::{centroid, Pt};
-use super::super::blueprint_resolve::{resolve_in_room_with, FitKind};
+use super::super::blueprint_resolve::{resolve_in_room_changes, FitKind};
 use super::super::items::{assemble_items, ItemScope};
 use super::super::rls_tags::type_code_of;
 use super::super::room_locator::RoomRef;
@@ -83,8 +83,15 @@ pub fn audit_assignment(
     let mapping = edge_map_of(&assignment.mapping);
     // The resolver applies the assignment's overrides, so an item the room excludes is not in the layout and a
     // nudged one is where the room wants it.
-    let Some((_, resolution)) =
-        resolve_in_room_with(state, project, &revision.content, &room, &mapping, &assignment.overrides)?
+    let Some((_, resolution)) = resolve_in_room_changes(
+        state,
+        project,
+        &revision.content,
+        &room,
+        &mapping,
+        &assignment.overrides,
+        &assignment.additions,
+    )?
     else {
         return Ok(None);
     };
@@ -93,7 +100,10 @@ pub fn audit_assignment(
         .placements
         .iter()
         .filter_map(|p| {
-            let source = revision.content.items.iter().find(|i| i.id == p.item_id)?;
+            // A room's addition is a copy of a blueprint item: its code, kit and hosting are that item's, under its
+            // own id.
+            let source_id = p.clone_of.as_deref().unwrap_or(&p.item_id);
+            let source = revision.content.items.iter().find(|i| i.id == source_id)?;
             Some(Layout {
                 id: p.item_id.clone(),
                 code: type_code_of(&parameter, &source.type_properties, &source.properties),

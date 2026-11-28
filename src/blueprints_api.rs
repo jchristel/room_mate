@@ -24,7 +24,7 @@ use crate::blueprints::{
 use crate::http_error::{projects_dir, to_http};
 use crate::service::blueprint_capture::{capture_room, qualify_room};
 use crate::service::blueprint_model::{BlueprintSheet, RevisionContent, Skipped};
-use crate::service::blueprint_resolve::{resolve_in_room_with, EdgeMap, Resolution};
+use crate::service::blueprint_resolve::{resolve_in_room_changes, EdgeMap, Resolution};
 use crate::sheets::SheetRoom;
 use crate::state::Shared;
 
@@ -238,6 +238,10 @@ pub struct ResolveParams {
     /// rule. Checked as an assignment's are.
     #[serde(default)]
     pub overrides: Option<String>,
+    /// A room's additions to preview, as a JSON array (`[{"id":"add-1","clone_of":"7","edge":2,"along_mm":0,"off_mm":150}]`),
+    /// the same way and for the same reason as `overrides`. Checked as an assignment's are.
+    #[serde(default)]
+    pub additions: Option<String>,
     /// A box laid over the room by hand, as JSON (`{"dx_mm":0,"dy_mm":0,"rotate_deg":0,"sx":1,"sy":1}`,
     /// see `assignments::Frame`). Wins over `edge_map` and `shift`.
     #[serde(default)]
@@ -256,6 +260,20 @@ fn overrides_of(params: &ResolveParams) -> Result<Vec<crate::assignments::ItemOv
     let parsed: Vec<crate::assignments::ItemOverride> = serde_json::from_str(text)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("overrides is not a JSON list of item overrides: {e}")))?;
     crate::assignments::clean_overrides(parsed).map_err(to_http)
+}
+
+/// The previewed additions of a resolve, parsed and checked.
+fn additions_of(params: &ResolveParams) -> Result<Vec<crate::assignments::ItemAddition>, (StatusCode, String)> {
+    const MAX_CHARS: usize = 100_000;
+    let Some(text) = params.additions.as_deref().filter(|t| !t.trim().is_empty()) else {
+        return Ok(Vec::new());
+    };
+    if text.len() > MAX_CHARS {
+        return Err((StatusCode::BAD_REQUEST, format!("additions is longer than {MAX_CHARS} characters")));
+    }
+    let parsed: Vec<crate::assignments::ItemAddition> = serde_json::from_str(text)
+        .map_err(|e| (StatusCode::BAD_REQUEST, format!("additions is not a JSON list of item additions: {e}")))?;
+    crate::assignments::clean_additions(parsed).map_err(to_http)
 }
 
 fn edge_map_of(params: &ResolveParams) -> Result<EdgeMap, (StatusCode, String)> {
@@ -304,7 +322,8 @@ pub async fn http_resolve_blueprint(
     };
     let mapping = edge_map_of(&params)?;
     let overrides = overrides_of(&params)?;
-    match resolve_in_room_with(&state, &project_id, &revision.content, &room, &mapping, &overrides) {
+    let additions = additions_of(&params)?;
+    match resolve_in_room_changes(&state, &project_id, &revision.content, &room, &mapping, &overrides, &additions) {
         Ok(Some((room_name, resolution))) => Ok(Json(ResolveResponse {
             blueprint_id: blueprint.id.clone(),
             revision: number,

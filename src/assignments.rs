@@ -34,6 +34,12 @@ const MAX_ASSIGNMENTS_PER_PROJECT: usize = 20_000;
 const MAX_EDGES: usize = 2_000;
 const MAX_NOTE_CHARS: usize = 2_000;
 const MAX_OVERRIDES: usize = 2_000;
+const MAX_ADDITIONS: usize = 200;
+/// An addition's recipe is a distance along and into a room; past this it is not a place in any room (mm).
+pub const MAX_ADDITION_MM: i32 = 100_000;
+/// What every addition's id begins with. An element id is a number, so an addition can never collide with a
+/// blueprint item.
+pub const ADDITION_PREFIX: &str = "add-";
 /// A nudge further than this is a different place, not a nudge (mm).
 pub const MAX_NUDGE_MM: i32 = 20_000;
 
@@ -131,10 +137,19 @@ pub struct Mapping {
 /// here: authored data outlives what it names. **Affects its own item only**: a follower keeps the
 /// place the resolver gave it, and can be overridden itself.
 ///
-/// The nudge is in the project's plan frame (where the placement is drawn), so it is what the person
-/// saw. Changing the mapping afterwards can leave a nudge that no longer fits, and it is the person's
-/// to look at.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// **A nudge has two spellings, and the item-frame one is the one to write.** `along_mm` and `off_mm` are in the
+/// item's own frame: along the edge it sits against and into the room from it, so "away from the wall" stays
+/// "away from the wall" when the room is turned or the mapping changes. `dx_mm` and `dy_mm` are in the project's
+/// plan frame (where the placement is drawn), which is what a drag on the plan gives and what every override stored
+/// before the item frame existed holds; they do NOT follow a rotation, and changing the mapping afterwards can
+/// leave one that no longer fits. Both may be set and both apply.
+///
+/// **`base` is what a nudge or turn was made against**: the hash of the item's placement recipe in the revision
+/// the override was saved under (`BlueprintItem::recipe_hash`), stamped by the server on save when absent. When a
+/// new revision moves the item the hash differs and the nudge is HELD and reported (`override_stale`) rather than
+/// riding silently on a place it was never made for. An exclude does not depend on where the item is, so it applies
+/// regardless. An override with no `base` (made before it existed) is not checked.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemOverride {
     pub item_id: String,
     /// Do not place this item in this room.
@@ -144,6 +159,15 @@ pub struct ItemOverride {
     pub dx_mm: i32,
     #[serde(default, skip_serializing_if = "is_zero")]
     pub dy_mm: i32,
+    /// Along the edge the item sits against, from the edge's start towards its end (item frame).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub along_mm: i32,
+    /// Into the room from that edge, along its inward normal (item frame).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub off_mm: i32,
+    /// The recipe this was made against; see above. Left out by a client, filled in by the server.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub base: Option<String>,
     /// Counter-clockwise, about the item's own centre.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub rotate_deg: i32,
@@ -160,8 +184,45 @@ fn is_zero(n: &i32) -> bool {
 impl ItemOverride {
     /// Whether it changes anything.
     pub fn is_noop(&self) -> bool {
-        !self.exclude && self.dx_mm == 0 && self.dy_mm == 0 && self.rotate_deg == 0
+        !self.exclude
+            && self.dx_mm == 0
+            && self.dy_mm == 0
+            && self.along_mm == 0
+            && self.off_mm == 0
+            && self.rotate_deg == 0
     }
+
+    /// Whether it moves or turns the item (as opposed to leaving it out), which is what a changed recipe strands.
+    pub fn moves(&self) -> bool {
+        self.dx_mm != 0 || self.dy_mm != 0 || self.along_mm != 0 || self.off_mm != 0 || self.rotate_deg != 0
+    }
+}
+
+/// One more item in THIS room only: a clone of a blueprint item at a place the person chose on the room's own edge.
+/// The corner-guard case: the blueprint has two, this room has a column corner and needs a third, and everything else
+/// is fine.
+///
+/// **Room-local and never written back to the blueprint**: the blueprint stays the standard and the room owns its
+/// exception. **A clone by reference** (`clone_of`), so when the blueprint changes the guard's type the extra guard
+/// changes with it; an addition that stood alone would have to be edited in every room. **The recipe is on the ROOM's
+/// coarse outline** (`edge` is the room's own edge, not the blueprint's), in fixed millimetres, because a column corner
+/// is a jog the coarse outline removed and the person points at the wall that is there. Whole numbers, so an
+/// assignment stays `Eq`. `id` begins with `add-`, which an element id (a number) never does, so it cannot collide with
+/// a blueprint item; the resolver reports an addition whose item has gone (`addition_unused`), never an error.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ItemAddition {
+    pub id: String,
+    /// The blueprint item it is a copy of: its type, size, class and properties.
+    pub clone_of: String,
+    /// The room's coarse edge it stands against.
+    pub edge: usize,
+    /// From the edge's start along it (mm).
+    pub along_mm: i32,
+    /// Into the room from the edge (mm).
+    pub off_mm: i32,
+    /// From the edge's inward normal, counter-clockwise (degrees).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub facing_deg: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -179,6 +240,9 @@ pub struct Assignment {
     /// This room's changes to single items (see `ItemOverride`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub overrides: Vec<ItemOverride>,
+    /// Items this room has that the blueprint does not (see `ItemAddition`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additions: Vec<ItemAddition>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
     pub taken_at: String,
@@ -200,6 +264,9 @@ pub struct AssignRequest {
     /// clear them by assigning again); `Some(vec![])` clears them.
     #[serde(default)]
     pub overrides: Option<Vec<ItemOverride>>,
+    /// Same rule as `overrides`: `None` keeps the room's, `Some(vec![])` clears them.
+    #[serde(default)]
+    pub additions: Option<Vec<ItemAddition>>,
     #[serde(default)]
     pub note: Option<String>,
 }
@@ -343,6 +410,50 @@ pub fn clean_overrides(overrides: Vec<ItemOverride>) -> Result<Vec<ItemOverride>
     Ok(out)
 }
 
+/// The additions as they are kept: unique ids that begin `add-`, each cloning something, none out of range.
+pub fn clean_additions(additions: Vec<ItemAddition>) -> Result<Vec<ItemAddition>, BlueprintError> {
+    if additions.len() > MAX_ADDITIONS {
+        return bad(format!("an assignment holds at most {MAX_ADDITIONS} additions"));
+    }
+    let mut out: Vec<ItemAddition> = Vec::new();
+    for a in additions {
+        if !a.id.starts_with(ADDITION_PREFIX) || a.id.len() == ADDITION_PREFIX.len() {
+            return bad(format!("an addition's id begins {ADDITION_PREFIX:?} and goes on (got {:?})", a.id));
+        }
+        if a.clone_of.trim().is_empty() {
+            return bad(format!("addition {:?} says which blueprint item it is a copy of", a.id));
+        }
+        if a.along_mm.abs() > MAX_ADDITION_MM || a.off_mm.abs() > MAX_ADDITION_MM {
+            return bad(format!("addition {:?}: a distance is at most {MAX_ADDITION_MM} mm", a.id));
+        }
+        if a.facing_deg.abs() > 360 {
+            return bad(format!("addition {:?}: a facing is at most 360 degrees either way", a.id));
+        }
+        if out.iter().any(|x| x.id == a.id) {
+            return bad(format!("two additions are called {:?}", a.id));
+        }
+        out.push(a);
+    }
+    Ok(out)
+}
+
+/// Stamp each override that has no `base` with the recipe hash of its item in the revision being pinned. One whose
+/// item is not in that revision keeps none: there is nothing to have been made against.
+fn stamp_bases(
+    overrides: Vec<ItemOverride>,
+    items: &[crate::service::blueprint_model::BlueprintItem],
+) -> Vec<ItemOverride> {
+    overrides
+        .into_iter()
+        .map(|mut o| {
+            if o.base.is_none() {
+                o.base = items.iter().find(|i| i.id == o.item_id).map(|i| i.recipe_hash());
+            }
+            o
+        })
+        .collect()
+}
+
 /// Assign a blueprint to a room, replacing the room's existing assignment if it has one.
 pub fn assign(projects_dir: &Path, project: &str, request: AssignRequest) -> Result<Assignment, BlueprintError> {
     if request.room.room_id.trim().is_empty() || request.room.model_id.trim().is_empty() {
@@ -350,6 +461,7 @@ pub fn assign(projects_dir: &Path, project: &str, request: AssignRequest) -> Res
     }
     let mapping = clean_mapping(request.mapping)?;
     let overrides = request.overrides.map(clean_overrides).transpose()?;
+    let additions = request.additions.map(clean_additions).transpose()?;
     let note = request.note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());
     if note.as_ref().is_some_and(|n| n.chars().count() > MAX_NOTE_CHARS) {
         return bad(format!("a note is at most {MAX_NOTE_CHARS} characters"));
@@ -359,9 +471,12 @@ pub fn assign(projects_dir: &Path, project: &str, request: AssignRequest) -> Res
         return bad(format!("blueprint {:?} is not in use, so it takes no new assignment", blueprint.name));
     }
     let revision = request.revision.unwrap_or(blueprint.current_revision);
-    if blueprint.revision(revision).is_none() {
+    let Some(pinned) = blueprint.revision(revision) else {
         return Err(BlueprintError::NotFound(format!("the blueprint has no revision {revision}")));
-    }
+    };
+    // Made against the revision being pinned now. The ones KEPT from the room's existing assignment (`None` below)
+    // keep the base they were made with, which is how a new revision's moved recipe shows up as stale.
+    let overrides = overrides.map(|o| stamp_bases(o, &pinned.content.items));
     let _guard = SAVE_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let existing = list_raw(projects_dir, project)?;
     let replaced = existing.iter().find(|a| a.room == request.room);
@@ -383,6 +498,10 @@ pub fn assign(projects_dir: &Path, project: &str, request: AssignRequest) -> Res
         overrides: match overrides {
             Some(o) => o,
             None => replaced.map(|a| a.overrides.clone()).unwrap_or_default(),
+        },
+        additions: match additions {
+            Some(a) => a,
+            None => replaced.map(|a| a.additions.clone()).unwrap_or_default(),
         },
         note,
         taken_at: now(),
@@ -486,7 +605,109 @@ mod tests {
             room_name: format!("Room {room}"),
             mapping: Mapping::default(),
             overrides: None,
+            additions: None,
             note: None,
+        }
+    }
+
+    /// A blueprint holding one item, so an override has something to have been made against.
+    fn blueprint_with_a_guard(dir: &Path) -> (String, String) {
+        use crate::service::blueprint_capture::{capture, SourceItem};
+        let ring = vec![(0.0, 0.0), (4000.0, 0.0), (4000.0, 3000.0), (0.0, 3000.0)];
+        let guard = SourceItem {
+            id: "guard".to_string(),
+            family_name: None,
+            type_name: "Corner guard".to_string(),
+            category: "Generic Models".to_string(),
+            footprint: vec![(100.0, 100.0), (300.0, 100.0), (300.0, 300.0), (100.0, 300.0)],
+            facing: Some((1.0, 0.0)),
+            nested: false,
+            hosting: None,
+            kit: None,
+            properties: vec![],
+            type_properties: vec![],
+        };
+        let content = capture(&ring, vec![guard]).unwrap().content;
+        let hash = content.items[0].recipe_hash();
+        let id = blueprints::create(
+            dir,
+            "p",
+            CreateRequest { name: "G".to_string(), note: None, source: None, bundle: None, content },
+        )
+        .unwrap()
+        .id;
+        (id, hash)
+    }
+
+    fn nudge_of(item: &str) -> ItemOverride {
+        ItemOverride { item_id: item.to_string(), along_mm: 40, ..Default::default() }
+    }
+
+    #[test]
+    fn test_an_override_is_stamped_with_the_recipe_it_was_made_against_and_keeps_that_when_kept() {
+        let tmp = temp_dir(&format!("{:?}", std::thread::current().id()).replace(['(', ')'], ""));
+        let (bp, hash) = blueprint_with_a_guard(&tmp);
+        let mut req = request(&bp, "r1");
+        req.overrides = Some(vec![nudge_of("guard"), nudge_of("ghost")]);
+        let made = assign(&tmp, "p", req).unwrap();
+        let by = |id: &str| made.overrides.iter().find(|o| o.item_id == id).unwrap();
+        assert_eq!(by("guard").base.as_deref(), Some(hash.as_str()), "stamped by the server, not the client");
+        assert_eq!(
+            by("ghost").base,
+            None,
+            "an item the revision does not have has nothing to have been made against"
+        );
+
+        // A client that sends it back with its base keeps it; one that sends none is stamped afresh.
+        let mut again = request(&bp, "r1");
+        again.overrides = Some(vec![ItemOverride { base: Some("old".into()), ..nudge_of("guard") }]);
+        assert_eq!(
+            assign(&tmp, "p", again).unwrap().overrides[0].base.as_deref(),
+            Some("old"),
+            "a base is never overwritten"
+        );
+        // Assigning again WITHOUT overrides keeps the room's, base and all: how a new revision shows a stale one.
+        assert_eq!(assign(&tmp, "p", request(&bp, "r1")).unwrap().overrides[0].base.as_deref(), Some("old"));
+    }
+
+    #[test]
+    fn test_additions_are_kept_cleaned_and_survive_assigning_again_without_them() {
+        let tmp = temp_dir(&format!("{:?}", std::thread::current().id()).replace(['(', ')'], ""));
+        let (bp, _) = blueprint_with_a_guard(&tmp);
+        let one = |id: &str| ItemAddition {
+            id: id.to_string(),
+            clone_of: "guard".to_string(),
+            edge: 1,
+            along_mm: 0,
+            off_mm: 150,
+            facing_deg: 0,
+        };
+        let mut req = request(&bp, "r1");
+        req.additions = Some(vec![one("add-1")]);
+        assert_eq!(assign(&tmp, "p", req).unwrap().additions, vec![one("add-1")]);
+        assert_eq!(
+            assign(&tmp, "p", request(&bp, "r1")).unwrap().additions.len(),
+            1,
+            "a client that knows nothing of them keeps them"
+        );
+        let mut clear = request(&bp, "r1");
+        clear.additions = Some(vec![]);
+        assert!(assign(&tmp, "p", clear).unwrap().additions.is_empty(), "an empty list clears them");
+
+        for (bad, why) in [
+            (vec![one("guard-2")], "an id that does not begin add-"),
+            (vec![one("add-")], "an id that is only the prefix"),
+            (vec![one("add-1"), one("add-1")], "two with one id"),
+            (vec![ItemAddition { clone_of: " ".to_string(), ..one("add-1") }], "no item to copy"),
+            (
+                vec![ItemAddition { off_mm: 200_000, ..one("add-1") }],
+                "a distance that is not a place in a room",
+            ),
+            (vec![ItemAddition { facing_deg: 400, ..one("add-1") }], "a facing past a full turn"),
+        ] {
+            let mut req = request(&bp, "r2");
+            req.additions = Some(bad);
+            assert!(assign(&tmp, "p", req).is_err(), "{why} is refused");
         }
     }
 
@@ -562,7 +783,7 @@ mod tests {
     }
 
     fn nudge(id: &str, dx: i32) -> ItemOverride {
-        ItemOverride { item_id: id.to_string(), exclude: false, dx_mm: dx, dy_mm: 0, rotate_deg: 0 }
+        ItemOverride { item_id: id.to_string(), dx_mm: dx, ..Default::default() }
     }
 
     #[test]

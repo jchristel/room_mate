@@ -33,7 +33,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Serialize;
 
-use crate::assignments::{Frame, ItemOverride};
+use crate::assignments::{Frame, ItemAddition, ItemOverride};
 
 use super::blueprint_capture::{door_on_edges, room_doors, room_ring, SourceDoor};
 use super::blueprint_geometry::{
@@ -140,6 +140,10 @@ pub struct Placed {
     pub edge: usize,
     /// The rule that produced this placement, in words.
     pub rule: String,
+    /// For a room's ADDITION (`item_id` begins `add-`): the blueprint item it is a copy of, which is where its
+    /// family, properties and kit are read from. Absent for a blueprint item.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub clone_of: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -163,6 +167,13 @@ pub enum Finding {
     /// assignment now pins another revision). Reported, never an error: authored data outlives
     /// what it names.
     OverrideUnused { item: String },
+    /// A nudge or turn was made against a recipe the item no longer has (a newer revision moved it), so it is HELD
+    /// and not applied until a person says whether it still fits. Left out of an exclude, which does not depend on
+    /// where the item is.
+    OverrideStale { item: String },
+    /// A room's addition that could not be placed: the item it clones is gone from the pinned revision (or excluded
+    /// in it), or the room has no such edge. Reported, never an error: authored data outlives what it names.
+    AdditionUnused { item: String, reason: String },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -234,6 +245,18 @@ struct Context<'a> {
     bp_fine: Vec<Pt>,
     /// Room edge for each blueprint edge.
     edge_map: Vec<usize>,
+    /// The room's additions that could be placed: a copy of the item each clones, under the addition's own id.
+    added: Vec<Added<'a>>,
+}
+
+/// A room's addition, resolved against the blueprint: `item` is a copy of the item it clones, carrying the addition's id.
+struct Added<'a> {
+    item: &'a BlueprintItem,
+    clone_of: &'a str,
+    edge: usize,
+    along_mm: f64,
+    off_mm: f64,
+    facing_deg: f64,
 }
 
 impl Context<'_> {
@@ -336,15 +359,66 @@ impl Context<'_> {
                 size_mm: item.size_mm,
                 edge: pose.edge,
                 rule: pose.rule.clone(),
+                clone_of: None,
+            });
+        }
+        for a in &self.added {
+            let Some(pose) = placed.get(&a.item.id) else { continue };
+            out.push(Placed {
+                item_id: a.item.id.clone(),
+                type_name: a.item.type_name.clone(),
+                category: a.item.category.clone(),
+                class: a.item.class,
+                centre: pose.c.into(),
+                facing: (pose.angle.cos(), pose.angle.sin()).into(),
+                size_mm: a.item.size_mm,
+                edge: pose.edge,
+                rule: pose.rule.clone(),
+                clone_of: Some(a.clone_of.to_string()),
             });
         }
         out
     }
 
+    /// The room's whole layout: the recipes place the items, the overrides change them (an exclude removes one, a nudge
+    /// or turn moves one), the additions are put on the room's own edges, and only then are `outside` and `overlap`
+    /// judged, so they are judged where everything now is.
+    fn lay_out(&self, overrides: &[ItemOverride], t_fine: &[Pt], findings: &mut Vec<Finding>) -> Vec<Placed> {
+        let mut placed = self.place_all(findings);
+        apply_overrides(self, &mut placed, overrides, findings);
+        for a in &self.added {
+            placed.insert(a.item.id.clone(), self.added_pose(a));
+        }
+        let placements = self.placements(&placed, findings);
+        self.footprint_findings(&placed, t_fine, findings);
+        placements
+    }
+
+    /// Where a room's addition stands: against the room's OWN edge, by the distances the person gave.
+    fn added_pose(&self, a: &Added<'_>) -> Pose {
+        let e = self.es_t[a.edge];
+        Pose {
+            c: e.point(a.along_mm, a.off_mm),
+            angle: e.n.1.atan2(e.n.0) + a.facing_deg.to_radians(),
+            edge: a.edge,
+            rule: format!(
+                "added for this room: a copy of {}, edge {}, {:.0} mm along, {:.0} mm from the wall",
+                a.clone_of, a.edge, a.along_mm, a.off_mm
+            ),
+        }
+    }
+
     /// Outside the true outline, and new overlaps, for free items only: a wall device is located
     /// by its wall and carries no footprint check.
     fn footprint_findings(&self, placed: &BTreeMap<String, Pose>, t_fine: &[Pt], findings: &mut Vec<Finding>) {
-        let free: Vec<&BlueprintItem> = self.live.iter().copied().filter(|i| i.class == ItemClass::Free).collect();
+        // A room's additions are judged like any item: against the room's outline, and for new overlaps.
+        let free: Vec<&BlueprintItem> = self
+            .live
+            .iter()
+            .copied()
+            .chain(self.added.iter().map(|a| a.item))
+            .filter(|i| i.class == ItemClass::Free)
+            .collect();
         let boxes_in_room: BTreeMap<&str, [Pt; 4]> = free
             .iter()
             .filter_map(|i| placed.get(&i.id).map(|p| (i.id.as_str(), corners_of(i, p.c, p.angle))))
@@ -356,12 +430,14 @@ impl Context<'_> {
         // Only what the room CHANGES: an item already outside its own source room (the model has
         // some, a few in a typical bedroom) would otherwise be reported on every resolve.
         for i in &free {
-            let (Some(now), Some(was)) = (boxes_in_room.get(i.id.as_str()), boxes_in_blueprint.get(i.id.as_str()))
-            else {
+            let Some(now) = boxes_in_room.get(i.id.as_str()) else {
                 continue;
             };
             let inside_now = now.iter().all(|&p| inside(p, t_fine, INSIDE_TOL_MM));
-            let inside_then = was.iter().all(|&p| inside(p, &self.bp_fine, INSIDE_TOL_MM));
+            // An addition has no place in the blueprint to have been outside, so it is judged where it stands.
+            let inside_then = boxes_in_blueprint
+                .get(i.id.as_str())
+                .is_none_or(|was| was.iter().all(|&p| inside(p, &self.bp_fine, INSIDE_TOL_MM)));
             if inside_then && !inside_now {
                 findings.push(Finding::Outside { item: i.id.clone() });
             }
@@ -429,7 +505,12 @@ pub fn resolve_with_doors(
 /// `ItemOverride`). **After placement and before the findings**, so `outside` and `overlap` are
 /// judged on where the item now is. It touches its own item only: a follower keeps the place the
 /// resolver gave it.
-fn apply_overrides(placed: &mut BTreeMap<String, Pose>, overrides: &[ItemOverride], findings: &mut Vec<Finding>) {
+fn apply_overrides(
+    ctx: &Context<'_>,
+    placed: &mut BTreeMap<String, Pose>,
+    overrides: &[ItemOverride],
+    findings: &mut Vec<Finding>,
+) {
     for o in overrides {
         if o.exclude {
             if placed.remove(&o.item_id).is_none() {
@@ -441,6 +522,25 @@ fn apply_overrides(placed: &mut BTreeMap<String, Pose>, overrides: &[ItemOverrid
             findings.push(Finding::OverrideUnused { item: o.item_id.clone() });
             continue;
         };
+        // Made against a recipe the item no longer has: held, not applied. An override with no `base` (made before
+        // it existed) is not checked.
+        if let (Some(base), Some(item)) = (&o.base, ctx.live.iter().find(|i| i.id == o.item_id))
+            && o.moves()
+            && *base != item.recipe_hash()
+        {
+            findings.push(Finding::OverrideStale { item: o.item_id.clone() });
+            continue;
+        }
+        // In the item's own frame first (along the edge it stands against, then into the room), so "away from the
+        // wall" survives a turn of the room; then the plan-frame nudge a drag on the plan gives.
+        if (o.along_mm != 0 || o.off_mm != 0)
+            && let Some(e) = ctx.es_t.get(pose.edge)
+        {
+            pose.c = (
+                pose.c.0 + e.t.0 * f64::from(o.along_mm) + e.n.0 * f64::from(o.off_mm),
+                pose.c.1 + e.t.1 * f64::from(o.along_mm) + e.n.1 * f64::from(o.off_mm),
+            );
+        }
         pose.c = (pose.c.0 + f64::from(o.dx_mm), pose.c.1 + f64::from(o.dy_mm));
         pose.angle += f64::from(o.rotate_deg).to_radians();
         pose.rule = format!("{} (changed for this room)", pose.rule);
@@ -458,6 +558,55 @@ fn box_over(bp_ring: &[Pt], room: &[Pt], f: &Frame) -> Result<Vec<Pt>, ServiceEr
     Ok(bp_ring.iter().map(|&p| f.place(p, c0, centre)).collect())
 }
 
+/// A copy of the item each addition clones, under the addition's own id and standing alone (a follower is placed where
+/// its recipe says, and an addition has its own). One whose item is gone from the revision, or whose edge the room
+/// does not have, is reported and left out.
+fn addition_copies<'a>(
+    additions: &'a [ItemAddition],
+    live: &[&BlueprintItem],
+    edge_count: usize,
+    findings: &mut Vec<Finding>,
+) -> Vec<(&'a ItemAddition, BlueprintItem)> {
+    let mut copies = Vec::new();
+    for a in additions {
+        match live.iter().find(|i| i.id == a.clone_of) {
+            None => findings.push(Finding::AdditionUnused {
+                item: a.id.clone(),
+                reason: format!(
+                    "the blueprint item {:?} it copies is not in this revision, or is excluded",
+                    a.clone_of
+                ),
+            }),
+            Some(_) if a.edge >= edge_count => findings.push(Finding::AdditionUnused {
+                item: a.id.clone(),
+                reason: format!("the room has no edge {} (it has {edge_count})", a.edge),
+            }),
+            Some(source) => {
+                let mut copy = (*source).clone();
+                copy.id = a.id.clone();
+                copy.follows = None;
+                copies.push((a, copy));
+            }
+        }
+    }
+    copies
+}
+
+/// Each addition with the copy it stands as, ready to place.
+fn resolved_additions<'a>(copies: &'a [(&'a ItemAddition, BlueprintItem)]) -> Vec<Added<'a>> {
+    copies
+        .iter()
+        .map(|(a, copy)| Added {
+            item: copy,
+            clone_of: &a.clone_of,
+            edge: a.edge,
+            along_mm: f64::from(a.along_mm),
+            off_mm: f64::from(a.off_mm),
+            facing_deg: f64::from(a.facing_deg),
+        })
+        .collect()
+}
+
 /// `resolve_with_doors` with a room's own item overrides.
 pub fn resolve_with_overrides(
     content: &RevisionContent,
@@ -465,6 +614,22 @@ pub fn resolve_with_overrides(
     mapping: &EdgeMap,
     target_doors: &[SourceDoor],
     overrides: &[ItemOverride],
+) -> Result<Resolution, ServiceError> {
+    resolve_with_changes(content, target_ring, mapping, target_doors, overrides, &[])
+}
+
+/// `resolve_with_overrides` and the items this room has that the blueprint does not (`ItemAddition`).
+///
+/// The room's whole difference from the blueprint, in the order it is applied: the recipes place the items, the
+/// overrides change them (an exclude removes one, a nudge or turn moves one), then the additions are put on the
+/// room's own edges, and only then are `outside` and `overlap` judged, so they are judged where everything now is.
+pub fn resolve_with_changes(
+    content: &RevisionContent,
+    target_ring: &[Pt],
+    mapping: &EdgeMap,
+    target_doors: &[SourceDoor],
+    overrides: &[ItemOverride],
+    additions: &[ItemAddition],
 ) -> Result<Resolution, ServiceError> {
     let bp_ring: Vec<Pt> = content.outline.coarse.iter().map(|&p| p.into()).collect();
     let framed = if let EdgeMap::Frame(f) = mapping {
@@ -551,12 +716,12 @@ pub fn resolve_with_overrides(
     let bp_frame: BTreeMap<&str, (Pt, f64)> =
         live.iter().filter_map(|i| frame_in(i, &es_bp).map(|f| (i.id.as_str(), f))).collect();
     let bp_fine: Vec<Pt> = content.outline.fine.iter().map(|&p| p.into()).collect();
-    let ctx = Context { live, bp_frame, es_t: edges(&t_coarse), t_coarse: &t_coarse, bp_fine, edge_map };
+    let es_t = edges(&t_coarse);
+    let copies = addition_copies(additions, &live, es_t.len(), &mut findings);
+    let added = resolved_additions(&copies);
+    let ctx = Context { live, bp_frame, es_t, t_coarse: &t_coarse, bp_fine, edge_map, added };
 
-    let mut placed = ctx.place_all(&mut findings);
-    apply_overrides(&mut placed, overrides, &mut findings);
-    let placements = ctx.placements(&placed, &mut findings);
-    ctx.footprint_findings(&placed, &t_fine, &mut findings);
+    let placements = ctx.lay_out(overrides, &t_fine, &mut findings);
 
     let mapped_doors = map_doors(&content.doors, &ctx.edge_map, &ctx.es_t);
     Ok(Resolution {
@@ -592,11 +757,27 @@ pub fn resolve_in_room_with(
     mapping: &EdgeMap,
     overrides: &[ItemOverride],
 ) -> Result<Option<(String, Resolution)>, ServiceError> {
+    resolve_in_room_changes(state, project, content, room, mapping, overrides, &[])
+}
+
+/// `resolve_in_room_with` and the room's additions: the whole of an assignment's difference from its blueprint.
+pub fn resolve_in_room_changes(
+    state: &AppState,
+    project: &str,
+    content: &RevisionContent,
+    room: &RoomRef,
+    mapping: &EdgeMap,
+    overrides: &[ItemOverride],
+    additions: &[ItemAddition],
+) -> Result<Option<(String, Resolution)>, ServiceError> {
     let Some((room_name, ring)) = room_ring(state, project, room)? else {
         return Ok(None);
     };
     let doors = room_doors(state, project, room)?;
-    Ok(Some((room_name, resolve_with_overrides(content, &ring, mapping, &doors, overrides)?)))
+    Ok(Some((
+        room_name,
+        resolve_with_changes(content, &ring, mapping, &doors, overrides, additions)?,
+    )))
 }
 
 #[cfg(test)]
@@ -1075,7 +1256,13 @@ mod tests {
     }
 
     fn nudge(id: &str, dx: i32, dy: i32, rot: i32) -> ItemOverride {
-        ItemOverride { item_id: id.to_string(), exclude: false, dx_mm: dx, dy_mm: dy, rotate_deg: rot }
+        ItemOverride {
+            item_id: id.to_string(),
+            dx_mm: dx,
+            dy_mm: dy,
+            rotate_deg: rot,
+            ..Default::default()
+        }
     }
 
     fn two_items() -> (Vec<Pt>, RevisionContent) {
@@ -1106,7 +1293,7 @@ mod tests {
     #[test]
     fn test_an_excluded_override_leaves_the_item_out_and_an_unknown_one_is_reported() {
         let (ring, c) = two_items();
-        let leave_out = ItemOverride { item_id: "bed".to_string(), exclude: true, dx_mm: 0, dy_mm: 0, rotate_deg: 0 };
+        let leave_out = ItemOverride { item_id: "bed".to_string(), exclude: true, ..Default::default() };
         let r = resolve_with_overrides(&c, &ring, &EdgeMap::Auto, &[], &[leave_out, nudge("ghost", 10, 0, 0)]).unwrap();
         assert!(r.placements.iter().all(|p| p.item_id != "bed"));
         assert_eq!(r.placements.len(), 1);
@@ -1130,6 +1317,214 @@ mod tests {
             "{:?}",
             out.findings
         );
+    }
+
+    fn addition(id: &str, clone_of: &str, edge: usize, along: i32, off: i32, facing: i32) -> ItemAddition {
+        ItemAddition {
+            id: id.to_string(),
+            clone_of: clone_of.to_string(),
+            edge,
+            along_mm: along,
+            off_mm: off,
+            facing_deg: facing,
+        }
+    }
+
+    #[test]
+    fn test_an_addition_is_a_copy_of_its_item_standing_where_the_person_put_it_and_nothing_else_moves() {
+        let (ring, c) = two_items();
+        let plain = resolve_with_doors(&c, &ring, &EdgeMap::Shift(0), &[]).unwrap();
+        // The room's edge 1 is the right-hand wall (x = 6000, running up), whose inward normal points at -x.
+        let r =
+            resolve_with_changes(&c, &ring, &EdgeMap::Shift(0), &[], &[], &[addition("add-1", "bed", 1, 500, 100, 0)])
+                .unwrap();
+        assert_eq!(r.placements.len(), 3, "the blueprint's two items and the room's one more");
+        assert!(near(at(&r, "add-1"), (5900.0, 500.0), 1e-6), "{:?}", at(&r, "add-1"));
+        let (added, bed) = (placed(&r, "add-1"), placed(&r, "bed"));
+        assert_eq!(added.clone_of.as_deref(), Some("bed"), "its family and properties are the bed's");
+        assert_eq!((&added.type_name, added.size_mm, added.class), (&bed.type_name, bed.size_mm, bed.class));
+        assert!(bed.clone_of.is_none(), "a blueprint item clones nothing");
+        assert!(near(at(&r, "bed"), at(&plain, "bed"), 1e-9) && near(at(&r, "table"), at(&plain, "table"), 1e-9));
+        assert!(added.rule.contains("added for this room"), "{}", added.rule);
+        // Facing is from the edge's inward normal.
+        let turned =
+            resolve_with_changes(&c, &ring, &EdgeMap::Shift(0), &[], &[], &[addition("add-1", "bed", 1, 500, 100, 90)])
+                .unwrap();
+        let f = placed(&turned, "add-1").facing;
+        assert!(
+            (f.x - 0.0).abs() < 1e-9 && (f.y + 1.0).abs() < 1e-9,
+            "-x turned a quarter counter-clockwise is -y: {f:?}"
+        );
+    }
+
+    #[test]
+    fn test_an_addition_whose_item_or_edge_is_gone_is_reported_and_the_rest_still_resolves() {
+        let (ring, c) = two_items();
+        let r = resolve_with_changes(
+            &c,
+            &ring,
+            &EdgeMap::Auto,
+            &[],
+            &[],
+            &[
+                addition("add-1", "ghost", 0, 0, 100, 0),
+                addition("add-2", "bed", 9, 0, 100, 0),
+            ],
+        )
+        .unwrap();
+        assert_eq!(r.placements.len(), 2, "nothing was added");
+        let unused: Vec<&str> = r
+            .findings
+            .iter()
+            .filter_map(|f| match f {
+                Finding::AdditionUnused { item, .. } => Some(item.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(vec!["add-1", "add-2"], unused);
+    }
+
+    #[test]
+    fn test_an_addition_is_judged_like_any_item_outside_the_room_and_on_top_of_another() {
+        let (ring, c) = two_items();
+        let outside = resolve_with_changes(
+            &c,
+            &ring,
+            &EdgeMap::Shift(0),
+            &[],
+            &[],
+            &[addition("add-1", "bed", 0, 3000, -900, 0)],
+        )
+        .unwrap();
+        assert!(
+            outside.findings.iter().any(|f| matches!(f, Finding::Outside { item } if item == "add-1")),
+            "{:?}",
+            outside.findings
+        );
+        // On the table: edge 0 is the bottom wall, so 3000 along and 2200 in is the table's own centre.
+        let on_top = resolve_with_changes(
+            &c,
+            &ring,
+            &EdgeMap::Shift(0),
+            &[],
+            &[],
+            &[addition("add-1", "bed", 0, 3000, 2200, 0)],
+        )
+        .unwrap();
+        assert!(
+            on_top
+                .findings
+                .iter()
+                .any(|f| matches!(f, Finding::Overlap { a, b } if (a == "add-1" || b == "add-1"))),
+            "{:?}",
+            on_top.findings
+        );
+        let clear =
+            resolve_with_changes(&c, &ring, &EdgeMap::Shift(0), &[], &[], &[addition("add-1", "bed", 1, 1500, 600, 0)])
+                .unwrap();
+        assert!(!clear
+            .findings
+            .iter()
+            .any(|f| matches!(f, Finding::Outside { .. } | Finding::Overlap { .. })));
+    }
+
+    fn based(mut o: ItemOverride, base: &str) -> ItemOverride {
+        o.base = Some(base.to_string());
+        o
+    }
+
+    #[test]
+    fn test_a_nudge_made_against_another_recipe_is_held_and_reported_but_an_exclude_and_an_unbased_nudge_apply() {
+        let (ring, c) = two_items();
+        let plain = resolve_with_doors(&c, &ring, &EdgeMap::Auto, &[]).unwrap();
+        let table = c.items.iter().find(|i| i.id == "table").unwrap();
+        // Made against this very recipe: applies.
+        let fresh = resolve_with_overrides(
+            &c,
+            &ring,
+            &EdgeMap::Auto,
+            &[],
+            &[based(nudge("table", 150, 0, 0), &table.recipe_hash())],
+        )
+        .unwrap();
+        assert!(near(at(&fresh, "table"), (at(&plain, "table").0 + 150.0, at(&plain, "table").1), 1e-6));
+        assert!(!fresh.findings.iter().any(|f| matches!(f, Finding::OverrideStale { .. })));
+        // Made against a recipe the item no longer has: held, and said.
+        let stale = resolve_with_overrides(
+            &c,
+            &ring,
+            &EdgeMap::Auto,
+            &[],
+            &[based(nudge("table", 150, 0, 0), "0000000000000000")],
+        )
+        .unwrap();
+        assert!(near(at(&stale, "table"), at(&plain, "table"), 1e-9), "held, not applied");
+        assert!(
+            stale.findings.contains(&Finding::OverrideStale { item: "table".to_string() }),
+            "{:?}",
+            stale.findings
+        );
+        // Made before `base` existed: not checked.
+        let old = resolve_with_overrides(&c, &ring, &EdgeMap::Auto, &[], &[nudge("table", 150, 0, 0)]).unwrap();
+        assert!(near(at(&old, "table"), (at(&plain, "table").0 + 150.0, at(&plain, "table").1), 1e-6));
+        // Leaving an item out does not depend on where it is, so a stale base does not stop it.
+        let gone = ItemOverride {
+            item_id: "bed".to_string(),
+            exclude: true,
+            base: Some("0000000000000000".into()),
+            ..Default::default()
+        };
+        let r = resolve_with_overrides(&c, &ring, &EdgeMap::Auto, &[], &[gone]).unwrap();
+        assert!(r.placements.iter().all(|p| p.item_id != "bed"));
+        assert!(!r.findings.iter().any(|f| matches!(f, Finding::OverrideStale { .. })));
+    }
+
+    #[test]
+    fn test_a_recipe_hash_changes_when_the_item_is_put_somewhere_else_and_not_when_it_is_only_retyped() {
+        let (_, c) = two_items();
+        let bed = c.items.iter().find(|i| i.id == "bed").unwrap().clone();
+        let mut retyped = bed.clone();
+        retyped.type_name = "Another bed".to_string();
+        retyped.size_mm = [2000.0, 1200.0];
+        assert_eq!(
+            bed.recipe_hash(),
+            retyped.recipe_hash(),
+            "a re-specified item that stays put keeps its room's nudges"
+        );
+        let mut moved = bed.clone();
+        moved.placement.along_mm += 50.0;
+        assert_ne!(bed.recipe_hash(), moved.recipe_hash());
+        let mut turned = bed.clone();
+        turned.placement.facing_deg += 90.0;
+        assert_ne!(bed.recipe_hash(), turned.recipe_hash());
+        assert_eq!(16, bed.recipe_hash().len());
+    }
+
+    fn turned_ring(ring: &[Pt]) -> Vec<Pt> {
+        ring.iter().map(|&(x, y)| (-y, x)).collect()
+    }
+
+    #[test]
+    fn test_a_nudge_in_the_items_own_frame_follows_the_room_when_it_is_turned() {
+        let (ring, c) = two_items();
+        let turned = turned_ring(&ring);
+        let item_frame = |o: ItemOverride, r: &[Pt]| {
+            let plain = resolve_with_doors(&c, r, &EdgeMap::Shift(0), &[]).unwrap();
+            let moved = resolve_with_overrides(&c, r, &EdgeMap::Shift(0), &[], &[o]).unwrap();
+            let (a, b) = (at(&plain, "bed"), at(&moved, "bed"));
+            (b.0 - a.0, b.1 - a.1)
+        };
+        let along = ItemOverride { item_id: "bed".to_string(), along_mm: 100, ..Default::default() };
+        let off = ItemOverride { item_id: "bed".to_string(), off_mm: 50, ..Default::default() };
+        // The bed stands against edge 0. Upright, that wall runs +x and the room is at +y.
+        assert!(near(item_frame(along.clone(), &ring), (100.0, 0.0), 1e-6));
+        assert!(near(item_frame(off.clone(), &ring), (0.0, 50.0), 1e-6));
+        // Turned a quarter, the same two nudges are the same two things: along the wall, and away from it.
+        assert!(near(item_frame(along, &turned), (0.0, 100.0), 1e-6), "along the wall, which now runs +y");
+        assert!(near(item_frame(off, &turned), (-50.0, 0.0), 1e-6), "into the room, which is now at -x");
+        // The plan-frame nudge is what it always was, and does not turn.
+        let plan = nudge("bed", 100, 0, 0);
+        assert!(near(item_frame(plan, &turned), (100.0, 0.0), 1e-6));
     }
 
     fn frame(dx: f64, dy: f64, rot: f64, sx: f64, sy: f64) -> Frame {

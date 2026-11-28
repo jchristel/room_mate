@@ -15,7 +15,7 @@ use serde_json::{json, Value};
 
 use super::blueprint_capture::{properties_of, FT_TO_MM};
 use super::blueprint_geometry::Pt;
-use super::blueprint_resolve::{resolve_in_room_with, EdgeMap};
+use super::blueprint_resolve::{resolve_in_room_changes, EdgeMap};
 use super::elevation_facing::{model_room_ring_in, template_ring};
 use super::placement;
 use super::rls_plan::{check_size, has_elevations, plan_crop, size_token, transfer, MarkerPlan, RlsPlan, RlsRequest};

@@ -210,6 +210,32 @@ pub struct BlueprintItem {
     pub kit: Option<Vec<KitPart>>,
 }
 
+impl BlueprintItem {
+    /// A short, stable fingerprint of WHERE this item's recipe puts it: the edge, how far along and how far in (each
+    /// with its mode), the edge length and depth they were measured against, and the facing.
+    ///
+    /// What a room's override is made against (`ItemOverride::base`). When a new revision moves the item, the hash
+    /// changes and a nudge that was right for the old recipe is held and flagged instead of riding silently on the
+    /// new one. **Not the item's type or size**: a re-specified item that stays where it was must not strand its room's
+    /// nudges. Distances to a tenth of a millimetre and the facing to a hundredth of a degree, so a re-capture's
+    /// float noise does not change it.
+    pub fn recipe_hash(&self) -> String {
+        let p = &self.placement;
+        let text = format!(
+            "{}|{:.1}|{:?}|{:.1}|{:?}|{:.1}|{:.1}|{:.2}",
+            p.edge, p.along_mm, p.along_mode, p.off_mm, p.off_mode, p.edge_len_mm, p.depth_mm, p.facing_deg
+        );
+        // FNV-1a, 64 bit: nothing here is secret, and it must not change between Rust versions the way the std
+        // hasher is free to.
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in text.bytes() {
+            h ^= u64::from(b);
+            h = h.wrapping_mul(0x0100_0000_01b3);
+        }
+        format!("{h:016x}")
+    }
+}
+
 /// A door of the room the blueprint was captured from. **Orientation only**: doors are already
 /// placed in the model, and a blueprint never creates one. They exist so that two rotations
 /// that fit a room's shape equally well (a rectangle fits twice, half a turn apart) can be told
