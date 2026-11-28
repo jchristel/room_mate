@@ -458,6 +458,23 @@ get wrong:
   its sheets are bound to another blueprint of the project** (`blueprint_bundle::refuse_conflicts`); the page offers "Move the sheets here and
   import" (`take_over_sheets`). The Revit push sets it itself: choosing a sheet for a room in Revit is the decision. A blueprint made before this keeps its old embedded `sheets` in the file,
   which are ignored: push it again to bind its sheets.
+- **The audit sets a room's layout against what the room holds, and reads only** (`service::blueprint_audit`, `GET
+  /projects/{id}/assignments/{assignment}/audit`, MCP `audit_assignment`; plan: [`PLAN-blueprint-room-state.md`](docs/PLAN-blueprint-room-state.md)).
+  Hosts only (a nested component is its host's), matched by the project's `tag_type_code` and then by place (Hungarian, never greedy
+  nearest), judged by `[blueprint_audit]` (5 mm in place, 600 mm same item, 5 degrees). **Nothing records what Revit placed**, so every room
+  is `empty`, `untracked` or `cannot_judge` and a verdict is an inference, never a proof; the ledger-only verdicts, the kit check and
+  height are not built. What is expensive to get wrong:
+  - **"Level-based or work-plane on a level" needs BOTH facts, measured on a real model (822 instances): the family's `FamilyPlacementType`
+    (`Item::placement_type`) AND the host (`Item::host`).** The placement type alone accepts about 90 face-hosted work-plane items; `host`
+    alone accepts wall-hosted and line-based ones, whose `Host` is empty; a work-plane family must name a `Levels` host. `blueprint_audit::supported` is
+    the one rule, applied to a layout item and a room's element alike. The `Host` DISPLAY parameter is not used (it says "Floor" on 136
+    level-based items). **Absent means cannot tell, and cannot tell is `unsupported_host`**, so a snapshot pushed before the field existed audits
+    as "nothing judged" (the House A sample does exactly that, and `sample_data` pins it).
+  - **A blueprint item with no recorded hosting** (`BlueprintItem::hosting`, filled at capture since 2026-11-28) is judged by its class: a wall device is
+    unsupported, a free item is ASSUMED level-based and counted in `placement_assumed`.
+  - **`no_code` and `unsupported_host` are flags and nothing else**: no match, no suggestion, no action. A project with no `tag_type_code` is refused,
+    because flagging every item `no_code` would be a wrong answer dressed as a finding.
+  - **`placement_type` and `unique_id` come from duHast's `get_item_facts`** (an older duHast returns neither and the extractor sends neither). **Not run in Revit.**
 - **A blueprint is never deleted, only marked not in use** (`Blueprint::in_use`, `PUT` with `in_use`; the page's "Mark not in use"). Not in
   use: `assignments::assign` refuses it, `suggest` leaves out the sheets bound to it, and the page stops nagging about it. What is bound to it
   and every assignment already made stay as they are, and it can be marked in use again. There is no delete route; `blueprint_missing` on an

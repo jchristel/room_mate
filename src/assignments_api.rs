@@ -17,6 +17,7 @@ use crate::assignments::{self, AssignRequest, Assignment, AssignmentRow, ItemOve
 use crate::blueprints;
 use crate::blueprints_api::service_error;
 use crate::http_error::{projects_dir, to_http};
+use crate::service::blueprint_audit::{audit_assignment, AssignmentAudit};
 use crate::service::blueprint_capture::{qualify_room, room_ring};
 use crate::service::blueprint_solve::{solve_rooms, RoomSolve};
 use crate::state::Shared;
@@ -82,6 +83,21 @@ pub async fn http_delete_assignment(
 ) -> Result<StatusCode, (StatusCode, String)> {
     assignments::delete(&projects_dir(&state)?, &project_id, &id).map_err(to_http)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// What is in an assigned room against what its blueprint says should be: each element and item judged by code and
+/// place (`service::blueprint_audit`). A read: nothing is moved, added or removed, and nothing is stored.
+pub async fn http_audit_assignment(
+    State(state): State<Shared>,
+    UrlPath((project_id, id)): UrlPath<(String, String)>,
+) -> Result<Json<AssignmentAudit>, (StatusCode, String)> {
+    match audit_assignment(&state, &projects_dir(&state)?, &project_id, &id).map_err(service_error)? {
+        Some(audit) => Ok(Json(audit)),
+        None => Err((
+            StatusCode::NOT_FOUND,
+            "no such assignment, or its room is not in the model any more".to_string(),
+        )),
+    }
 }
 
 #[derive(Deserialize)]

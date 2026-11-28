@@ -10,6 +10,7 @@
 
 pub mod adjacency;
 pub mod areas;
+pub mod blueprint_audit;
 pub mod blueprint_capture;
 pub mod blueprint_geometry;
 pub mod blueprint_model;
