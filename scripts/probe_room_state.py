@@ -412,7 +412,7 @@ def use_duhast_at(path):
 
 
 # Edit this line on your machine, or set ROOMMATE_DUHAST_PATH. Leave empty to use the loaded duHast.
-DUHAST_PATH = ""
+DUHAST_PATH = r"C:\Users\janchristel\Documents\GitHub\SampleCodeRevitBatchProcessor-NET8\src"
 
 
 def run(doc, out_dir=None):
