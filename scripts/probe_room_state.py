@@ -129,14 +129,9 @@ TURNS_DEG = [0.0, 37.5, 90.0, 179.9, -90.0, 270.0, 12.34, 45.0]
 
 
 def default_out_dir():
-    """Where the result goes: `scripts/fixtures/` in this checkout; else the folder named by the
-    `ROOMMATE_PROBE_DIR` environment variable; else `RoomMate-probe` in the user's Documents.
-
-    A script run from the pyRevit console has no `__file__`, so the checkout cannot be found.
-    The last fallback is a folder the person can find, and `run` prints the path it wrote."""
-    here = globals().get("__file__")
-    if here:
-        return os.path.join(os.path.dirname(os.path.abspath(here)), "fixtures")
+    """Where the result goes: the folder named by the `ROOMMATE_PROBE_DIR` environment variable,
+    else `RoomMate-probe` in the user's Documents. Never derived from the script's own location:
+    a script run from the pyRevit console has no reliable one. `run` prints the path it wrote."""
     named = os.environ.get("ROOMMATE_PROBE_DIR")
     if named:
         return named
@@ -417,7 +412,7 @@ def run(doc, out_dir=None):
         "probe": "room-state",
         "version": 1,
         "document": safe(lambda: doc.Title),
-        "duhast_path": safe(lambda: os.path.dirname(duHast.__file__)),
+        "duhast_path": safe(lambda: os.path.dirname(getattr(duHast, "__file__", ""))),
         "revit_version": safe(lambda: doc.Application.VersionNumber),
         "hosting": hosting_census(doc),
         "round_trip": round_trip(doc),
@@ -427,7 +422,7 @@ def run(doc, out_dir=None):
     return path
 
 
-if __name__ == "__main__" or globals().get("__revit__") is not None:
+if globals().get("__revit__") is not None:
     try:
         _doc = __revit__.ActiveUIDocument.Document  # noqa: F821
     except NameError:
