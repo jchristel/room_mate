@@ -309,6 +309,7 @@ mod tests {
             ffe: Default::default(),
             hierarchy_exclusions: vec![],
             routing: Default::default(),
+            blueprint_audit: Default::default(),
         }
     }
 

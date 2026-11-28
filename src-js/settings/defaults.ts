@@ -13,12 +13,23 @@
 // authority. A setting whose default is *none* (a comparison key, the anchor model, a
 // hover property, a colour) stays blank, because blank is its default.
 
-import type { AreaPolicy, FfePolicy, OpeningPolicy, RoutingPolicy, Settings } from "./types.js";
+import type { AreaPolicy, BlueprintAuditPolicy, FfePolicy, OpeningPolicy, RoutingPolicy, Settings } from "./types.js";
 
 export const DEFAULT_MAX_WALL_THICKNESS_FT = 1.5;
 export const DEFAULT_ROOM_HEIGHT_PROPERTY = "Ceiling Height";
 export const DEFAULT_FRAME_ALLOWANCE_MM = 150;
 export const DEFAULT_DOOR_HEIGHT_PROPERTIES = ["Height", "Door Height"];
+
+// `BlueprintAuditPolicy::DEFAULT_*` are the authority.
+export const DEFAULT_PLACE_TOLERANCE_MM = 5;
+export const DEFAULT_NEAR_TOLERANCE_MM = 600;
+export const DEFAULT_TURN_TOLERANCE_DEG = 5;
+
+export const BLUEPRINT_AUDIT_DEFAULT: BlueprintAuditPolicy = {
+  place_tolerance_mm: DEFAULT_PLACE_TOLERANCE_MM,
+  near_tolerance_mm: DEFAULT_NEAR_TOLERANCE_MM,
+  turn_tolerance_deg: DEFAULT_TURN_TOLERANCE_DEG,
+};
 
 export const AREA_DEFAULT: AreaPolicy = { max_wall_thickness: DEFAULT_MAX_WALL_THICKNESS_FT };
 
@@ -60,6 +71,7 @@ export const defaultSettings = (): Required<Omit<Settings, NoDefault>> & Pick<Se
   ffe: { ...FFE_DEFAULT, comparison_properties: [] },
   spaces: { room_models: [], compared_properties: [] },
   routing: { ...ROUTING_DEFAULT, door_height_properties: [...DEFAULT_DOOR_HEIGHT_PROPERTIES] },
+  blueprint_audit: { ...BLUEPRINT_AUDIT_DEFAULT },
   hierarchy: [],
   builtin_properties: [],
   room_label: ["$name", "$id"],

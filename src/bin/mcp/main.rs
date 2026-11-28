@@ -7,7 +7,7 @@
 //! `get_reference_snapshot`, `get_doors`, `get_windows`, `get_ffe`, `get_spaces`,
 //! `get_ceilings`, `get_floors`, `build_report`, `list_report_columns`,
 //! `list_saved_reports`, `get_saved_report`, `list_blueprints`, `get_blueprint`,
-//! `capture_blueprint`, `resolve_blueprint`, `solve_blueprint`, `get_blueprint_bundle`, `list_sheets`, `get_sheet`,
+//! `capture_blueprint`, `resolve_blueprint`, `audit_assignment`, `solve_blueprint`, `get_blueprint_bundle`, `list_sheets`, `get_sheet`,
 //! `get_sheet_elevations`, `suggest_sheets`, `solve_sheets`, `list_assignments`, `list_tasks`, `get_task`,
 //! `preview_rls`, `preview_rls_set`, `list_tag_rules`, `get_tag_rule` --
 //! plus three settings *reads* off `settings_api`'s transport-agnostic core
@@ -407,6 +407,7 @@ mod tests {
             ffe: Default::default(),
             hierarchy_exclusions: vec![],
             routing: Default::default(),
+            blueprint_audit: Default::default(),
         };
         Arc::new(AppState::new(
             Box::new(MemStore::new()),

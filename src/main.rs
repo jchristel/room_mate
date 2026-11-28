@@ -35,7 +35,8 @@ use tower_http::{
 };
 
 use roommate::assignments_api::{
-    http_assign, http_assign_many, http_delete_assignment, http_list_assignments, http_solve_blueprint,
+    http_assign, http_assign_many, http_audit_assignment, http_delete_assignment, http_list_assignments,
+    http_solve_blueprint,
 };
 use roommate::blueprints_api::{
     http_accept_pending, http_add_revision, http_capture_blueprint, http_create_blueprint, http_get_blueprint,
@@ -172,6 +173,7 @@ fn authored_routes() -> Router<roommate::state::Shared> {
         // Which blueprint is placed in which room, one per room. See `assignments`.
         .route("/projects/{id}/assignments", get(http_list_assignments).post(http_assign))
         .route("/projects/{id}/assignments/{assignment}", delete(http_delete_assignment))
+        .route("/projects/{id}/assignments/{assignment}/audit", get(http_audit_assignment))
         .route("/projects/{id}/assignments/many", post(http_assign_many))
         // Room tasks: work for a Revit session. See `tasks`. `roomtasks` is the session's side
         // (a POST, because asking marks the tasks in progress); `tasks` is the person's.

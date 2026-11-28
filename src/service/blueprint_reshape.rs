@@ -110,6 +110,8 @@ pub fn reshape(content: &RevisionContent, target: Target) -> Result<RevisionCont
             footprint,
             facing: Some(facing),
             nested: false,
+            hosting: item.hosting.clone(),
+            kit: item.kit.clone(),
             properties: item.properties.clone(),
             type_properties: item.type_properties.clone(),
         };
@@ -185,6 +187,8 @@ mod tests {
             footprint: crate::service::blueprint_geometry::box_corners(c, (1.0, 0.0), 1000.0, 500.0).to_vec(),
             facing: Some((1.0, 0.0)),
             nested: false,
+            hosting: None,
+            kit: None,
             properties: Vec::new(),
             type_properties: Vec::new(),
         }

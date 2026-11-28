@@ -208,6 +208,11 @@ pub struct Settings {
     #[serde(default)]
     pub routing: RoutingPolicy,
 
+    /// The tolerances the room-state audit judges an element against a blueprint's layout by (see
+    /// `BlueprintAuditPolicy`). Written with every default filled in, like `routing`.
+    #[serde(default)]
+    pub blueprint_audit: BlueprintAuditPolicy,
+
     /// Ordered classification tiers, outermost first. Empty if the section is
     /// omitted (a project with no classification defined).
     #[serde(default)]
@@ -711,6 +716,36 @@ entity = \"spaces\"
     #[test]
     fn test_components_are_excluded_by_default() {
         assert_eq!(FfePolicy::default().nested_components, NestedComponents::Exclude);
+    }
+
+    /// The audit's three numbers are the author's decided defaults, are written into a project file, and a
+    /// nonsense value is refused at load instead of silently changing every verdict.
+    #[test]
+    fn test_the_blueprint_audit_policy_defaults_are_written_and_nonsense_is_refused() {
+        let settings: Settings = toml::from_str("project_id = \"p1\"\n").expect("parses");
+        let policy = &settings.blueprint_audit;
+        assert_eq!(
+            (policy.place_tolerance_mm, policy.near_tolerance_mm, policy.turn_tolerance_deg),
+            (5.0, 600.0, 5.0)
+        );
+        assert!(policy.is_default() && policy.validate().is_ok());
+        assert!(toml::to_string(&settings).unwrap().contains("[blueprint_audit]"));
+
+        let partly: Settings =
+            toml::from_str("project_id = \"p1\"\n[blueprint_audit]\nplace_tolerance_mm = 2.0\n").unwrap();
+        assert_eq!(partly.blueprint_audit.near_tolerance_mm, 600.0, "a key left out keeps its default");
+
+        let bad = |place, near, turn| BlueprintAuditPolicy {
+            place_tolerance_mm: place,
+            near_tolerance_mm: near,
+            turn_tolerance_deg: turn,
+        };
+        assert!(bad(-1.0, 600.0, 5.0).validate().is_err(), "negative");
+        assert!(bad(f64::NAN, 600.0, 5.0).validate().is_err(), "not a number");
+        assert!(bad(700.0, 600.0, 5.0).validate().is_err(), "in place may not exceed the same item");
+        assert!(bad(5.0, 9_000.0, 5.0).validate().is_err(), "past a room's width");
+        assert!(bad(5.0, 600.0, 90.0).validate().is_err(), "past a quarter turn");
+        assert!(bad(0.0, 0.0, 0.0).validate().is_ok(), "zero is a strict reading, not an error");
     }
 
     #[test]

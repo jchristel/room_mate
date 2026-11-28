@@ -109,6 +109,14 @@ pub(super) struct TaskParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub(super) struct AssignmentParams {
+    /// The project id, as returned by `list_projects`.
+    pub(super) project_id: String,
+    /// The assignment id, as returned by `list_assignments`.
+    pub(super) assignment_id: String,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub(super) struct TagRuleParams {
     /// The project id, as returned by `list_projects`.
     pub(super) project_id: String,

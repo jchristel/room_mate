@@ -112,6 +112,25 @@ impl RoommateMcp {
         list_result(&rows, "assignments", p.limit, p.offset)
     }
 
+    /// What a room holds against what its blueprint says -- see `service::blueprint_audit`.
+    #[tool(
+        description = "AUDIT one blueprint assignment: set the layout the blueprint gives the room today (the pinned revision, resolved with the room's mapping and overrides) against the FF&E the room actually holds, and say per element and per item whether it is the blueprint's, by CODE (the project's `tag_type_code` parameter, never family or type names) and by PLACE. Hosts only: a component nested in another family is part of its host. `state`: `empty` (nothing in the room), `untracked` (furnished by hand or another process; nothing records what the blueprint placed, so every verdict is an inference from code and place) or `cannot_judge` (the blueprint does not fit the room, so presence by code only). `verdicts` each have a `kind`: `in_place`, `moved` (right code, within `near_tolerance_mm` but not in `place_tolerance_mm`, or facing off by more than `turn_tolerance_deg`; with `distance_mm` and `turn_deg`), `missing` (a layout item nothing is), `extra` (right code, in the room, too far from any item of that code), `surplus` (more elements of a code than the layout has items), `foreign` (an element whose code the layout does not have at all: not the blueprint's, never touched), `substituted` (another code stands where an item should), `kit_differs` (the right host in the right place, but different nested parts inside: `kit_diff` lists the parts the blueprint has and the element lacks, and the reverse; reported only, since a nested instance changes through its host alone and a family reload is refused), `present_by_code` (a room the blueprint does not fit), and the two flags nothing is done about: `no_code` (the type has no code, a modelling issue for the author to fix in Revit first) and `unsupported_host` (not level-based or work-plane-on-a-level: wall, face or line hosted, or the model did not say; `unsupported` says why, `side` says which side). `counts` is the verdicts by kind. The tolerances are the project's `[blueprint_audit]` settings and ride the answer. Each matched pair also carries `kit` (`same`, `differs` or `unknown`: an older snapshot or blueprint cannot say, and that is never read as agreement; `kit_unknown` counts them). NOT judged yet: anything that needs the ledger of what Revit placed (drift, retired, removed by hand), a nested instance's own properties, and height. It writes nothing. Needs the project's `tag_type_code`; refused without it."
+    )]
+    fn audit_assignment(&self, Parameters(p): Parameters<AssignmentParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        roommate::service::blueprint_audit::audit_assignment(&self.state, &dir, &p.project_id, &p.assignment_id)
+            .map_err(to_mcp_error)?
+            .map_or_else(
+                || {
+                    Err(McpError::invalid_params(
+                        "no such assignment, or its room is not in the model any more".to_string(),
+                        None,
+                    ))
+                },
+                |audit| json_result(&audit),
+            )
+    }
+
     /// Room tasks, as a Revit session sees them -- see `tasks::list`.
     #[tool(
         description = "List the project's ROOM TASKS: work the server holds for a Revit session. A task is a RECORD, unlike an assignment: it holds what Revit is told as it was when the task was made. Each row has `id`, `kind` (`populate_room`: place a blueprint's items in the room and, if `create_rls`, its sheets; `create_rls`: make room layout sheets from a library sheet and place nothing; `update_room`: bring a room populated earlier back in line with its blueprint, a dry run unless turned off; `create_rls_set`: the sheets of a SET of adjacent rooms as a person laid them out, its `room` the lead room and `set_rooms` every room, lead first), `state` (`queued`, `in_progress` once a Revit session has been handed it, then `completed`, `completed_with_warnings`, `failed` or `aborted` as that session reports, or `dismissed` by a person), `model_id` (the Revit document the task is for), `room` ({room_id, number, name}), `phase`, `overwrite_layout`, `create_rls`, `overwrite_rls`, `blueprint` ({id, name, revision}) for a populate task, counts of `items`, `sheets` (for a set, the sheets it makes), `tag_rules` and `findings`, `attempts` and `last_messages` (what the last session said, for why a task failed or aborted). Optional `model_id` and `state` narrow the list. Read one in full with get_task. Making, dismissing and resending tasks, and the Revit session's asking and reporting, are HTTP-only (POST /projects/{id}/tasks, /tasks/{task}/dismiss, /tasks/{task}/resend, /roomtasks, /roomtasks/report)."

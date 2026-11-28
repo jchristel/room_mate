@@ -10,6 +10,7 @@
 
 pub mod adjacency;
 pub mod areas;
+pub mod blueprint_audit;
 pub mod blueprint_capture;
 pub mod blueprint_geometry;
 pub mod blueprint_model;
@@ -183,6 +184,7 @@ mod tests {
             ffe: Default::default(),
             hierarchy_exclusions: vec![],
             routing: Default::default(),
+            blueprint_audit: Default::default(),
         }
     }
 

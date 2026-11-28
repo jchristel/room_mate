@@ -94,7 +94,7 @@ def items_in_phase(doc, phase_name, categories):
 
 
 def item_facts(doc, phase_name, categories, identify_by="room"):
-    """`{item id: {"room", "owner_spaces", "category", "family_name", "host"}}` for every instance of
+    """`{item id: {"room", "owner_spaces", "category", "family_name", "host", "placement_type", "unique_id"}}` for every instance of
     `categories` (duHast `get_item_facts`), with every id as the string the wire uses.
 
     **ONE spatial reference, not two.** `identify_by` picks which: `"room"` (the default)
@@ -106,7 +106,16 @@ def item_facts(doc, phase_name, categories, identify_by="room"):
 
     The category is `instance.Category.Name` ("Furniture", not "OST_Furniture"): what a
     `?category=` filter is written against. Family name and host are read from Revit because
-    the export carries neither (probed on a large real export); absent means unread."""
+    the export carries neither (probed on a large real export); absent means unread.
+
+    **`placement_type` and `unique_id` are read the same way** (duHast `get_item_facts`, 2026-11-28), and for
+    the same reason: the export has neither. The placement type is the family's `FamilyPlacementType`
+    (`OneLevelBased`, `WorkPlaneBased`, `OneLevelBasedHosted`, `CurveBased`, ...). The room-state audit needs it
+    **beside `host`, not instead of it**: measured on a real model, the placement type alone would accept about
+    90 face-hosted work-plane items and `host` alone would accept the wall-hosted and line-based ones, whose
+    `Host` is empty. The `unique_id` is what a placed element is known by across saves. **An older duHast returns
+    neither key**, so both are read with `.get` and an absent one stays absent: the audit then flags the item
+    `unsupported_host` rather than guessing."""
     if identify_by not in ("room", "space"):
         raise ValueError("identify_by must be 'room' or 'space', got {!r}".format(identify_by))
     phase = phase_by_name(doc, phase_name)
@@ -122,5 +131,7 @@ def item_facts(doc, phase_name, categories, identify_by="room"):
             "category": found["category"],
             "family_name": found["family_name"],
             "host": host,
+            "placement_type": found.get("placement_type"),
+            "unique_id": found.get("unique_id"),
         }
     return facts

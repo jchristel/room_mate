@@ -176,10 +176,16 @@ pub struct Item {
     /// measurable footprint can still be drawn at, which is the difference
     /// between "we do not know its shape" and "it silently is not there".
     ///
-    /// `Option` is not the producer hedging — duHast refuses any instance whose
-    /// `Location` is not a `LocationPoint`, so a pushed item always has one. It
-    /// is because every stored snapshot re-parses through this type at boot, the
-    /// same permissive-type / strict-producer split every payload here uses.
+    /// **A line-based instance (a rail, a linear fitting) reports the MIDPOINT of its
+    /// location curve** (duHast `get_location_xyz`, 2026-11-28), and its facing is the
+    /// instance's own X axis. The curve's start and end are in the export
+    /// (`location_curve`) and are not carried here, so a line-based item reads as a
+    /// point item with no length.
+    ///
+    /// `Option` is not the producer hedging — duHast refuses any instance with neither
+    /// a point nor a curve location, so a pushed item always has one. It is because
+    /// every stored snapshot re-parses through this type at boot, the same
+    /// permissive-type / strict-producer split every payload here uses.
     #[serde(default)]
     pub insertion_point: Option<Point2D>,
 
@@ -301,6 +307,25 @@ pub struct Item {
     /// before the field existed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub host: Option<ItemHost>,
+
+    /// How the instance's FAMILY is placed: Revit's `FamilyPlacementType` by name (`OneLevelBased`,
+    /// `TwoLevelsBased`, `WorkPlaneBased`, `OneLevelBasedHosted`, `CurveBased`, ...), read by the extractor
+    /// (`item_facts`, duHast `get_item_facts`, 2026-11-28).
+    ///
+    /// **Beside `host`, never instead of it**, both measured on a real model: the placement type alone would
+    /// take about 90 face-hosted work-plane items for level-based ones, and `host` alone takes a wall-hosted or a
+    /// line-based one for level-based because its `Host` is empty. The room-state audit
+    /// (`service::blueprint_audit::supported_placement`) needs both. Absent in a snapshot pushed before the field
+    /// existed and when the extractor ran an older duHast: **absent means cannot tell**, and the audit then
+    /// flags the item rather than guessing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement_type: Option<String>,
+
+    /// The instance's Revit `UniqueId` (an episode GUID plus the hex element id): what a placed element is known
+    /// by across saves, Save As and worksharing. It changes when the element is deleted and made again, copied, or
+    /// copied into another document. Absent in an older snapshot, in which case the element id is all there is.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unique_id: Option<String>,
 
     /// This instance's own properties, keyed by the *source's own* property
     /// name, exactly as `Room.properties` and `Opening::properties` are.
@@ -472,6 +497,27 @@ mod tests {
         assert_eq!((host.kind.as_deref(), host.id.as_str(), host.face_hosted), (Some("Walls"), "99", true));
     }
 
+    /// The placement type and the `UniqueId` arrive from the extractor; an older snapshot has neither, and
+    /// "cannot tell" is the state, never a default placement.
+    #[test]
+    fn test_placement_type_and_unique_id_are_optional_and_round_trip() {
+        let legacy: Item = serde_json::from_value(serde_json::json!({
+            "id": "1", "level_id": "1", "category": "Furniture", "type_id": "t", "type_name": "Chair"
+        }))
+        .unwrap();
+        assert!(legacy.placement_type.is_none() && legacy.unique_id.is_none());
+        let json = serde_json::to_value(&legacy).unwrap();
+        assert!(json.get("placement_type").is_none() && json.get("unique_id").is_none());
+
+        let item: Item = serde_json::from_value(serde_json::json!({
+            "id": "2", "level_id": "1", "category": "Furniture", "type_id": "t", "type_name": "Chair",
+            "placement_type": "WorkPlaneBased", "unique_id": "5f1c-0001"
+        }))
+        .unwrap();
+        assert_eq!(item.placement_type.as_deref(), Some("WorkPlaneBased"));
+        assert_eq!(item.unique_id.as_deref(), Some("5f1c-0001"));
+    }
+
     /// `"-1"` is a level id like any other on the wire. Revit gives an unhosted
     /// element an invalid `LevelId` and duHast derives the item's level from
     /// solid geometry a family may not have -- 71 of 644 on House A. Filtering
@@ -559,6 +605,8 @@ mod tests {
             type_name: "Desk".into(),
             family_name: None,
             host: None,
+            placement_type: None,
+            unique_id: None,
             properties: BTreeMap::from([("Mark".into(), value("F-101")), ("Depth".into(), value(""))]),
             type_properties: Arc::new(BTreeMap::from([
                 ("Depth".into(), value("800")),

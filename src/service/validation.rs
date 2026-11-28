@@ -2473,6 +2473,7 @@ mod tests {
             ffe: Default::default(),
             hierarchy_exclusions: vec![],
             routing: Default::default(),
+            blueprint_audit: Default::default(),
         };
         let state = AppState::new(
             Box::new(crate::storage::MemStore::new()),
@@ -2644,6 +2645,7 @@ mod tests {
             ffe: Default::default(),
             hierarchy_exclusions: vec![],
             routing: Default::default(),
+            blueprint_audit: Default::default(),
         };
         let state = AppState::new(
             Box::new(crate::storage::MemStore::new()),
@@ -2783,6 +2785,8 @@ mod tests {
             type_name: "Desk 1600x800".to_string(),
             family_name: None,
             host: None,
+            placement_type: None,
+            unique_id: None,
             properties: BTreeMap::new(),
             type_properties: Default::default(),
         }
@@ -3589,6 +3593,7 @@ mod tests {
             ffe: Default::default(),
             hierarchy_exclusions: vec![],
             routing: Default::default(),
+            blueprint_audit: Default::default(),
         };
         let state = AppState::new(
             Box::new(crate::storage::MemStore::new()),

@@ -38,6 +38,7 @@ export type { RoomAttribution } from "./generated/RoomAttribution";
 export type { RoomResolution } from "./generated/RoomResolution";
 export type { FfePolicy } from "./generated/FfePolicy";
 export type { RoutingPolicy } from "./generated/RoutingPolicy";
+export type { BlueprintAuditPolicy } from "./generated/BlueprintAuditPolicy";
 export type { NestedComponents } from "./generated/NestedComponents";
 export type { SpacePolicy } from "./generated/SpacePolicy";
 export type { SpaceFieldConfig } from "./generated/SpaceFieldConfig";

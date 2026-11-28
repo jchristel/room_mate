@@ -289,6 +289,7 @@ mod tests {
             ffe: Default::default(),
             hierarchy_exclusions: vec![],
             routing: Default::default(),
+            blueprint_audit: Default::default(),
         }
     }
 
@@ -345,6 +346,8 @@ mod tests {
                     ],
                     facing: Some((0.0, 1.0)),
                     nested: false,
+                    hosting: None,
+                    kit: None,
                     properties: vec![],
                     type_properties: vec![],
                 }

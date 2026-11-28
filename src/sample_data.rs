@@ -131,6 +131,39 @@ fn test_the_authored_data_loads_and_the_assignment_makes_a_task() {
     std::fs::remove_dir_all(projects.parent().unwrap()).ok();
 }
 
+/// The sample was pushed before items carried a placement type, so the audit of its assignment is the
+/// old-data case: every element of the room reads "cannot tell" and is flagged, never taken for level-based,
+/// and a blueprint captured before hosting was recorded is judged by size with the assumption counted.
+#[test]
+fn test_the_audit_of_the_sample_assignment_says_what_it_cannot_tell() {
+    use crate::service::blueprint_audit::{audit_assignment, Unsupported, VerdictKind};
+    let (state, projects) = booted("audit");
+    let assignment = assignments::list_raw(&projects, PROJECT).unwrap().remove(0);
+    let got = audit_assignment(&state, &projects, PROJECT, &assignment.id)
+        .expect("the sample assignment audits")
+        .expect("its room is in the sample");
+    assert_eq!(got.assignment_id, assignment.id);
+    assert_eq!(got.type_code_parameter, "Assembly Code");
+    assert!(got.audit.layout_items > 0, "the blueprint places items in the room");
+    assert!(
+        got.audit.placement_assumed > 0,
+        "a blueprint captured before hosting was recorded rests on an assumption"
+    );
+    let in_room: Vec<_> = got.audit.verdicts.iter().filter(|v| v.element_id.is_some()).collect();
+    assert_eq!(got.audit.elements, in_room.len(), "every element of the room has exactly one verdict");
+    assert!(
+        in_room
+            .iter()
+            .all(|v| v.kind == VerdictKind::UnsupportedHost && v.unsupported == Some(Unsupported::PlacementUnknown)),
+        "no element of the old snapshot states how it is placed, so none is judged"
+    );
+    assert!(
+        audit_assignment(&state, &projects, PROJECT, "no-such-assignment").unwrap().is_none(),
+        "an unknown assignment is not found, not an error"
+    );
+    std::fs::remove_dir_all(projects.parent().unwrap()).ok();
+}
+
 #[test]
 fn test_solve_picks_the_sheet_whose_room_is_the_same_size() {
     use crate::service::sheet_suggest;

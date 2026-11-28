@@ -311,6 +311,105 @@ impl RoutingPolicy {
     }
 }
 
+/// How the room-state audit judges an element against a blueprint's layout (`service::blueprint_audit`):
+/// when an element is "in place", when it is merely "moved", and when it is not the layout's item at all.
+///
+/// **Settings, not constants, because the right numbers belong to the office and the model.** The place
+/// tolerance is small on purpose: a level-based item is put at the recipe's point and facing with no
+/// snapping, and a real Revit run (2026-11-28) read nine placed elements back at 0.000 mm, so anything a
+/// person did by hand shows up as drift. The near tolerance is the line between "the same bed, moved" and
+/// "a different bed": beyond it the element is reported `extra` and the item `missing`, never paired,
+/// because pairing them would call one bed another.
+///
+/// Plain numbers with defaults rather than `Option`s: there is nothing for "unset" to mean that the default
+/// does not, and a written settings file lists what the project runs on (`Settings::fill_defaults`).
+#[derive(Debug, Clone, PartialEq, Deserialize, Serialize, ts_rs::TS)]
+#[ts(export, export_to = "../../../src-js/settings/generated/")]
+pub struct BlueprintAuditPolicy {
+    /// Within this distance (mm) an element is `in_place`.
+    #[serde(default = "BlueprintAuditPolicy::default_place")]
+    pub place_tolerance_mm: f64,
+
+    /// Within this distance (mm), and beyond the place tolerance, an element of the right code is `moved`;
+    /// beyond it the element and the item are not a pair.
+    #[serde(default = "BlueprintAuditPolicy::default_near")]
+    pub near_tolerance_mm: f64,
+
+    /// Facing within this many degrees agrees with the layout's.
+    #[serde(default = "BlueprintAuditPolicy::default_turn")]
+    pub turn_tolerance_deg: f64,
+}
+
+impl Default for BlueprintAuditPolicy {
+    fn default() -> Self {
+        Self {
+            place_tolerance_mm: Self::DEFAULT_PLACE_TOLERANCE_MM,
+            near_tolerance_mm: Self::DEFAULT_NEAR_TOLERANCE_MM,
+            turn_tolerance_deg: Self::DEFAULT_TURN_TOLERANCE_DEG,
+        }
+    }
+}
+
+impl BlueprintAuditPolicy {
+    pub const DEFAULT_PLACE_TOLERANCE_MM: f64 = 5.0;
+    pub const DEFAULT_NEAR_TOLERANCE_MM: f64 = 600.0;
+    pub const DEFAULT_TURN_TOLERANCE_DEG: f64 = 5.0;
+    /// The most a near tolerance may be: past a room's width every element would "be" the same item.
+    pub const MAX_NEAR_TOLERANCE_MM: f64 = 5_000.0;
+    /// The most a turn tolerance may be: past a quarter turn "facing" stops meaning anything.
+    pub const MAX_TURN_TOLERANCE_DEG: f64 = 45.0;
+
+    fn default_place() -> f64 {
+        Self::DEFAULT_PLACE_TOLERANCE_MM
+    }
+    fn default_near() -> f64 {
+        Self::DEFAULT_NEAR_TOLERANCE_MM
+    }
+    fn default_turn() -> f64 {
+        Self::DEFAULT_TURN_TOLERANCE_DEG
+    }
+
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Startup-loud: a tolerance that is not a number, is negative, or leaves no room between "in place" and
+    /// "the same item" would silently change every verdict.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        for (name, value) in [
+            ("place_tolerance_mm", self.place_tolerance_mm),
+            ("near_tolerance_mm", self.near_tolerance_mm),
+            ("turn_tolerance_deg", self.turn_tolerance_deg),
+        ] {
+            if !value.is_finite() || value < 0.0 {
+                anyhow::bail!("[blueprint_audit] {name} must be a number of at least 0 (got {value})");
+            }
+        }
+        if self.near_tolerance_mm > Self::MAX_NEAR_TOLERANCE_MM {
+            anyhow::bail!(
+                "[blueprint_audit] near_tolerance_mm must be at most {} mm (got {})",
+                Self::MAX_NEAR_TOLERANCE_MM,
+                self.near_tolerance_mm
+            );
+        }
+        if self.place_tolerance_mm > self.near_tolerance_mm {
+            anyhow::bail!(
+                "[blueprint_audit] place_tolerance_mm ({}) must not exceed near_tolerance_mm ({})",
+                self.place_tolerance_mm,
+                self.near_tolerance_mm
+            );
+        }
+        if self.turn_tolerance_deg > Self::MAX_TURN_TOLERANCE_DEG {
+            anyhow::bail!(
+                "[blueprint_audit] turn_tolerance_deg must be at most {} degrees (got {})",
+                Self::MAX_TURN_TOLERANCE_DEG,
+                self.turn_tolerance_deg
+            );
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Deserialize, Serialize, ts_rs::TS)]
 #[ts(export, export_to = "../../../src-js/settings/generated/")]
 pub struct OpeningPolicy {

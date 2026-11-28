@@ -140,6 +140,39 @@ pub struct Property {
     pub value: String,
 }
 
+/// How an item is hosted, as the model said it when the item was captured: the facts the room-state audit
+/// needs to tell a level-based item from one hung on a wall, a face or a line (`blueprint_audit::supported`).
+///
+/// **Absent on a blueprint captured before it existed, and absent means cannot tell** -- never "level-based".
+/// The three fields are the ones an FF&E item carries (`Item::placement_type`, `ItemHost::kind`,
+/// `ItemHost::face_hosted`), copied whole so the audit judges a layout item and a room's element by one rule.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hosting {
+    /// The family's `FamilyPlacementType` by name (`OneLevelBased`, `WorkPlaneBased`, ...).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement_type: Option<String>,
+    /// The category of the element hosting it (`Levels`, `Walls`, `Ceilings`), when something does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_kind: Option<String>,
+    /// Hosted on a face of another element rather than the element as a whole.
+    #[serde(default)]
+    pub face_hosted: bool,
+}
+
+/// One shared nested family inside an item, as its host's family defines it: what comes with the host.
+///
+/// **By family, type and depth, never by element id**: an id names an instance in one model, and the question is
+/// whether two hosts carry the same parts. Depth is how many families down it sits (1 for a direct child), so a
+/// bracket nested in a bracket is not the same part as one beside it.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct KitPart {
+    pub depth: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub family_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub type_name: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BlueprintItem {
     /// The Revit element id in the model it was captured from. Identifies the item within
@@ -166,6 +199,15 @@ pub struct BlueprintItem {
     /// Type properties as exported, in name order.
     #[serde(default)]
     pub type_properties: Vec<Property>,
+    /// How it was hosted when captured (see `Hosting`); absent on a blueprint captured before this existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hosting: Option<Hosting>,
+    /// What its family brings with it, sorted. **`None` is "not recorded", which is not "no parts"**: an item
+    /// captured from a snapshot that cannot say (see `blueprint_capture::kit_of`) and a blueprint captured before
+    /// this existed both read `None`, and the audit then says `kit_unknown` rather than agreeing. `Some(vec![])`
+    /// is a family with no nested parts.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kit: Option<Vec<KitPart>>,
 }
 
 /// A door of the room the blueprint was captured from. **Orientation only**: doors are already

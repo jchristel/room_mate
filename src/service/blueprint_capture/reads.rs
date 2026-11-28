@@ -138,6 +138,8 @@ pub fn capture_room(
                 footprint: it.item.loops.first().map(loop_mm).unwrap_or_default(),
                 facing: it.item.facing.as_ref().map(|f| (f.x, f.y)),
                 nested: it.item.super_component_id.is_some(),
+                hosting: Some(hosting_of(&it.item)),
+                kit: kit_of(&it.item),
                 properties: properties_of(&it.item.properties),
                 type_properties: properties_of(type_props),
             });

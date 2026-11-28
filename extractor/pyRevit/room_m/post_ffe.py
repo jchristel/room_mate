@@ -163,7 +163,7 @@ def translate_item(item, contribution):
     carries no id (nothing downstream could key on it).
 
     `contribution` is the whole export contribution, and what this reads out of
-    it is `facts` -- `{id: {"room", "category", "family_name", "host"}}` from
+    it is `facts` -- `{id: {"room", "category", "family_name", "host", "placement_type", "unique_id"}}` from
     `room_m.utils.items.item_facts`. The whole contribution rather than just
     that map, because `post_entity` hands every entity the same argument and
     what each needs from it is itself per entity.
@@ -240,6 +240,10 @@ def translate_item(item, contribution):
         # string. None is sent as absent, never as a guess.
         "family_name": facts.get("family_name"),
         "host": facts.get("host"),
+        # Read from Revit by `item_facts` (duHast `get_item_facts`): the family's `FamilyPlacementType` and the
+        # instance's `UniqueId`. Absent when an older duHast ran, which the server reads as "cannot tell".
+        "placement_type": facts.get("placement_type"),
+        "unique_id": facts.get("unique_id"),
         "properties": properties_to_map(instance),
         "type_properties": properties_to_map(type_props),
     }
