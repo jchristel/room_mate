@@ -112,6 +112,7 @@ mod tests {
             ffe: Default::default(),
             hierarchy_exclusions: vec![],
             routing: Default::default(),
+            blueprint_audit: Default::default(),
         };
         let registry = std::collections::HashMap::from([("p1".to_string(), bundle)]);
         AppState::new(Box::new(MemStore::new()), registry, None)

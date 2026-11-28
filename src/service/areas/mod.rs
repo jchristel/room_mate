@@ -1317,6 +1317,7 @@ mod tests {
                 ffe: Default::default(),
                 hierarchy_exclusions: exclusions,
                 routing: Default::default(),
+                blueprint_audit: Default::default(),
             }
         }
 

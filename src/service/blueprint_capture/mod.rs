@@ -25,7 +25,7 @@ use super::blueprint_geometry::{
     inside, rotate, simplify, sub, unit, Edge, Pt, FINE_TOLERANCE_MM,
 };
 use super::blueprint_model::{
-    AlongMode, BlueprintDoor, BlueprintItem, Follow, ItemClass, OffMode, Outline, Placement, Point, Property,
+    AlongMode, BlueprintDoor, BlueprintItem, Follow, Hosting, ItemClass, OffMode, Outline, Placement, Point, Property,
     RevisionContent, Skipped,
 };
 use super::items::{assemble_items, ItemScope};
@@ -66,6 +66,18 @@ pub struct SourceItem {
     pub nested: bool,
     pub properties: Vec<Property>,
     pub type_properties: Vec<Property>,
+    /// How the model hosts it (`Hosting`); `None` when the source does not say.
+    pub hosting: Option<Hosting>,
+}
+
+/// How an FF&E item is hosted, as the audit reads it on both sides (`blueprint_audit::supported`): copied
+/// from the facts the extractor sent, never inferred, so an item pushed before they existed stays "cannot tell".
+pub fn hosting_of(item: &crate::contract::Item) -> Hosting {
+    Hosting {
+        placement_type: item.placement_type.clone(),
+        host_kind: item.host.as_ref().and_then(|h| h.kind.clone()),
+        face_hosted: item.host.as_ref().is_some_and(|h| h.face_hosted),
+    }
 }
 
 /// A door of the room, as capture reads it: only where it is. Millimetres, project-local frame.
@@ -313,6 +325,7 @@ pub(super) fn place_item(s: SourceItem, origin: Pt, coarse: &[Pt], es: &[Edge]) 
             follows: None,
             properties: s.properties,
             type_properties: s.type_properties,
+            hosting: s.hosting,
         },
         Measured { ht, hn, corners: box_corners(c, f, hu, hv), area: 4.0 * hu * hv },
     )
@@ -402,6 +415,7 @@ mod tests {
             footprint,
             facing: Some(f),
             nested: false,
+            hosting: None,
             properties: vec![],
             type_properties: vec![],
         }

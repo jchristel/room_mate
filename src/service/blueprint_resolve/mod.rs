@@ -625,6 +625,7 @@ mod tests {
             footprint,
             facing: Some(f),
             nested: false,
+            hosting: None,
             properties: vec![],
             type_properties: vec![],
         }

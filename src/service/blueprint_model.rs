@@ -140,6 +140,25 @@ pub struct Property {
     pub value: String,
 }
 
+/// How an item is hosted, as the model said it when the item was captured: the facts the room-state audit
+/// needs to tell a level-based item from one hung on a wall, a face or a line (`blueprint_audit::supported`).
+///
+/// **Absent on a blueprint captured before it existed, and absent means cannot tell** -- never "level-based".
+/// The three fields are the ones an FF&E item carries (`Item::placement_type`, `ItemHost::kind`,
+/// `ItemHost::face_hosted`), copied whole so the audit judges a layout item and a room's element by one rule.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hosting {
+    /// The family's `FamilyPlacementType` by name (`OneLevelBased`, `WorkPlaneBased`, ...).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placement_type: Option<String>,
+    /// The category of the element hosting it (`Levels`, `Walls`, `Ceilings`), when something does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_kind: Option<String>,
+    /// Hosted on a face of another element rather than the element as a whole.
+    #[serde(default)]
+    pub face_hosted: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BlueprintItem {
     /// The Revit element id in the model it was captured from. Identifies the item within
@@ -166,6 +185,9 @@ pub struct BlueprintItem {
     /// Type properties as exported, in name order.
     #[serde(default)]
     pub type_properties: Vec<Property>,
+    /// How it was hosted when captured (see `Hosting`); absent on a blueprint captured before this existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hosting: Option<Hosting>,
 }
 
 /// A door of the room the blueprint was captured from. **Orientation only**: doors are already
