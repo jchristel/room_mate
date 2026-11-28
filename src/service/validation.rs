@@ -2783,6 +2783,8 @@ mod tests {
             type_name: "Desk 1600x800".to_string(),
             family_name: None,
             host: None,
+            placement_type: None,
+            unique_id: None,
             properties: BTreeMap::new(),
             type_properties: Default::default(),
         }
