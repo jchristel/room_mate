@@ -35,8 +35,8 @@ use tower_http::{
 };
 
 use roommate::assignments_api::{
-    http_assign, http_assign_many, http_audit_assignment, http_delete_assignment, http_list_assignments,
-    http_solve_blueprint,
+    http_assign, http_assign_many, http_audit_assignment, http_blueprint_diff, http_blueprint_impact,
+    http_delete_assignment, http_list_assignments, http_solve_blueprint,
 };
 use roommate::blueprints_api::{
     http_accept_pending, http_add_revision, http_capture_blueprint, http_create_blueprint, http_get_blueprint,
@@ -194,6 +194,9 @@ fn authored_routes() -> Router<roommate::state::Shared> {
         .route("/projects/{id}/roomtasks", post(http_claim_tasks))
         .route("/projects/{id}/roomtasks/report", post(http_report_tasks))
         .route("/projects/{id}/blueprints/{blueprint}/solve", post(http_solve_blueprint))
+        // What a revision changes, and what it would change in each assigned room: reads, nothing stored.
+        .route("/projects/{id}/blueprints/{blueprint}/diff", get(http_blueprint_diff))
+        .route("/projects/{id}/blueprints/{blueprint}/impact", get(http_blueprint_impact))
         // The room layout sheet library: sheets a person chose to export, kept as exported.
         // Its own endpoint, apart from blueprints. POST is the extractor's push; `suggest`
         // is a read, asked for in sheet creation mode only. See `sheets`.

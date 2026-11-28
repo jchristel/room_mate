@@ -30,7 +30,7 @@ use super::blueprint_model::{Hosting, ItemClass, KitPart};
 use roommate_shared::settings::BlueprintAuditPolicy;
 
 mod reads;
-pub use reads::{audit_assignment, AssignmentAudit};
+pub use reads::{audit_assignment, audit_basis, audit_content, AssignmentAudit};
 
 /// The family placement types an item can have and still be judged by a point in plan: sitting on a level, or
 /// on a work plane that is a level. Anything else hangs on something the plan point cannot judge.

@@ -117,6 +117,20 @@ pub(super) struct AssignmentParams {
 }
 
 #[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
+pub(super) struct BlueprintChangeParams {
+    /// The project id, as returned by `list_projects`.
+    pub(super) project_id: String,
+    /// The blueprint id, as returned by `list_blueprints`.
+    pub(super) blueprint_id: String,
+    /// The accepted revision to look at; the blueprint's current one when both this and `pending` are omitted.
+    pub(super) revision: Option<u32>,
+    /// A pushed revision still waiting for review (its `pending_id`), to read what accepting it would do. Not together with `revision`.
+    pub(super) pending: Option<u32>,
+    /// For the diff: the revision to compare from. Omitted, the revision before the target, or the current one when the target is pending.
+    pub(super) from: Option<u32>,
+}
+
+#[derive(Debug, serde::Deserialize, schemars::JsonSchema)]
 pub(super) struct TagRuleParams {
     /// The project id, as returned by `list_projects`.
     pub(super) project_id: String,

@@ -124,6 +124,8 @@ pub const TOOL_KINDS: &[(&str, Kind)] = &[
     ("list_report_columns", Kind::Document),
     ("resolve_blueprint", Kind::Document),
     ("audit_assignment", Kind::Document),
+    ("diff_blueprint", Kind::Document),
+    ("impact_blueprint", Kind::Document),
     ("resolve_project_settings", Kind::Document),
     ("suggest_sheets", Kind::Document),
     ("solve_sheets", Kind::Document),

@@ -480,6 +480,12 @@ get wrong:
   - **`no_code` and `unsupported_host` are flags and nothing else**: no match, no suggestion, no action. A project with no `tag_type_code` is refused,
     because flagging every item `no_code` would be a wrong answer dressed as a finding.
   - **`placement_type` and `unique_id` come from duHast's `get_item_facts`** (an older duHast returns neither and the extractor sends neither). **Not run in Revit.**
+- **The revision diff and the impact read are dry runs, derived on every read and stored nowhere** (`service::blueprint_diff`, `service::blueprint_impact`; `GET
+  /projects/{id}/blueprints/{blueprint}/diff` and `.../impact` with `revision` or `pending` (a pushed revision BEFORE it is accepted), MCP `diff_blueprint`, `impact_blueprint`).
+  The diff pairs items by id and then, for what is left, by family, type and nearness in the blueprint's frame (`matched: by_position`, a guess, counted); `kit_changed` is
+  said only when BOTH revisions recorded a kit. The impact read resolves the target with each assignment's own mapping, overrides and additions, audits the room against it
+  (`audit_content`, the audit read's own comparison) and plans only what needs no ledger: `add` (a missing item), `move` (the right element near its place) and `report`.
+  **No element is planned for removal, retype or replacement until the ledger exists**, and a held nudge (`override_stale`) makes the room `needs_decision`, never a silent carry.
 - **A blueprint is never deleted, only marked not in use** (`Blueprint::in_use`, `PUT` with `in_use`; the page's "Mark not in use"). Not in
   use: `assignments::assign` refuses it, `suggest` leaves out the sheets bound to it, and the page stops nagging about it. What is bound to it
   and every assignment already made stay as they are, and it can be marked in use again. There is no delete route; `blueprint_missing` on an
