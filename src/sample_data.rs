@@ -232,6 +232,72 @@ fn test_a_rooms_addition_reaches_the_task_and_the_audit_as_a_copy_of_its_item() 
     std::fs::remove_dir_all(projects.parent().unwrap()).ok();
 }
 
+/// The impact read on the sample: a pushed revision that moves one item is a dry run per room, naming the item,
+/// holding a nudge made against the old recipe and planning nothing it cannot prove. The pending revision is judged
+/// before it is accepted, and nothing is stored.
+#[test]
+fn test_the_impact_of_a_pushed_revision_names_the_item_and_holds_a_stale_nudge() {
+    use crate::assignments::{AssignRequest, ItemOverride};
+    use crate::blueprints::PushRequest;
+    use crate::service::blueprint_diff::ChangeKind;
+    use crate::service::blueprint_impact::{impact, RoomStatus, Target};
+    let (state, projects) = booted("impact");
+    let before = assignments::list_raw(&projects, PROJECT).unwrap().remove(0);
+    let blueprint = blueprints::load(&projects, PROJECT, &before.blueprint_id).unwrap();
+    let mut content = blueprint.revision(before.revision).unwrap().content.clone();
+    let moved = content.items.iter().position(|i| !i.excluded).unwrap();
+    let moved_id = content.items[moved].id.clone();
+    content.items[moved].placement.along_mm += 150.0;
+
+    // The room nudged that item against the recipe revision 1 gave it.
+    assignments::assign(
+        &projects,
+        PROJECT,
+        AssignRequest {
+            blueprint_id: before.blueprint_id.clone(),
+            revision: Some(before.revision),
+            room: before.room.clone(),
+            room_name: before.room_name.clone(),
+            mapping: before.mapping.clone(),
+            overrides: Some(vec![ItemOverride { item_id: moved_id.clone(), along_mm: 40, ..Default::default() }]),
+            additions: None,
+            note: None,
+        },
+    )
+    .unwrap();
+    blueprints::push(
+        &projects,
+        PROJECT,
+        &before.blueprint_id,
+        PushRequest { origin: None, note: None, bundle: None, content },
+    )
+    .unwrap();
+
+    let got = impact(&state, &projects, PROJECT, &before.blueprint_id, Target::Pending(1)).unwrap();
+    assert_eq!(got.target.pending_id, Some(1));
+    assert_eq!(got.target.revision, before.revision + 1, "the number it would take if accepted");
+    assert_eq!(got.rooms.len(), 1);
+    let room = &got.rooms[0];
+    assert_eq!(
+        room.held,
+        vec![moved_id.clone()],
+        "a nudge made against the old recipe is held, not carried"
+    );
+    assert_eq!(room.status, RoomStatus::NeedsDecision);
+    let change = room.item_changes.iter().find(|c| c.item_id == moved_id).expect("the moved item is named");
+    assert_eq!(change.changes, vec![ChangeKind::Moved]);
+    assert!(room.item_changes.iter().all(|c| !c.changes.is_empty()), "only what changed is listed");
+
+    // Asked of the pinned revision itself there is nothing to move and nothing held.
+    let same = impact(&state, &projects, PROJECT, &before.blueprint_id, Target::Revision(before.revision)).unwrap();
+    assert!(same.rooms[0].held.is_empty() && same.rooms[0].item_changes.is_empty());
+    assert_ne!(same.rooms[0].status, RoomStatus::NeedsDecision);
+
+    assert!(impact(&state, &projects, PROJECT, &before.blueprint_id, Target::Pending(9)).is_err());
+    assert!(impact(&state, &projects, PROJECT, "no-such-blueprint", Target::Revision(1)).is_err());
+    std::fs::remove_dir_all(projects.parent().unwrap()).ok();
+}
+
 #[test]
 fn test_solve_picks_the_sheet_whose_room_is_the_same_size() {
     use crate::service::sheet_suggest;

@@ -131,6 +131,37 @@ impl RoommateMcp {
             )
     }
 
+    /// What a revision changed in a blueprint -- see `service::blueprint_diff`.
+    #[tool(
+        description = "DIFF two revisions of a blueprint, item by item: what a push or an edit changed. Compares recipes, never a room. Each item is paired by id first and, when the ids differ (a re-captured room, a rebuilt element), by family, type and nearness in the blueprint's own frame (`matched`: `by_id` or `by_position`; a position pairing is a guess and `matched_by_position` counts them). `changes` on an item is empty when unchanged, else any of `moved` (its recipe puts it elsewhere; `moved_mm`), `type_changed`, `kit_changed` (only when both revisions recorded a kit), `properties_changed`, `added` (new, or no longer excluded) and `retired` (gone, or newly excluded: never deleted from the earlier revision). `outline` says whether the blueprint's own room outline changed, which moves every room's fit. `counts` is items by change. Give `revision` (an accepted one; the current when omitted) or `pending` (a pushed revision awaiting review, to read it BEFORE accepting); `from` defaults to the revision before it, or the current one for a pending revision. It writes nothing."
+    )]
+    fn diff_blueprint(&self, Parameters(p): Parameters<BlueprintChangeParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let target = self.change_target(&p)?;
+        roommate::service::blueprint_impact::blueprint_diff(
+            &self.state,
+            &dir,
+            &p.project_id,
+            &p.blueprint_id,
+            p.from,
+            target,
+        )
+        .map_err(to_mcp_error)
+        .and_then(|d| json_result(&d))
+    }
+
+    /// What a revision would change in every assigned room -- see `service::blueprint_impact`.
+    #[tool(
+        description = "IMPACT of moving a blueprint's assignments to another revision: a DRY RUN per assigned room, nothing written, queued or stored. For each assignment it resolves the target revision with that room's own mapping, overrides and additions, audits the room's FF&E against it (as audit_assignment does) and reduces the verdicts to a `plan`: `add` (a layout item nothing in the room is), `move` (the right element, near its place) and `report` (extra, surplus, foreign, substituted, kit_differs: look, do nothing; nothing records what Revit placed, so no element is ever planned for removal, retype or replacement). A room's `status`: `needs_decision` (a nudge or turn was made against a recipe the target moved and is HELD, `held` lists the items), `changes` (there are actions), `no_change`, `cannot_judge` (the target does not fit the room: edge count differs, mirror image or no fit), `room_gone` or `error` (with `reason`). Beside it `item_changes` is the blueprint's own diff from the revision the room pins, for the items the room places, so a person reads why the room is listed. `findings` are the resolver's (outside, overlap, an addition with nothing to copy). Give `revision` (the current when omitted) or `pending` (a pushed revision awaiting review: the question to ask before accepting it). Needs the project's `tag_type_code`; refused without it."
+    )]
+    fn impact_blueprint(&self, Parameters(p): Parameters<BlueprintChangeParams>) -> Result<CallToolResult, McpError> {
+        let dir = self.projects_dir()?;
+        let target = self.change_target(&p)?;
+        roommate::service::blueprint_impact::impact(&self.state, &dir, &p.project_id, &p.blueprint_id, target)
+            .map_err(to_mcp_error)
+            .and_then(|d| json_result(&d))
+    }
+
     /// Room tasks, as a Revit session sees them -- see `tasks::list`.
     #[tool(
         description = "List the project's ROOM TASKS: work the server holds for a Revit session. A task is a RECORD, unlike an assignment: it holds what Revit is told as it was when the task was made. Each row has `id`, `kind` (`populate_room`: place a blueprint's items in the room and, if `create_rls`, its sheets; `create_rls`: make room layout sheets from a library sheet and place nothing; `update_room`: bring a room populated earlier back in line with its blueprint, a dry run unless turned off; `create_rls_set`: the sheets of a SET of adjacent rooms as a person laid them out, its `room` the lead room and `set_rooms` every room, lead first), `state` (`queued`, `in_progress` once a Revit session has been handed it, then `completed`, `completed_with_warnings`, `failed` or `aborted` as that session reports, or `dismissed` by a person), `model_id` (the Revit document the task is for), `room` ({room_id, number, name}), `phase`, `overwrite_layout`, `create_rls`, `overwrite_rls`, `blueprint` ({id, name, revision}) for a populate task, counts of `items`, `sheets` (for a set, the sheets it makes), `tag_rules` and `findings`, `attempts` and `last_messages` (what the last session said, for why a task failed or aborted). Optional `model_id` and `state` narrow the list. Read one in full with get_task. Making, dismissing and resending tasks, and the Revit session's asking and reporting, are HTTP-only (POST /projects/{id}/tasks, /tasks/{task}/dismiss, /tasks/{task}/resend, /roomtasks, /roomtasks/report)."
@@ -324,6 +355,29 @@ impl RoommateMcp {
             Ok(bundle) => json_result(&bundle),
             Err((status, msg)) if status.is_client_error() => Err(McpError::invalid_params(msg, None)),
             Err((_, msg)) => Err(McpError::internal_error(msg, None)),
+        }
+    }
+}
+
+impl RoommateMcp {
+    /// The revision a diff or impact read is about: a pending one, an accepted one, or the blueprint's current.
+    fn change_target(
+        &self,
+        p: &BlueprintChangeParams,
+    ) -> Result<roommate::service::blueprint_impact::Target, McpError> {
+        use roommate::service::blueprint_impact::Target;
+        match (p.revision, p.pending) {
+            (Some(_), Some(_)) => {
+                Err(McpError::invalid_params("name a revision or a pending one, not both".to_string(), None))
+            }
+            (Some(n), None) => Ok(Target::Revision(n)),
+            (None, Some(id)) => Ok(Target::Pending(id)),
+            (None, None) => {
+                let dir = self.projects_dir()?;
+                roommate::blueprints::load(&dir, &p.project_id, &p.blueprint_id)
+                    .map(|b| Target::Revision(b.current_revision))
+                    .map_err(blueprints_to_mcp_error)
+            }
         }
     }
 }

@@ -6,7 +6,7 @@ use serde::Serialize;
 
 use super::super::blueprint_capture::{kit_of, loop_mm, properties_of, FT_TO_MM};
 use super::super::blueprint_geometry::{centroid, Pt};
-use super::super::blueprint_resolve::{resolve_in_room_changes, FitKind};
+use super::super::blueprint_resolve::{resolve_in_room_changes, FitKind, Resolution};
 use super::super::items::{assemble_items, ItemScope};
 use super::super::rls_tags::type_code_of;
 use super::super::room_locator::RoomRef;
@@ -15,8 +15,9 @@ use super::super::ServiceError;
 use super::{audit, Audit, Element, Layout};
 use crate::assignments::{self, RoomKey};
 use crate::blueprints::{self, BlueprintError};
-use crate::service::blueprint_model::Property;
+use crate::service::blueprint_model::{Property, RevisionContent};
 use crate::state::AppState;
+use roommate_shared::settings::BlueprintAuditPolicy;
 
 /// One assignment's audit, with what it was measured against.
 #[derive(Debug, Clone, Serialize)]
@@ -41,7 +42,24 @@ fn refuse<T>(reason: impl Into<String>) -> Result<T, ServiceError> {
     Err(ServiceError::Invalid(reason.into()))
 }
 
-/// Audit one assignment. `Ok(None)` when the project has no such assignment or its room has gone.
+/// The project's type-code parameter and audit tolerances, which every audit is judged by.
+///
+/// The codes are the project's type-code parameter, the same identity the tag rules use. Without it there is no code
+/// to match on, and flagging every item `no_code` would be a wrong answer dressed as a finding.
+pub fn audit_basis(state: &AppState, project: &str) -> Result<(String, BlueprintAuditPolicy), ServiceError> {
+    let bundle = state.settings();
+    let settings = bundle.settings_for(project);
+    let parameter = settings.and_then(|b| b.tag_type_code.clone()).filter(|p| !p.trim().is_empty());
+    let Some(parameter) = parameter else {
+        return refuse(
+            "the project names no type-code parameter (tag_type_code in its settings), so there is no code to match elements on",
+        );
+    };
+    Ok((parameter, settings.map(|b| b.blueprint_audit.clone()).unwrap_or_default()))
+}
+
+/// Audit one assignment against the revision it pins. `Ok(None)` when the project has no such assignment or its
+/// room has gone.
 pub fn audit_assignment(
     state: &AppState,
     projects_dir: &std::path::Path,
@@ -55,19 +73,7 @@ pub fn audit_assignment(
     let Some(assignment) = assignment else {
         return Ok(None);
     };
-
-    // The codes are the project's type-code parameter, the same identity the tag rules use. Without it there is
-    // no code to match on, and flagging every item `no_code` would be a wrong answer dressed as a finding.
-    let bundle = state.settings();
-    let settings = bundle.settings_for(project);
-    let parameter = settings.and_then(|b| b.tag_type_code.clone()).filter(|p| !p.trim().is_empty());
-    let Some(parameter) = parameter else {
-        return refuse(
-            "the project names no type-code parameter (tag_type_code in its settings), so there is no code to match elements on",
-        );
-    };
-    let policy = settings.map(|b| b.blueprint_audit.clone()).unwrap_or_default();
-
+    let (parameter, policy) = audit_basis(state, project)?;
     let blueprint = match blueprints::load(projects_dir, project, &assignment.blueprint_id) {
         Ok(b) => b,
         Err(BlueprintError::NotFound(_)) => return refuse("the assignment's blueprint has been deleted"),
@@ -76,6 +82,34 @@ pub fn audit_assignment(
     let Some(revision) = blueprint.revision(assignment.revision) else {
         return refuse(format!("the blueprint has no revision {}", assignment.revision));
     };
+    Ok(audit_content(
+        state,
+        project,
+        &assignment,
+        &blueprint,
+        revision.number,
+        &revision.content,
+        &parameter,
+        &policy,
+    )?
+    .map(|(audit, _)| audit))
+}
+
+/// Audit an assignment's room against ANY content of its blueprint, with the assignment's own mapping, overrides and
+/// additions: the pinned revision for the audit read, a newer or pending one for `blueprint_impact`, which asks what
+/// the room would need if the assignment moved there. Also returns the resolver's answer, whose findings (a held
+/// nudge, an addition with nothing to copy) belong beside the verdicts.
+#[allow(clippy::too_many_arguments)]
+pub fn audit_content(
+    state: &AppState,
+    project: &str,
+    assignment: &assignments::Assignment,
+    blueprint: &blueprints::Blueprint,
+    number: u32,
+    content: &RevisionContent,
+    parameter: &str,
+    policy: &BlueprintAuditPolicy,
+) -> Result<Option<(AssignmentAudit, Resolution)>, ServiceError> {
     let room = RoomRef {
         model_id: assignment.room.model_id.clone(),
         room_id: assignment.room.room_id.clone(),
@@ -86,7 +120,7 @@ pub fn audit_assignment(
     let Some((_, resolution)) = resolve_in_room_changes(
         state,
         project,
-        &revision.content,
+        content,
         &room,
         &mapping,
         &assignment.overrides,
@@ -103,10 +137,10 @@ pub fn audit_assignment(
             // A room's addition is a copy of a blueprint item: its code, kit and hosting are that item's, under its
             // own id.
             let source_id = p.clone_of.as_deref().unwrap_or(&p.item_id);
-            let source = revision.content.items.iter().find(|i| i.id == source_id)?;
+            let source = content.items.iter().find(|i| i.id == source_id)?;
             Some(Layout {
                 id: p.item_id.clone(),
-                code: type_code_of(&parameter, &source.type_properties, &source.properties),
+                code: type_code_of(parameter, &source.type_properties, &source.properties),
                 type_name: p.type_name.clone(),
                 family_name: source.family_name.clone(),
                 centre: (p.centre.x, p.centre.y),
@@ -118,19 +152,20 @@ pub fn audit_assignment(
         })
         .collect();
 
-    let elements = room_elements(state, project, &room, &parameter)?;
+    let elements = room_elements(state, project, &room, parameter)?;
     let judge_location = matches!(resolution.fit.kind, FitKind::Plain | FitKind::Manual | FitKind::Framed);
-    Ok(Some(AssignmentAudit {
+    let audit = AssignmentAudit {
         assignment_id: assignment.id.clone(),
         blueprint_id: blueprint.id.clone(),
         blueprint_name: blueprint.name.clone(),
-        revision: revision.number,
+        revision: number,
         room: assignment.room.clone(),
         room_name: assignment.room_name.clone(),
         fit: resolution.fit.kind,
-        type_code_parameter: parameter,
-        audit: audit(&layout, &elements, judge_location, &policy),
-    }))
+        type_code_parameter: parameter.to_string(),
+        audit: audit(&layout, &elements, judge_location, policy),
+    };
+    Ok(Some((audit, resolution)))
 }
 
 /// The room's FF&E as the audit reads it: hosts only. Read with components whatever the project's

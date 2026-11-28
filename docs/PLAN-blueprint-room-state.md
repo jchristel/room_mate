@@ -338,18 +338,11 @@ flowchart TD
   AE -- no --> AG[Assignment stays pinned to the old revision. Nothing is lost]
 ```
 
-### 7.1 The revision diff, and why it cannot rely on ids alone
+### 7.1 The revision diff: built
 
-A blueprint item's id is the Revit element id in the model it was captured from. A re-capture of the same room in the same
-model keeps ids; a rebuilt room, a copied-to-new-model room, or a family replaced by delete-and-place changes them. So the diff
-matches in two passes and says which it used:
-
-1. By id (strong). 2. The unmatched remainder by the section 5.1 rules (type code, then nearest in the blueprint room's own
-frame within `near_tolerance_mm`), labelled `by_position`.
-
-Classification of each item between revisions: `unchanged`, `moved` (recipe differs), `type_changed`, `kit_changed`,
-`properties_changed`, `added`, `retired` (gone or newly excluded). The diff is derived and cached by the pair of revision
-numbers; nothing else is stored.
+`service::blueprint_diff` and the impact read (`service::blueprint_impact`) are built and described in `CLAUDE.md`. What the diff does
+not do: `kit_changed` is silent when either revision recorded no kit, and `properties_changed` compares instance properties as
+exported, so it names a change without saying whether the plug-in could set it.
 
 ### 7.2 What happens in one room, by outcome
 
@@ -413,8 +406,8 @@ resolver cannot map the edges, the audit says so rather than inventing a mapping
    1b. **Kit on a blueprint item** (`BlueprintItem.sub_components`, filled at capture; an older blueprint reads `kit_unknown`
    until pushed again).
 2. **Overrides: built on the server** (additions, `base` and `override_stale`, item-frame nudges); the viewer's assign view is not (section 6).
-3. **Revision diff** (`service::blueprint_diff`, derived, cached by revision pair) and an **impact read** over the assignments
-   of a blueprint: per room the host-action plan of section 5.4, dry run only.
+3. **Built (2026-11-28): the revision diff** (`service::blueprint_diff`, derived on each read, not cached: it is cheap) **and the impact read** (`service::blueprint_impact`, `GET .../blueprints/{id}/diff` and `.../impact`, MCP `diff_blueprint` and `impact_blueprint`),
+   dry run only. **The plan holds only `add`, `move` and `report`**: `retype`, `replace`, `set_properties` and removal need the ledger (step 4), so they are not planned yet.
 4. **Ledger and `UniqueId`**: the extractor exports `unique_id`; the task report returns the placed ids; the ledger store and
    adoption; the audit switches ledgered rooms to key matching. **Needs a run in Revit.**
 5. **`update_room` in the plug-in**: `Items` and `Locations` from the plan, removal only for ledgered elements, `replace`

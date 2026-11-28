@@ -7,7 +7,7 @@
 //! models when the id is ambiguous.
 
 use axum::{
-    extract::{Path as UrlPath, State},
+    extract::{Path as UrlPath, Query, State},
     http::StatusCode,
     Json,
 };
@@ -21,6 +21,8 @@ use crate::blueprints_api::service_error;
 use crate::http_error::{projects_dir, to_http};
 use crate::service::blueprint_audit::{audit_assignment, AssignmentAudit};
 use crate::service::blueprint_capture::{qualify_room, room_ring};
+use crate::service::blueprint_diff::RevisionDiff;
+use crate::service::blueprint_impact::{self, BlueprintImpact, Target};
 use crate::service::blueprint_solve::{solve_rooms, RoomSolve};
 use crate::state::Shared;
 
@@ -104,6 +106,75 @@ pub async fn http_audit_assignment(
             "no such assignment, or its room is not in the model any more".to_string(),
         )),
     }
+}
+
+/// Which revision a diff or an impact read is about: an accepted one (`revision`, the current when both are left out) or
+/// a pushed one still waiting for review (`pending`). `from` is the diff's other side.
+#[derive(Debug, Deserialize)]
+pub struct ChangeParams {
+    #[serde(default)]
+    pub from: Option<u32>,
+    #[serde(default)]
+    pub revision: Option<u32>,
+    #[serde(default)]
+    pub pending: Option<u32>,
+}
+
+impl ChangeParams {
+    /// The target, `None` when neither is named (the current revision, which the caller looks up).
+    pub fn target(
+        &self,
+        current: impl FnOnce() -> Result<u32, (StatusCode, String)>,
+    ) -> Result<Target, (StatusCode, String)> {
+        match (self.revision, self.pending) {
+            (Some(_), Some(_)) => {
+                Err((StatusCode::BAD_REQUEST, "name a revision or a pending one, not both".to_string()))
+            }
+            (Some(n), None) => Ok(Target::Revision(n)),
+            (None, Some(p)) => Ok(Target::Pending(p)),
+            (None, None) => current().map(Target::Revision),
+        }
+    }
+}
+
+fn current_revision(
+    state: &Shared,
+    project_id: &str,
+    blueprint: &str,
+) -> impl FnOnce() -> Result<u32, (StatusCode, String)> {
+    let dir = projects_dir(state);
+    let (project_id, blueprint) = (project_id.to_string(), blueprint.to_string());
+    move || {
+        blueprints::load(&dir?, &project_id, &blueprint)
+            .map(|b| b.current_revision)
+            .map_err(to_http)
+    }
+}
+
+/// What changed between two revisions of a blueprint, item by item (`service::blueprint_diff`). A read: derived each
+/// time, stored nowhere.
+pub async fn http_blueprint_diff(
+    State(state): State<Shared>,
+    UrlPath((project_id, id)): UrlPath<(String, String)>,
+    Query(params): Query<ChangeParams>,
+) -> Result<Json<RevisionDiff>, (StatusCode, String)> {
+    let target = params.target(current_revision(&state, &project_id, &id))?;
+    blueprint_impact::blueprint_diff(&state, &projects_dir(&state)?, &project_id, &id, params.from, target)
+        .map(Json)
+        .map_err(service_error)
+}
+
+/// What would change in every room a blueprint is assigned to if its assignments moved to another revision: a dry
+/// run per room (`service::blueprint_impact`). A read: nothing is written, queued or stored.
+pub async fn http_blueprint_impact(
+    State(state): State<Shared>,
+    UrlPath((project_id, id)): UrlPath<(String, String)>,
+    Query(params): Query<ChangeParams>,
+) -> Result<Json<BlueprintImpact>, (StatusCode, String)> {
+    let target = params.target(current_revision(&state, &project_id, &id))?;
+    blueprint_impact::impact(&state, &projects_dir(&state)?, &project_id, &id, target)
+        .map(Json)
+        .map_err(service_error)
 }
 
 #[derive(Deserialize)]
