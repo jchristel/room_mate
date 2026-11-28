@@ -179,6 +179,8 @@ export interface Placed {
   size_mm: [number, number];
   edge: number;
   rule: string;
+  /** For a room's addition (`item_id` begins `add-`): the blueprint item it copies. */
+  clone_of?: string;
 }
 
 export type Finding =
@@ -189,7 +191,10 @@ export type Finding =
   | { kind: "mirror_image"; message: string }
   | { kind: "shape_mismatch"; message: string }
   | { kind: "doors_disagree"; message: string }
-  | { kind: "override_unused"; item: string };
+  | { kind: "override_unused"; item: string }
+  /** A nudge or turn made against a recipe the item no longer has: held, not applied. */
+  | { kind: "override_stale"; item: string }
+  | { kind: "addition_unused"; item: string; reason: string };
 
 export interface ResolveResponse {
   blueprint_id: string;
@@ -223,7 +228,23 @@ export interface ItemOverride {
   exclude?: boolean;
   dx_mm?: number;
   dy_mm?: number;
+  /** Along the edge the item stands against, and into the room (the item's own frame: follows a turned room). */
+  along_mm?: number;
+  off_mm?: number;
+  /** The recipe the override was made against; the server fills it in and never overwrites one sent. */
+  base?: string;
   rotate_deg?: number;
+}
+
+/** An item this room has that the blueprint does not: a copy of a blueprint item on the ROOM's own coarse edge
+ *  (src/assignments.rs `ItemAddition`). Whole mm and degrees. `id` begins `add-`. */
+export interface ItemAddition {
+  id: string;
+  clone_of: string;
+  edge: number;
+  along_mm: number;
+  off_mm: number;
+  facing_deg?: number;
 }
 
 export interface AssignmentRow {
@@ -235,6 +256,8 @@ export interface AssignmentRow {
   mapping: Mapping;
   /** This room's changes to single items. Absent when there are none. */
   overrides?: ItemOverride[];
+  /** Items this room has that the blueprint does not. Absent when there are none. */
+  additions?: ItemAddition[];
   note?: string | null;
   taken_at: string;
   blueprint_name: string | null;

@@ -503,7 +503,7 @@ get wrong:
     edge, in fixed mm: the third corner guard for a column corner. Never written back to the blueprint; it follows the blueprint if the item's type changes.
     The resolver places it after the overrides and judges it like any item (`outside`, `overlap`); a `Placed` carries `clone_of`, and the task and the audit
     read its family, properties, code and kit from that item, never from `item_id`. One whose item or edge is gone is `addition_unused`, not an error.
-    **Additions have no viewer yet**: the assign view cannot add or preview one (the resolve read takes `additions` like `overrides`).
+    The assign view adds, edits and previews them (`blueprints/additions.ts`), writes nudges in the item frame, and answers a held nudge with "keep it on the new recipe" (forget `base`; the server stamps afresh) or "drop it". **Not driven in a browser.**
 - **The Blueprint tool in the main viewer lays a blueprint into a room two ways, and the BOX is the point.** Rooms are
   never perfectly the blueprint's shape, so a person moves, turns and stretches the blueprint's own outline over the room
   (`assignments::Frame`: `world = centre + R(turn) * S(sx, sy) * (p - pivot)`, stretch along the BLUEPRINT's axes so it

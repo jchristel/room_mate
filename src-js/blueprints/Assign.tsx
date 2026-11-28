@@ -24,8 +24,9 @@ import { AssignMany } from "./AssignMany.js";
 import { SearchBox } from "../ui/ListPane.js";
 import { matchesAll } from "../ui/match.js";
 import * as api from "./api.js";
-import { adjust, describe, encode, overrideFor, reset, sameOverrides } from "./overrides.js";
-import type { AssignmentRow, Blueprint, Finding, ItemOverride, Mapping, ResolveResponse, RoomRow } from "./types.js";
+import * as adds from "./additions.js";
+import { adjust, describe, encode, keep, overrideFor, reset, sameOverrides } from "./overrides.js";
+import type { AssignmentRow, Blueprint, Finding, ItemAddition, ItemOverride, Mapping, ResolveResponse, RoomRow } from "./types.js";
 import { message } from "../ui/api.js";
 
 export interface AssignProps {
@@ -62,11 +63,62 @@ function findingText(f: Finding, name: (id: string) => string): string {
       return `${name(f.item)}: ${f.reason}`;
     case "corner_anchored":
       return `${name(f.item)} had no wall beside it when captured; its position is approximate`;
+    case "override_stale":
+      return `${name(f.item)}: its nudge was made against a recipe this revision moved, so it is held (not applied) until you decide`;
+    case "addition_unused":
+      return `${f.item}: ${f.reason}`;
     case "override_unused":
       return `a change to item ${f.item} was not used: this revision does not place that item`;
     default:
       return f.message;
   }
+}
+
+interface AdditionEditorProps {
+  addition: ItemAddition | undefined;
+  edges: number;
+  label: string;
+  onEdit(patch: { edge?: number; along_mm?: number; off_mm?: number; facing_deg?: number }): void;
+  onRemove(): void;
+}
+
+/** Where an addition stands: the room's own coarse edge, how far along it and in from it, and which way it faces.
+ *  The numbers are the recipe; the drawing is the server's answer to them. */
+function AdditionEditor({ addition, edges, label, onEdit, onRemove }: AdditionEditorProps) {
+  if (!addition) return null;
+  const num = (v: string): number => Math.round(Number(v)) || 0;
+  return (
+    <fieldset className="item-changes">
+      <legend>{label} (this room only)</legend>
+      <label className="num">
+        room edge
+        <select value={addition.edge} onChange={(e) => onEdit({ edge: Number(e.target.value) })}>
+          {Array.from({ length: Math.max(edges, addition.edge + 1) }, (_, j) => (
+            <option key={j} value={j}>
+              edge {j}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="num">
+        along the edge (mm)
+        <input type="number" value={addition.along_mm} onChange={(e) => onEdit({ along_mm: num(e.target.value) })} />
+      </label>
+      <label className="num">
+        in from the edge (mm)
+        <input type="number" value={addition.off_mm} onChange={(e) => onEdit({ off_mm: num(e.target.value) })} />
+      </label>
+      <label className="num">
+        facing (degrees from into the room)
+        <input type="number" value={addition.facing_deg ?? 0} onChange={(e) => onEdit({ facing_deg: num(e.target.value) })} />
+      </label>
+      <div className="actions">
+        <button type="button" className="danger" onClick={onRemove}>
+          Remove this addition
+        </button>
+      </div>
+    </fieldset>
+  );
 }
 
 export function Assign({ project, blueprint, revision, tagFields, onClose }: AssignProps) {
@@ -77,6 +129,8 @@ export function Assign({ project, blueprint, revision, tagFields, onClose }: Ass
   const [room, setRoom] = useState<RoomRow | null>(null);
   const [mapping, setMapping] = useState<Mapping>({});
   const [overrides, setOverrides] = useState<ItemOverride[]>([]);
+  const [additions, setAdditions] = useState<ItemAddition[]>([]);
+  const [cloneOf, setCloneOf] = useState<string>("");
   const [step, setStep] = useState(50);
   const [result, setResult] = useState<ResolveResponse | null>(null);
   const [byHand, setByHand] = useState<number[] | null>(null);
@@ -112,7 +166,7 @@ export function Assign({ project, blueprint, revision, tagFields, onClose }: Ass
     let live = true;
     setBusy(true);
     api
-      .resolve(project, blueprint.id, room.id, revision, mapping, encode(overrides))
+      .resolve(project, blueprint.id, room.id, revision, mapping, encode(overrides), adds.encode(additions))
       .then((r) => {
         if (!live) return;
         setResult(r);
@@ -127,7 +181,7 @@ export function Assign({ project, blueprint, revision, tagFields, onClose }: Ass
     return () => {
       live = false;
     };
-  }, [project, blueprint.id, room, revision, mapping, overrides]);
+  }, [project, blueprint.id, room, revision, mapping, overrides, additions]);
 
   const choose = (r: RoomRow) => {
     setRoom(r);
@@ -137,6 +191,7 @@ export function Assign({ project, blueprint, revision, tagFields, onClose }: Ass
     const existing = assigned.find((a) => a.room.room_id === r.id && a.blueprint_id === blueprint.id);
     setMapping(existing?.mapping ?? {});
     setOverrides(existing?.overrides ?? []);
+    setAdditions(existing?.additions ?? []);
     if (existing?.mapping.edge_map) setByHand(existing.mapping.edge_map);
   };
 
@@ -165,7 +220,7 @@ export function Assign({ project, blueprint, revision, tagFields, onClose }: Ass
   const save = async () => {
     if (!room) return;
     setBusy(true);
-    const r = await api.assign(project, blueprint.id, revision, room.id, mapping, note.trim() || undefined, overrides);
+    const r = await api.assign(project, blueprint.id, revision, room.id, mapping, note.trim() || undefined, overrides, additions);
     setBusy(false);
     if (!r.ok) return setError(r.error);
     setError(null);
@@ -192,7 +247,7 @@ export function Assign({ project, blueprint, revision, tagFields, onClose }: Ass
   const roomEdges = result?.outline.coarse.length ?? 0;
   const here = room ? assigned.find((a) => a.room.room_id === room.id) : undefined;
   const saved =
-    !!here && here.blueprint_id === blueprint.id && here.revision === revision && sameMapping(here.mapping, mapping) && sameOverrides(here.overrides ?? [], overrides);
+    !!here && here.blueprint_id === blueprint.id && here.revision === revision && sameMapping(here.mapping, mapping) && sameOverrides(here.overrides ?? [], overrides) && adds.sameAdditions(here.additions ?? [], additions);
   const changed = useMemo(() => new Set(overrides.filter((o) => !o.exclude).map((o) => o.item_id)), [overrides]);
   // Items the blueprint holds that this room leaves out, named from the blueprint (they are not in the answer).
   const itemsOfRevision = blueprint.revisions.find((r) => r.number === revision)?.items ?? [];
@@ -341,7 +396,8 @@ export function Assign({ project, blueprint, revision, tagFields, onClose }: Ass
             {result.findings.length === 0 ? <p className="hint">None: nothing the room changes about the layout.</p> : null}
             <ul className="findings">
               {result.findings.map((f, i) => {
-                const id = f.kind === "outside" || f.kind === "follow_broken" || f.kind === "corner_anchored" ? f.item : f.kind === "overlap" ? f.a : null;
+                const id =
+                  f.kind === "outside" || f.kind === "follow_broken" || f.kind === "corner_anchored" || f.kind === "override_stale" ? f.item : f.kind === "overlap" ? f.a : null;
                 return (
                   <li key={i} className={f.kind}>
                     {id ? (
@@ -351,12 +407,29 @@ export function Assign({ project, blueprint, revision, tagFields, onClose }: Ass
                     ) : (
                       findingText(f, nameOf)
                     )}
+                    {f.kind === "override_stale" ? (
+                      <>
+                        <button type="button" onClick={() => setOverrides((l) => keep(l, f.item))}>keep the nudge on the new recipe</button>
+                        <button type="button" onClick={() => setOverrides((l) => reset(l, f.item))}>drop it</button>
+                      </>
+                    ) : null}
+                    {f.kind === "addition_unused" ? (
+                      <button type="button" className="danger" onClick={() => setAdditions((l) => adds.remove(l, f.item))}>remove it</button>
+                    ) : null}
                   </li>
                 );
               })}
             </ul>
             {result.fit.kind === "mirror_image" ? <p className="hint">This room is the other hand of the blueprint. Assign a blueprint authored for the other hand; nothing is mirrored for you.</p> : null}
-            {selectedPlaced ? (
+            {selectedPlaced && adds.isAddition(selectedPlaced.item_id) ? (
+              <AdditionEditor
+                addition={additions.find((a) => a.id === selectedPlaced.item_id)}
+                edges={roomEdges}
+                label={selectedPlaced.type_name}
+                onEdit={(patch) => setAdditions((l) => adds.edit(l, selectedPlaced.item_id, patch))}
+                onRemove={() => { setAdditions((l) => adds.remove(l, selectedPlaced.item_id)); setSelected(null); }}
+              />
+            ) : selectedPlaced ? (
               <fieldset className="item-changes">
                 <legend>{selectedPlaced.type_name}</legend>
                 <p className="hint">{selectedPlaced.rule}</p>
@@ -364,12 +437,13 @@ export function Assign({ project, blueprint, revision, tagFields, onClose }: Ass
                   step (mm)
                   <input type="number" min={1} max={2000} value={step} onChange={(e) => setStep(Math.max(1, Math.round(Number(e.target.value)) || 1))} />
                 </label>
-                <div className="pad" role="group" aria-label="Move this item in this room">
-                  <button type="button" aria-label="Move up" onClick={() => setOverrides((l) => adjust(l, selectedPlaced.item_id, { dy_mm: step }))}>↑</button>
-                  <button type="button" aria-label="Move left" onClick={() => setOverrides((l) => adjust(l, selectedPlaced.item_id, { dx_mm: -step }))}>←</button>
-                  <button type="button" aria-label="Move right" onClick={() => setOverrides((l) => adjust(l, selectedPlaced.item_id, { dx_mm: step }))}>→</button>
-                  <button type="button" aria-label="Move down" onClick={() => setOverrides((l) => adjust(l, selectedPlaced.item_id, { dy_mm: -step }))}>↓</button>
+                <div className="pad" role="group" aria-label="Move this item in this room, along its wall and into the room">
+                  <button type="button" aria-label="Into the room" onClick={() => setOverrides((l) => adjust(l, selectedPlaced.item_id, { off_mm: step }))}>into room</button>
+                  <button type="button" aria-label="Back along the wall" onClick={() => setOverrides((l) => adjust(l, selectedPlaced.item_id, { along_mm: -step }))}>◀ along</button>
+                  <button type="button" aria-label="Forward along the wall" onClick={() => setOverrides((l) => adjust(l, selectedPlaced.item_id, { along_mm: step }))}>along ▶</button>
+                  <button type="button" aria-label="Towards the wall" onClick={() => setOverrides((l) => adjust(l, selectedPlaced.item_id, { off_mm: -step }))}>to wall</button>
                 </div>
+                <p className="hint">Moves are along the wall the item stands against, so they turn with the room.</p>
                 <div className="actions">
                   <button type="button" onClick={() => setOverrides((l) => adjust(l, selectedPlaced.item_id, { rotate_deg: 90 }))}>Turn 90° left</button>
                   <button type="button" onClick={() => setOverrides((l) => adjust(l, selectedPlaced.item_id, { rotate_deg: -90 }))}>Turn 90° right</button>
@@ -404,7 +478,42 @@ export function Assign({ project, blueprint, revision, tagFields, onClose }: Ass
                 </ul>
               </fieldset>
             ) : null}
-            {overrides.length > 0 ? <p className="hint">{overrides.length} change{overrides.length === 1 ? "" : "s"} to single items, kept with this assignment when you assign.</p> : null}
+            {overrides.length > 0 || additions.length > 0 ? (
+              <p className="hint">
+                {overrides.length} change{overrides.length === 1 ? "" : "s"} and {additions.length} addition{additions.length === 1 ? "" : "s"} to this room, kept with this assignment when you assign.
+              </p>
+            ) : null}
+
+            <h3>Items only this room has</h3>
+            <p className="hint">A copy of a blueprint item on this room's own wall: the third guard for a column corner. It stays with this room and follows the blueprint if the item's type changes.</p>
+            <div className="actions">
+              <select aria-label="Item to copy" value={cloneOf} onChange={(e) => setCloneOf(e.target.value)}>
+                <option value="">Choose an item…</option>
+                {itemsOfRevision.filter((i) => !i.excluded).map((i) => (
+                  <option key={i.id} value={i.id}>
+                    {i.type_name} ({i.id})
+                  </option>
+                ))}
+              </select>
+              <button
+                type="button"
+                disabled={!cloneOf || additions.length >= adds.MAX_ADDITIONS}
+                onClick={() => { const id = adds.nextId(additions); setAdditions((l) => adds.add(l, cloneOf)); setSelected(id); }}
+              >
+                Add a copy
+              </button>
+            </div>
+            {additions.length > 0 ? (
+              <ul className="findings">
+                {additions.map((a) => (
+                  <li key={a.id}>
+                    <button type="button" onClick={() => setSelected(a.id)}>
+                      {a.id}: {itemsById.get(a.clone_of)?.type_name ?? `item ${a.clone_of}`}, edge {a.edge}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            ) : null}
 
             <h3>Assign</h3>
             <label className="stack">
