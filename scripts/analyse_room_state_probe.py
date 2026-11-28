@@ -9,7 +9,6 @@ Judgements live here, not in the probe, so they can be re-run and argued with.
 
 import json
 import os
-import statistics
 import sys
 
 PLACE_TOLERANCE_MM = 5.0
@@ -17,6 +16,15 @@ TURN_TOLERANCE_DEG = 5.0
 
 # Placement types Revit names that need no wall or face: the first iteration's scope.
 LEVEL_BASED_TYPES = {"OneLevelBased", "WorkPlaneBased", "TwoLevelsBased"}
+
+
+def median(values):
+    """The median, without `statistics`, which IronPython 2.7 does not have."""
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) / 2.0
 
 
 def load(path):
@@ -119,7 +127,7 @@ def round_trip(report):
         return
     near = [row["export_err_mm"] for row in trip["rows"] if row["tag"] == "near" and "export_err_mm" in row]
     far = [row["export_err_mm"] for row in trip["rows"] if row["tag"] == "far" and "export_err_mm" in row]
-    print("  position error, export vs asked: max {:.3f} mm, median {:.3f} mm".format(max(export_errors), statistics.median(export_errors)))
+    print("  position error, export vs asked: max {:.3f} mm, median {:.3f} mm".format(max(export_errors), median(export_errors)))
     if near:
         print("    near the model: max {:.3f} mm".format(max(near)))
     if far:
@@ -140,8 +148,14 @@ def round_trip(report):
 
 
 def main(argv):
-    here = os.path.dirname(os.path.abspath(__file__))
-    path = argv[1] if len(argv) > 1 else os.path.join(here, "fixtures", "room-state-probe.json")
+    if len(argv) > 1:
+        path = argv[1]
+    else:
+        # no `__file__` when run from the pyRevit console; the probe's own fallback folders then
+        named = os.environ.get("ROOMMATE_PROBE_DIR") or os.path.join(os.path.expanduser("~"), "Documents", "RoomMate-probe")
+        here = os.path.dirname(os.path.abspath(globals()["__file__"])) if "__file__" in globals() else None
+        folder = os.path.join(here, "fixtures") if here else named
+        path = os.path.join(folder, "room-state-probe.json")
     report = load(path)
     print("document {}  revit {}  duHast {}".format(report.get("document"), report.get("revit_version"), report.get("duhast_path")))
     print()

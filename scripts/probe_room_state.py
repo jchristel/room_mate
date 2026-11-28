@@ -129,12 +129,18 @@ TURNS_DEG = [0.0, 37.5, 90.0, 179.9, -90.0, 270.0, 12.34, 45.0]
 
 
 def default_out_dir():
-    """`scripts/fixtures/` in this checkout, or None when `__file__` is unavailable (a script
-    pasted into the pyRevit console has none, and guessing a directory is worse than saying so)."""
+    """Where the result goes: `scripts/fixtures/` in this checkout; else the folder named by the
+    `ROOMMATE_PROBE_DIR` environment variable; else `RoomMate-probe` in the user's Documents.
+
+    A script run from the pyRevit console has no `__file__`, so the checkout cannot be found.
+    The last fallback is a folder the person can find, and `run` prints the path it wrote."""
     here = globals().get("__file__")
-    if not here:
-        return None
-    return os.path.join(os.path.dirname(os.path.abspath(here)), "fixtures")
+    if here:
+        return os.path.join(os.path.dirname(os.path.abspath(here)), "fixtures")
+    named = os.environ.get("ROOMMATE_PROBE_DIR")
+    if named:
+        return named
+    return os.path.join(os.path.expanduser("~"), "Documents", "RoomMate-probe")
 
 
 def ensure_room_m_importable():
@@ -414,8 +420,6 @@ def run(doc, out_dir=None):
     """Both parts, written to `room-state-probe.json`. Returns the path."""
     ensure_room_m_importable()
     out_dir = out_dir or default_out_dir()
-    if out_dir is None:
-        raise RuntimeError("no output folder: run this as a file, or call run(doc, out_dir)")
     if not os.path.isdir(out_dir):
         os.makedirs(out_dir)
 
