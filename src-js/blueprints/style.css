@@ -122,3 +122,10 @@ fieldset.item-changes { margin: 0.5rem 0; }
 .item-changes label.num { display: flex; gap: 0.5rem; align-items: center; font-size: 0.7rem; }
 .item-changes label.num input { width: 5rem; }
 .left b .badge { margin-left: 0.4rem; }
+
+/* The approve flow: one row per assigned room, worst first. */
+main.impact { overflow: auto; padding: 0 16px 16px; }
+.impact-rooms { list-style: none; margin: 8px 0; padding: 0; }
+.impact-rooms .room { padding: 6px 0; border-bottom: 1px solid var(--rule, #8884); }
+.impact-rooms .room.needs_decision, .impact-rooms .room.error { border-left: 3px solid var(--warn, #c60); padding-left: 8px; }
+.impact-rooms .room.cannot_judge, .impact-rooms .room.room_gone { opacity: 0.7; }

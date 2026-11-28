@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import * as api from "./api.js";
 import { Assign } from "./Assign.js";
+import { Impact } from "./Impact.js";
 import { BlueprintList } from "./BlueprintList.js";
 import { Canvas } from "./Canvas.js";
 import { persistSelection, seedProjectId } from "../ui/common.js";
@@ -57,6 +58,7 @@ export function App() {
   const [aligning, setAligning] = useState(false);
   const [panel, setPanel] = useState<Panel>("none");
   const [assigning, setAssigning] = useState(false);
+  const [updating, setUpdating] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -169,6 +171,15 @@ export function App() {
     setBusy(true);
     const r = await api.decidePending(projectId, blueprint.id, pendingId, blueprint.taken_at, accept);
     await settle(r, accept ? "Accepted: it is the new current revision." : "Rejected. It is kept, marked rejected.");
+  };
+
+  /** Accept a pending revision for the approve flow, which carries on from the answer. */
+  const acceptPending = async (pendingId: number): Promise<boolean> => {
+    if (!projectId || !blueprint) return false;
+    setBusy(true);
+    const r = await api.decidePending(projectId, blueprint.id, pendingId, blueprint.taken_at, true);
+    const number = r.ok ? Math.max(...r.value.revisions.map((x) => x.number)) : undefined;
+    return settle(r, "Accepted: it is the new current revision.", number);
   };
 
   const rename = async () => {
@@ -297,7 +308,19 @@ export function App() {
           ) : null}
         </div>
 
-        {assigning && projectId && blueprint ? (
+        {updating && projectId && blueprint ? (
+          <Impact
+            project={projectId}
+            blueprint={blueprint}
+            target={pendingView ? { pending: pendingView.pending_id } : { revision: viewing }}
+            onAccept={(id) => acceptPending(id)}
+            onDone={(m) => {
+              setNotice(m);
+              void refreshRows(projectId);
+            }}
+            onClose={() => setUpdating(false)}
+          />
+        ) : assigning && projectId && blueprint ? (
           <Assign project={projectId} blueprint={blueprint} revision={viewing} tagFields={tagFields} onClose={() => setAssigning(false)} />
         ) : (
           <>
@@ -349,6 +372,14 @@ export function App() {
                       onClick={() => setAssigning(true)}
                     >
                       Assign to rooms
+                    </button>
+                    <button
+                      type="button"
+                      disabled={dirty}
+                      title={dirty ? "Save the changes first" : "What this revision would change in the rooms it is assigned to, and approve it"}
+                      onClick={() => setUpdating(true)}
+                    >
+                      Update assigned rooms
                     </button>
                     {dirty ? (
                       <span className="dirty">

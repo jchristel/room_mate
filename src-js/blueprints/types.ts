@@ -293,3 +293,63 @@ export interface AssignOutcome {
   assigned: boolean;
   error?: string;
 }
+
+// --- What a revision would change in every assigned room (`service::blueprint_impact`): a dry run ---
+
+export type Action = "add" | "move" | "report";
+
+export type RoomStatus = "error" | "room_gone" | "cannot_judge" | "needs_decision" | "changes" | "no_change";
+
+export type ChangeKind = "moved" | "type_changed" | "kit_changed" | "properties_changed" | "added" | "retired";
+
+export interface ItemDiff {
+  item_id: string;
+  old_item_id?: string;
+  matched?: "by_id" | "by_position";
+  type_name: string;
+  family_name?: string;
+  changes: ChangeKind[];
+  moved_mm?: number;
+}
+
+/** The audit's verdict a planned action came from; only what the list shows is typed. */
+export interface PlanVerdict {
+  kind: string;
+  item_id?: string;
+  element_id?: string;
+  type_name: string;
+  distance_mm?: number;
+}
+
+export interface PlannedAction {
+  action: Action;
+  verdict: PlanVerdict;
+}
+
+export interface RoomImpact {
+  assignment_id: string;
+  room: { model_id: string; room_id: string };
+  room_name: string;
+  pinned_revision: number;
+  status: RoomStatus;
+  reason?: string;
+  fit?: FitKind;
+  held: string[];
+  findings: Finding[];
+  item_changes: ItemDiff[];
+  plan: PlannedAction[];
+  plan_counts: Partial<Record<Action, number>>;
+}
+
+export interface BlueprintImpact {
+  blueprint_id: string;
+  blueprint_name: string;
+  current_revision: number;
+  /** The revision the target is, or would become if accepted. */
+  target: { revision: number; pending_id?: number };
+  outline: { old_edges: number; new_edges: number; changed: boolean };
+  rooms: RoomImpact[];
+  status_counts: Partial<Record<RoomStatus, number>>;
+}
+
+export type UpdateMode = "items" | "locations";
