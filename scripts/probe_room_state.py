@@ -143,18 +143,6 @@ def default_out_dir():
     return os.path.join(os.path.expanduser("~"), "Documents", "RoomMate-probe")
 
 
-def ensure_room_m_importable():
-    """Put `extractor/pyRevit` on `sys.path` so `room_m` imports (the probe reuses the shipped
-    `get_host_info` path, never a second implementation of it)."""
-    here = globals().get("__file__")
-    if not here:
-        return
-    root = os.path.dirname(os.path.dirname(os.path.abspath(here)))
-    candidate = os.path.join(root, "extractor", "pyRevit")
-    if os.path.isdir(candidate) and candidate not in sys.path:
-        sys.path.insert(0, candidate)
-
-
 def write_json(path, payload):
     """UTF-8, LF, binary, so Windows never writes CRLF."""
     text = json.dumps(payload, indent=2, sort_keys=True)
@@ -418,7 +406,6 @@ def round_trip(doc):
 
 def run(doc, out_dir=None):
     """Both parts, written to `room-state-probe.json`. Returns the path."""
-    ensure_room_m_importable()
     out_dir = out_dir or default_out_dir()
     if not os.path.isdir(out_dir):
         os.makedirs(out_dir)
