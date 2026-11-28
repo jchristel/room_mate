@@ -492,6 +492,18 @@ get wrong:
   `overrides` parameter (so the drawing is the server's answer), and assigning again WITHOUT `overrides` keeps the
   room's (a client written before them must not clear them); `[]` clears. Changing the mapping after nudging can leave a
   nudge that no longer fits, and that is the person's to look at.
+  - **A nudge has two spellings, and the item-frame one (`along_mm`, `off_mm`: along the edge the item stands against, and into the room) is the one
+    to write**: it follows the room when it is turned. `dx_mm`/`dy_mm` are the plan frame (what a drag on the plan gives, and everything stored before),
+    and do not turn. Both apply.
+  - **`base` is the recipe an override was made against** (`BlueprintItem::recipe_hash`: edge, along and off with their modes, facing; NOT type or size).
+    The server stamps it on save when absent and NEVER overwrites one a client sends, so assigning again without overrides keeps it and a newer
+    revision's moved recipe shows. A nudge or turn whose base differs from the item's hash is HELD and reported (`override_stale`); an exclude applies
+    regardless; an override with no base (stored before it existed) is not checked.
+  - **An addition (`ItemAddition`, `assignments.additions`, ids begin `add-`) is a room-local copy of a blueprint item** (`clone_of`) on the ROOM's own coarse
+    edge, in fixed mm: the third corner guard for a column corner. Never written back to the blueprint; it follows the blueprint if the item's type changes.
+    The resolver places it after the overrides and judges it like any item (`outside`, `overlap`); a `Placed` carries `clone_of`, and the task and the audit
+    read its family, properties, code and kit from that item, never from `item_id`. One whose item or edge is gone is `addition_unused`, not an error.
+    **Additions have no viewer yet**: the assign view cannot add or preview one (the resolve read takes `additions` like `overrides`).
 - **The Blueprint tool in the main viewer lays a blueprint into a room two ways, and the BOX is the point.** Rooms are
   never perfectly the blueprint's shape, so a person moves, turns and stretches the blueprint's own outline over the room
   (`assignments::Frame`: `world = centre + R(turn) * S(sx, sy) * (p - pivot)`, stretch along the BLUEPRINT's axes so it

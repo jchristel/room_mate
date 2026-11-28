@@ -13,7 +13,9 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::assignments::{self, AssignRequest, Assignment, AssignmentRow, ItemOverride, Mapping, RoomKey};
+use crate::assignments::{
+    self, AssignRequest, Assignment, AssignmentRow, ItemAddition, ItemOverride, Mapping, RoomKey,
+};
 use crate::blueprints;
 use crate::blueprints_api::service_error;
 use crate::http_error::{projects_dir, to_http};
@@ -43,6 +45,9 @@ pub struct AssignBody {
     /// written before they existed must not clear them by assigning again); `[]` clears them.
     #[serde(default)]
     pub overrides: Option<Vec<ItemOverride>>,
+    /// Items this room has that the blueprint does not. Same rule as `overrides`: left out keeps them, `[]` clears.
+    #[serde(default)]
+    pub additions: Option<Vec<ItemAddition>>,
     #[serde(default)]
     pub note: Option<String>,
 }
@@ -70,6 +75,7 @@ pub async fn http_assign(
         room_name,
         mapping: body.mapping,
         overrides: body.overrides,
+        additions: body.additions,
         note: body.note,
     };
     assignments::assign(&projects_dir(&state)?, &project_id, request)
@@ -182,6 +188,7 @@ pub async fn http_assign_many(
                 room_name,
                 mapping: Mapping::default(),
                 overrides: None,
+                additions: None,
                 note: body.note.clone(),
             };
             assignments::assign(&projects, &project_id, request).map(|_| ()).map_err(|e| to_http(e).1)

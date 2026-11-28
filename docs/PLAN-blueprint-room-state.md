@@ -302,49 +302,19 @@ changed by the same update.
 - Lifting wall devices into scope later means a hosting kind on the blueprint item and a comparison along the host; that is a
   separate plan, not an option here.
 
-## 6. Overrides: one more kind, and one rule about where they hang
+## 6. Overrides: what is left
 
-An override is **this room's difference from the blueprint**, applied to the layout before anything is judged (already true
-for `exclude`, nudge and turn). The corner-guard case needs two more kinds.
+The server side is built and described in `CLAUDE.md` under Blueprints: exclude, nudge and turn, **additions** (the third corner
+guard), the **`base`** recipe hash with `override_stale`, and **item-frame nudges**. What remains:
 
-| Kind | Example | Data | State |
-|---|---|---|---|
-| Exclude | no wardrobe in this room | `ItemOverride.exclude` | built |
-| Nudge / turn (location) | bed 120 mm off the column | `dx_mm`, `dy_mm`, `rotate_deg` | built |
-| **Addition** | blueprint has two corner guards; this room has a column corner and needs a third | `ItemAddition`: its own id (`add-<uuid>`), `clone_of: <item id>` or a full item, a recipe (`edge`, `along`, `off`, `facing`) in the room's coarse frame | **new** |
-| **Substitution** | this room takes another type of the same item | `type_name` / properties replacing the item's; **reports its kit effect before it is saved** (section 5.3) | new, optional, later |
-
-Rules, each with its reason:
-
-- **Every override names a host**, never a nested component (section 5.3). An exclude on a host excludes its kit.
-- **An addition is a room-local item, never written back to the blueprint.** The blueprint stays the standard; the room owns
-  its exception. It joins the effective layout, is matched, ledgered and updated like any layout item.
-- **An addition clones an item by reference** (`clone_of`), so when the blueprint changes the guard's type, the column-corner
-  guard changes with it. A free-standing addition keeps its own type. The default is clone, because "same guard, one more" is
-  the common reason.
-- **An addition anchors to the coarse outline's edge, and a column corner is a jog the coarse outline removed** (the trap
-  `CornerAnchored` already reports). Its recipe is *edge + along + off*, set by the person on the plan, judged against the fine
-  outline for `outside`. It never needs the column to be an edge of its own.
-- **An override is keyed to the item id and to the recipe it was made against** (`base`: a hash of the item's placement at that
-  revision). On a new revision it applies if `base` is unchanged and is flagged `override_stale` if the item's recipe moved.
-  Today a nudge silently rides on whatever the new recipe gives; that is the failure to prevent.
-- **A nudge is in the project plan frame** (as built). If the room's mapping changes the item rotates and the nudge does not.
-  Store nudges in the item's own frame (edge normal and tangent): "away from the wall" must stay "away from the wall" when the
-  room is rotated.
-- **Overrides survive a revision change; they are never dropped.** `override_unused` (item gone) and `override_stale` (recipe
-  moved) are reported states the person resolves.
-- **An override survives a replace** (section 5.4): the replacement is built from the effective layout, which includes it.
-
-Example, three corner guards:
-
-```text
-Blueprint rev 3:  CG-1 (edge 2, along 0), CG-2 (edge 4, along 0)
-Room 214:         column in the corner between edges 4 and 5
-Override:         addition  add-9f2  clone_of CG-2  edge 5, along 0
-Effective layout: CG-1, CG-2, add-9f2   -> 3 guards, one blueprint, one exception
-Blueprint rev 4:  CG type changes to "CG-Steel-150"
-Room 214 update:  all three change type (or are replaced, if the family differs); add-9f2 follows because it clones CG-2
-```
+- **The assign view** cannot add an addition, preview one, or write item-frame nudges: it still writes plan-frame `dx_mm`/`dy_mm`
+  (the resolve read already takes `additions`). "Add one here" on the plan, with the clone chosen from the blueprint's items.
+- **Resolving a stale override**: today it is held and reported. The person needs "keep it on the new recipe" (send it again with no
+  `base`, which the server re-stamps) or "drop it", as a button, and `override_stale` shown on the item.
+- **Substitution**: a room that takes another type of the same item. It must report its kit effect before it is saved (section 5.3),
+  so it waits for the kit comparison to be usable from an editor.
+- **An addition survives a replace** (section 5.4): the replacement is built from the effective layout, which includes it. True by
+  construction once `update_room` exists (build step 5); nothing to do until then.
 
 ## 7. Blueprint update: from a new push to every assigned room
 
@@ -442,8 +412,7 @@ resolver cannot map the edges, the audit says so rather than inventing a mapping
    `[blueprint_audit]`. Pure over data the server holds. **Answers the first question with no Revit change**, so it is first.
    1b. **Kit on a blueprint item** (`BlueprintItem.sub_components`, filled at capture; an older blueprint reads `kit_unknown`
    until pushed again).
-2. **Overrides: additions, `base`, item-frame nudges** (`assignments`), the viewer's assign view gets "add one here",
-   `override_stale`.
+2. **Overrides: built on the server** (additions, `base` and `override_stale`, item-frame nudges); the viewer's assign view is not (section 6).
 3. **Revision diff** (`service::blueprint_diff`, derived, cached by revision pair) and an **impact read** over the assignments
    of a blueprint: per room the host-action plan of section 5.4, dry run only.
 4. **Ledger and `UniqueId`**: the extractor exports `unique_id`; the task report returns the placed ids; the ledger store and
