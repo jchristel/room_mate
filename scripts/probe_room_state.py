@@ -286,9 +286,10 @@ def export_view(doc, instance):
         return None
     point = item.location_point.translation_coord
     rotation = item.location_point.rotation_coord
-    rows = safe(lambda: rotation.elements) or safe(lambda: rotation.rows) or None
+    # duHast's Matrix keeps its rows in `data`; `rows` is the row COUNT (an int)
+    rows = safe(lambda: rotation.data)
     facing = None
-    if rows:
+    if rows and not isinstance(rows, int):
         facing = math.degrees(math.atan2(rows[0][1], rows[0][0]))
     level = item.level
     return {
