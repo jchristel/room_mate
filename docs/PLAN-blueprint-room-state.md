@@ -273,7 +273,7 @@ and the plug-in reports what it did; nothing in the plan depends on the plug-in 
 | Height | in properties only | compare as number with the unit trap the ceiling offset taught (display strings). |
 | **Kit on both sides**: blueprint item and content each carry `sub_components` | exported on every door/window/FF&E; `BlueprintItem` has **no** `sub_components` field | **new**: capture stores each item's kit beside its properties. Without it, `kit_unknown` everywhere; a blueprint captured before has none until pushed again. |
 | Host/component link for pushed components | `super_component_id` on the item, `parent_id` on a sub component | none; the audit groups components under hosts by it |
-| **Hosting kind of every item** (level-based / work-plane vs wall or face) | `ItemHost` (`kind`, `id`, `face_hosted`), absent when `FamilyInstance.Host` is None; read by `item_facts`. **Not enough alone, and neither is the family's placement type: both are needed** (measured, section 5.6). The family's `FamilyPlacementType` is not read yet | **new**: read `FamilyPlacementType` per instance in `item_facts` and send it. An element is supported only when its placement type is `OneLevelBased`, `TwoLevelsBased` or `WorkPlaneBased` **and** its `host` is absent or a Level **and** it is not face-hosted; anything else, **and anything that cannot be read, is `unsupported_host`**. The `Host` display parameter is not used (it names a floor on 136 level-based items). |
+| **Hosting kind of every item** (level-based / work-plane vs wall or face) | `ItemHost` (`kind`, `id`, `face_hosted`), absent when `FamilyInstance.Host` is None; read by `item_facts`. **Not enough alone, and neither is the family's placement type: both are needed** (measured, section 5.6). The family's `FamilyPlacementType` is not read yet | **new**: read `FamilyPlacementType` per instance in `item_facts` and send it. An element is supported only when its placement type is `OneLevelBased`, `TwoLevelsBased` or `WorkPlaneBased` **and** it is not face-hosted **and** its `host` is a Level (a `WorkPlaneBased` family must name one: a work plane with no host, such as `<not associated>`, is not on the level) or, for the other two types, absent; anything else, **and anything that cannot be read, is `unsupported_host`**. The `Host` display parameter is not used (it names a floor on 136 level-based items). |
 | Tolerances | none | the three settings of section 5.1 |
 
 ### 5.6 Scope of the first iteration: level-based and work-plane (level) placement only
@@ -289,8 +289,8 @@ changed by the same update.
   cannot cover; it is neither dropped from the blueprint nor placed by an update task.
 - **The rule, measured on a real model (2026-11-28, 822 FF&E instances, 642 hosts).** Placement type alone would wrongly accept 90
   face-hosted work-plane items (on ceilings, roofs, stairs, floors and other families' faces); `host` alone would wrongly accept 3
-  line-based and 2 wall-hosted items whose `Host` is empty. Both together supported 531 of 642 and flagged 111: 30 on a ceiling
-  face, 24 on another family's face, 20 on a roof, 16 on stairs, 13 on a floor, 5 wall-hosted, 3 line-based. A work-plane family
+  line-based and 2 wall-hosted items whose `Host` is empty. Both together, with a work-plane family required to name a Level, supported 530 of 642 and flagged 112: 30 on a ceiling
+  face, 24 on another family's face, 20 on a roof, 16 on stairs, 13 on a floor, 5 wall-hosted, 3 line-based, 1 work plane with no host. A work-plane family
   hosted on a level reports `Host` as that Level with no face, so it is supported. About one item in six is out of scope, which
   is the cost of this iteration, and the audit reports it by room so the author sees what is not covered.
 - **A line-based item (placement type `CurveBased`: a rail, a linear fitting) is the same.** duHast exports it at the midpoint

@@ -60,19 +60,20 @@ def hosting(report):
 
     def by_both(record):
         # a supported placement type AND nothing but a level (or nothing) hosting it, no face
-        return (
-            by_placement(record)
-            and record["host_class"] in (None, "Level")
-            and not record["has_host_face"]
-        )
+        if not by_placement(record) or record["has_host_face"]:
+            return False
+        if record["placement_type"] == "WorkPlaneBased":
+            # a work plane that names no level (`<not associated>`, no Host) is not on the level
+            return record["host_class"] == "Level"
+        return record["host_class"] in (None, "Level")
 
-    print("  Rule 3, both: supported placement type AND Host is None or a Level AND no HostFace:")
+    print("  Rule 3, both: supported placement type AND no HostFace AND (a work plane's Host is a Level, else Host is None or a Level):")
     rule_3 = [r for r in hosts if by_both(r)]
     print("    supported {} / {}".format(len(rule_3), len(hosts)))
     left_out = [r for r in hosts if not by_both(r)]
     reasons = {}
     for r in left_out:
-        why = "placement {}".format(r["placement_type"]) if not by_placement(r) else "hosted on {} (face={})".format(r["host_class"], r["has_host_face"])
+        why = "placement {}".format(r["placement_type"]) if not by_placement(r) else "hosted on {} (face={}, {})".format(r["host_class"], r["has_host_face"], r["placement_type"])
         reasons[why] = reasons.get(why, 0) + 1
     for why, n in sorted(reasons.items(), key=lambda kv: -kv[1]):
         print("      flagged: {:4d}  {}".format(n, why))
