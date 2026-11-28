@@ -58,6 +58,25 @@ def hosting(report):
     rule_2 = [r for r in hosts if by_shipped_host(r)]
     print("    supported {} / {}".format(len(rule_2), len(hosts)))
 
+    def by_both(record):
+        # a supported placement type AND nothing but a level (or nothing) hosting it, no face
+        return (
+            by_placement(record)
+            and record["host_class"] in (None, "Level")
+            and not record["has_host_face"]
+        )
+
+    print("  Rule 3, both: supported placement type AND Host is None or a Level AND no HostFace:")
+    rule_3 = [r for r in hosts if by_both(r)]
+    print("    supported {} / {}".format(len(rule_3), len(hosts)))
+    left_out = [r for r in hosts if not by_both(r)]
+    reasons = {}
+    for r in left_out:
+        why = "placement {}".format(r["placement_type"]) if not by_placement(r) else "hosted on {} (face={})".format(r["host_class"], r["has_host_face"])
+        reasons[why] = reasons.get(why, 0) + 1
+    for why, n in sorted(reasons.items(), key=lambda kv: -kv[1]):
+        print("      flagged: {:4d}  {}".format(n, why))
+
     disagree = [r for r in hosts if by_placement(r) != by_shipped_host(r)]
     print("  The two rules disagree on {} instance(s).".format(len(disagree)))
     shown = {}
@@ -69,7 +88,7 @@ def hosting(report):
 
     work_plane = [r for r in hosts if r["placement_type"] == "WorkPlaneBased"]
     if work_plane:
-        classes = sorted(set((r["host_class"], r["host_category"], r["has_host_face"]) for r in work_plane))
+        classes = sorted(set((str(r["host_class"]), str(r["host_category"]), r["has_host_face"]) for r in work_plane))
         print("  WorkPlaneBased families answer `Host` with: {}".format(classes))
         print("    -> a Level here means the shipped `host` marks them hosted, a ReferencePlane or a face means a real host.")
 

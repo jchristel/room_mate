@@ -153,8 +153,10 @@ the right place".
 
    Beyond `near_tolerance_mm` the element is `extra` and the item `missing`: pairing them would call a different bed the
    same bed.
-   Level-based items are placed at the recipe's point and facing with no snapping, so 5 mm is a fair first value; measure it
-   in the first Revit run and loosen it in settings if the ledgered elements read as `drifted` straight after placing.
+   Level-based items are placed at the recipe's point and facing with no snapping, so 5 mm is a fair first value. A Revit run
+   (2026-11-28, `scripts/probe_room_state.py`) placed nine elements, several turned and one 1 km out, and the export read every one
+   back at 0.000 mm and 0.000 degrees, so Revit adds no error of its own; what is left is the server's frame conversion in both directions
+   and hand drift.
 6. Height: compare `Elevation from Level` when both sides carry it, as a separate verdict (`height_differs`) that never
    affects the plan match. A level-based family may be lifted by a parameter, so this is the one vertical check there is.
    Items hosted on a wall or face never reach this step (section 5.6).
@@ -271,7 +273,7 @@ and the plug-in reports what it did; nothing in the plan depends on the plug-in 
 | Height | in properties only | compare as number with the unit trap the ceiling offset taught (display strings). |
 | **Kit on both sides**: blueprint item and content each carry `sub_components` | exported on every door/window/FF&E; `BlueprintItem` has **no** `sub_components` field | **new**: capture stores each item's kit beside its properties. Without it, `kit_unknown` everywhere; a blueprint captured before has none until pushed again. |
 | Host/component link for pushed components | `super_component_id` on the item, `parent_id` on a sub component | none; the audit groups components under hosts by it |
-| **Hosting kind of every item** (level-based / work-plane vs wall or face) | `ItemHost` (`kind`, `id`, `face_hosted`), absent when `FamilyInstance.Host` is None; read by `item_facts`, not yet run in Revit | classify from the family's placement type (level-based, work-plane, two-level supported; hosted, face, curve-based not), because `host` alone cannot see a line-based item (its `Host` is empty); the probe shows whether `host` is still needed beside it; anything else, **and anything that cannot be read, is `unsupported_host`** (the safe side). `scripts/probe_room_state.py` says which rule holds. |
+| **Hosting kind of every item** (level-based / work-plane vs wall or face) | `ItemHost` (`kind`, `id`, `face_hosted`), absent when `FamilyInstance.Host` is None; read by `item_facts`. **Not enough alone, and neither is the family's placement type: both are needed** (measured, section 5.6). The family's `FamilyPlacementType` is not read yet | **new**: read `FamilyPlacementType` per instance in `item_facts` and send it. An element is supported only when its placement type is `OneLevelBased`, `TwoLevelsBased` or `WorkPlaneBased` **and** its `host` is absent or a Level **and** it is not face-hosted; anything else, **and anything that cannot be read, is `unsupported_host`**. The `Host` display parameter is not used (it names a floor on 136 level-based items). |
 | Tolerances | none | the three settings of section 5.1 |
 
 ### 5.6 Scope of the first iteration: level-based and work-plane (level) placement only
@@ -285,6 +287,12 @@ changed by the same update.
   retyped or removed by an update.
 - Such an item in the blueprint is flagged on the audit (`unsupported_host` on the item) so the author sees what the layout
   cannot cover; it is neither dropped from the blueprint nor placed by an update task.
+- **The rule, measured on a real model (2026-11-28, 822 FF&E instances, 642 hosts).** Placement type alone would wrongly accept 90
+  face-hosted work-plane items (on ceilings, roofs, stairs, floors and other families' faces); `host` alone would wrongly accept 3
+  line-based and 2 wall-hosted items whose `Host` is empty. Both together supported 531 of 642 and flagged 111: 30 on a ceiling
+  face, 24 on another family's face, 20 on a roof, 16 on stairs, 13 on a floor, 5 wall-hosted, 3 line-based. A work-plane family
+  hosted on a level reports `Host` as that Level with no face, so it is supported. About one item in six is out of scope, which
+  is the cost of this iteration, and the audit reports it by room so the author sees what is not covered.
 - **A line-based item (placement type `CurveBased`: a rail, a linear fitting) is the same.** duHast exports it at the midpoint
   of its location curve (2026-11-28) with the start and end in the export, and the server stores the midpoint only, so it
   looks like a point item with no length. A point comparison would call it `moved` or `missing` wrongly, so it is
@@ -453,5 +461,6 @@ kit mismatch is never `in_place`; nested families are acted on only through thei
 
 Still open:
 
-1. **The first Revit run** has two things to measure before the numbers and rules here are final: whether ledgered
-   level-based elements read `in_place` at 5 mm straight after placing; and which rule separates level-based from wall- and face-hosted items (placement type or `host`; a work-plane family may report a level as its `Host`). Both are measured by `scripts/probe_room_state.py` and read by `scripts/analyse_room_state_probe.py`.
+1. **The server's frame conversion**, in both directions, on elements Revit placed from a task: the probe shows Revit itself adds no
+   error, so any offset on a ledgered element would come from the plan frame, which is the first thing to check when one reads
+   `drifted` after a real update.
