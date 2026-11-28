@@ -138,9 +138,22 @@ def default_out_dir():
     return os.path.join(os.path.expanduser("~"), "Documents", "RoomMate-probe")
 
 
+def plain(value):
+    """`json.dumps` default: a value the encoder does not know (a .NET Int64 from an ElementId, which
+    IronPython's json refuses) becomes an int, else a float, else its text."""
+    try:
+        return int(value)
+    except Exception:
+        pass
+    try:
+        return float(value)
+    except Exception:
+        return str(value)
+
+
 def write_json(path, payload):
     """UTF-8, LF, binary, so Windows never writes CRLF."""
-    text = json.dumps(payload, indent=2, sort_keys=True)
+    text = json.dumps(payload, indent=2, sort_keys=True, default=plain)
     if not isinstance(text, bytes):
         text = text.encode("utf-8")
     with io.open(path, "wb") as handle:
